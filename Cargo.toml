@@ -1,0 +1,15 @@
+[workspace]
+members = ["examples/counter"]
+exclude = [".deps/yew"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/ykai55/yew-lynx"
+publish = false
+
+[workspace.dependencies]
+yew = { path = ".deps/yew/packages/yew", features = ["clay"] }

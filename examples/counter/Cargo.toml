@@ -1,0 +1,16 @@
+[package]
+name = "yew-lynx-counter"
+description = "Focused recording fixture for Yew Clay render, tap, and cleanup checks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.yew-lynx]
+fixture = "host-independent-recording-backend"
+verified-behavior = ["initial-render", "tap-update", "listener-cleanup", "flush"]
+
+[dependencies]
+yew.workspace = true

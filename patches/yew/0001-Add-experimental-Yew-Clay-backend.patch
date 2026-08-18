@@ -1,0 +1,1935 @@
+From dfae4d633fc3bc450aae1d3ef3547ad238267dfe Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Tue, 18 Aug 2026 18:53:21 +0800
+Subject: [PATCH] Add experimental Yew Clay backend
+
+Add an opt-in native backend-driven renderer for mounting a top-level Yew component outside the browser DOM. Support text, tags, lists, attributes, form values, and tap callbacks while rejecting unsupported VNode output before host mutation.
+
+Define direct-parent teardown ownership, synchronous owner-thread callbacks, and panic-unwind cleanup, with strict backend regression coverage.
+---
+ Cargo.lock                                    |   1 +
+ packages/yew-macro/Cargo.toml                 |   4 +
+ packages/yew-macro/src/props/element.rs       |   2 +
+ packages/yew-macro/src/props/prop.rs          |  11 +-
+ .../html-element-ontap-attribute.rs           |   3 +
+ .../html_macro/html-element-ontap-listener.rs |  83 +++
+ packages/yew-macro/tests/html_macro_test.rs   |   4 +
+ packages/yew/Cargo.toml                       |   1 +
+ packages/yew/src/clay_bundle.rs               | 281 ++++++++
+ packages/yew/src/clay_renderer.rs             | 669 ++++++++++++++++++
+ packages/yew/src/html/component/lifecycle.rs  | 123 +++-
+ packages/yew/src/html/component/mod.rs        |   4 +-
+ packages/yew/src/html/component/scope.rs      |  68 +-
+ packages/yew/src/html/listener/events.rs      |  51 ++
+ packages/yew/src/html/mod.rs                  |  29 +-
+ packages/yew/src/lib.rs                       |  20 +
+ packages/yew/src/scheduler.rs                 |  11 +-
+ packages/yew/src/suspense/component.rs        |   8 +-
+ packages/yew/src/suspense/mod.rs              |   2 +-
+ packages/yew/src/virtual_dom/listeners.rs     |   5 +
+ packages/yew/src/virtual_dom/vtag.rs          |  11 +-
+ 21 files changed, 1360 insertions(+), 31 deletions(-)
+ create mode 100644 packages/yew-macro/tests/html_macro/html-element-ontap-attribute.rs
+ create mode 100644 packages/yew-macro/tests/html_macro/html-element-ontap-listener.rs
+ create mode 100644 packages/yew/src/clay_bundle.rs
+ create mode 100644 packages/yew/src/clay_renderer.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 61fdacee..ee5ce639 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5229,6 +5229,7 @@ dependencies = [
+ name = "yew-router-macro"
+ version = "0.20.0"
+ dependencies = [
++ "matchit 0.9.2",
+  "proc-macro2",
+  "quote",
+  "rustversion",
+diff --git a/packages/yew-macro/Cargo.toml b/packages/yew-macro/Cargo.toml
+index 5ecb8c69..90bbf270 100644
+--- a/packages/yew-macro/Cargo.toml
++++ b/packages/yew-macro/Cargo.toml
+@@ -23,6 +23,10 @@ syn = { workspace = true, features = ["full", "extra-traits", "visit-mut"] }
+ prettyplease = "0.2"
+ rustversion.workspace = true
+ 
++[features]
++clay = []
++default = []
++
+ # testing
+ [dev-dependencies]
+ trybuild = { workspace = true }
+diff --git a/packages/yew-macro/src/props/element.rs b/packages/yew-macro/src/props/element.rs
+index 8ccdd05d..ecc690c4 100644
+--- a/packages/yew-macro/src/props/element.rs
++++ b/packages/yew-macro/src/props/element.rs
+@@ -191,6 +191,8 @@ static LISTENER_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+         "ontouchend",
+         "ontouchmove",
+         "ontouchstart",
++        #[cfg(feature = "clay")]
++        "ontap",
+         "ontransitioncancel",
+         "ontransitionend",
+         "ontransitionrun",
+diff --git a/packages/yew-macro/src/props/prop.rs b/packages/yew-macro/src/props/prop.rs
+index 0ab08013..a0d57e3d 100644
+--- a/packages/yew-macro/src/props/prop.rs
++++ b/packages/yew-macro/src/props/prop.rs
+@@ -479,7 +479,16 @@ impl SpecialProps {
+                     ::into_prop_value(#value)
+                 }
+             })
+-            .unwrap_or(quote! { ::std::default::Default::default() })
++            .unwrap_or_else(|| {
++                #[cfg(feature = "clay")]
++                {
++                    quote! { ::yew::html::NodeRef::__clay_unbound() }
++                }
++                #[cfg(not(feature = "clay"))]
++                {
++                    quote! { ::std::default::Default::default() }
++                }
++            })
+     }
+ 
+     pub fn wrap_key_attr(&self) -> TokenStream {
+diff --git a/packages/yew-macro/tests/html_macro/html-element-ontap-attribute.rs b/packages/yew-macro/tests/html_macro/html-element-ontap-attribute.rs
+new file mode 100644
+index 00000000..6ebf0b36
+--- /dev/null
++++ b/packages/yew-macro/tests/html_macro/html-element-ontap-attribute.rs
+@@ -0,0 +1,3 @@
++fn main() {
++    _ = yew::html! { <view ontap="plain-attribute" /> };
++}
+diff --git a/packages/yew-macro/tests/html_macro/html-element-ontap-listener.rs b/packages/yew-macro/tests/html_macro/html-element-ontap-listener.rs
+new file mode 100644
+index 00000000..bede8468
+--- /dev/null
++++ b/packages/yew-macro/tests/html_macro/html-element-ontap-listener.rs
+@@ -0,0 +1,83 @@
++extern crate self as yew;
++
++use yew_macro::html;
++
++// Trybuild does not preserve features requested on dev-dependencies. Provide
++// the minimal expansion surface needed to verify that `ontap` is a listener.
++pub struct ClayEvent;
++
++pub mod html {
++    pub use crate::virtual_dom::NodeRef;
++
++    pub mod ontap {
++        pub struct Wrapper;
++
++        impl Wrapper {
++            pub fn __macro_new(_callback: impl Fn(crate::ClayEvent) + 'static) -> Option<()> {
++                Some(())
++            }
++        }
++    }
++}
++
++pub mod virtual_dom {
++    pub enum AttrValue {
++        Static(&'static str),
++    }
++
++    pub enum AttributeOrProperty {}
++
++    pub struct Attributes;
++
++    impl Attributes {
++        pub fn from_static_unchecked(_values: &[(&'static str, AttributeOrProperty)]) -> Self {
++            Self
++        }
++    }
++
++    pub struct Key;
++
++    #[derive(Default)]
++    pub struct NodeRef;
++
++    impl NodeRef {
++        pub fn __clay_unbound() -> Self {
++            Self
++        }
++    }
++
++    #[derive(Default)]
++    pub struct VNode;
++
++    pub struct VTag;
++
++    impl VTag {
++        pub fn __new_other(
++            _tag: AttrValue,
++            _node_ref: NodeRef,
++            _key: Option<Key>,
++            _attributes: Attributes,
++            _listeners: listeners::Listeners,
++            _children: VNode,
++        ) -> Self {
++            Self
++        }
++    }
++
++    impl From<VTag> for VNode {
++        fn from(_tag: VTag) -> Self {
++            Self
++        }
++    }
++
++    pub mod listeners {
++        pub enum Listeners {
++            None,
++            Pending(Box<[Option<()>]>),
++        }
++    }
++}
++
++fn main() {
++    _ = html! { <view ontap={|_: ClayEvent| {}} /> };
++}
+diff --git a/packages/yew-macro/tests/html_macro_test.rs b/packages/yew-macro/tests/html_macro_test.rs
+index 2a67e3ee..bc1a6935 100644
+--- a/packages/yew-macro/tests/html_macro_test.rs
++++ b/packages/yew-macro/tests/html_macro_test.rs
+@@ -6,6 +6,10 @@ fn html_macro() {
+     let t = trybuild::TestCases::new();
+ 
+     t.pass("tests/html_macro/*-pass.rs");
++    #[cfg(not(feature = "clay"))]
++    t.pass("tests/html_macro/html-element-ontap-attribute.rs");
++    #[cfg(feature = "clay")]
++    t.pass("tests/html_macro/html-element-ontap-listener.rs");
+     t.compile_fail("tests/html_macro/*-fail.rs");
+ }
+ 
+diff --git a/packages/yew/Cargo.toml b/packages/yew/Cargo.toml
+index bcf4bcfa..f65c1e5c 100644
+--- a/packages/yew/Cargo.toml
++++ b/packages/yew/Cargo.toml
+@@ -103,6 +103,7 @@ features = [
+ [features]
+ ssr = ["dep:html-escape", "dep:base64ct", "dep:bincode"]
+ csr = []
++clay = ["yew-macro/clay"]
+ hydration = ["csr", "dep:bincode"]
+ not_browser_env = []
+ default = []
+diff --git a/packages/yew/src/clay_bundle.rs b/packages/yew/src/clay_bundle.rs
+new file mode 100644
+index 00000000..e8a16a3c
+--- /dev/null
++++ b/packages/yew/src/clay_bundle.rs
+@@ -0,0 +1,281 @@
++use std::collections::BTreeMap;
++use std::rc::Rc;
++
++use crate::clay_renderer::{ClayBackend, ClayEvent, ClayListener, ClayNode};
++use crate::virtual_dom::{Listeners, VNode, VTag};
++
++pub(crate) struct ClayBundle {
++    vnode: Option<VNode>,
++    kind: ClayBundleKind,
++}
++
++enum ClayBundleKind {
++    Empty,
++    Node {
++        node: ClayNode,
++        children: Vec<ClayBundle>,
++        listeners: Vec<ClayListener>,
++    },
++    List(Vec<ClayBundle>),
++}
++
++struct PendingChildren<'a> {
++    backend: &'a Rc<dyn ClayBackend>,
++    parent: ClayNode,
++    children: Vec<ClayBundle>,
++}
++
++impl PendingChildren<'_> {
++    fn finish(mut self) -> Vec<ClayBundle> {
++        std::mem::take(&mut self.children)
++    }
++}
++
++impl Drop for PendingChildren<'_> {
++    fn drop(&mut self) {
++        for child in std::mem::take(&mut self.children) {
++            child.detach(self.backend, self.parent);
++        }
++    }
++}
++
++struct PendingNode<'a> {
++    backend: &'a Rc<dyn ClayBackend>,
++    parent: ClayNode,
++    node: Option<ClayNode>,
++    inserted: bool,
++    children: Vec<ClayBundle>,
++    listeners: Vec<ClayListener>,
++}
++
++impl PendingNode<'_> {
++    fn finish(mut self) -> ClayBundleKind {
++        ClayBundleKind::Node {
++            node: self.node.take().expect("pending Clay node is missing"),
++            children: std::mem::take(&mut self.children),
++            listeners: std::mem::take(&mut self.listeners),
++        }
++    }
++}
++
++impl Drop for PendingNode<'_> {
++    fn drop(&mut self) {
++        let Some(node) = self.node.take() else {
++            return;
++        };
++        if self.inserted {
++            self.backend.remove(self.parent, node);
++        }
++        for listener in std::mem::take(&mut self.listeners) {
++            self.backend.remove_event_listener(node, listener);
++        }
++        for child in std::mem::take(&mut self.children) {
++            child.detach(self.backend, node);
++        }
++        self.backend.destroy_node(node);
++    }
++}
++
++impl std::fmt::Debug for ClayBundle {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("ClayBundle").finish_non_exhaustive()
++    }
++}
++
++impl ClayBundle {
++    pub(crate) const fn new() -> Self {
++        Self {
++            vnode: None,
++            kind: ClayBundleKind::Empty,
++        }
++    }
++
++    pub(crate) fn reconcile(
++        &mut self,
++        backend: &Rc<dyn ClayBackend>,
++        parent: ClayNode,
++        vnode: VNode,
++    ) {
++        Self::validate(&vnode);
++        if self.vnode.as_ref() == Some(&vnode) {
++            return;
++        }
++
++        let reference = self.first_node();
++        let next = Self::attach(backend, parent, reference, vnode);
++        let previous = std::mem::replace(self, next);
++        previous.detach(backend, parent);
++    }
++
++    pub(crate) fn detach(self, backend: &Rc<dyn ClayBackend>, parent: ClayNode) {
++        match self.kind {
++            ClayBundleKind::Empty => {}
++            ClayBundleKind::List(children) => {
++                for child in children {
++                    child.detach(backend, parent);
++                }
++            }
++            ClayBundleKind::Node {
++                node,
++                children,
++                listeners,
++            } => {
++                backend.remove(parent, node);
++                for listener in listeners {
++                    backend.remove_event_listener(node, listener);
++                }
++                for child in children {
++                    child.detach(backend, node);
++                }
++                backend.destroy_node(node);
++            }
++        }
++    }
++
++    fn first_node(&self) -> Option<ClayNode> {
++        match &self.kind {
++            ClayBundleKind::Empty => None,
++            ClayBundleKind::Node { node, .. } => Some(*node),
++            ClayBundleKind::List(children) => children.iter().find_map(Self::first_node),
++        }
++    }
++
++    fn validate(vnode: &VNode) {
++        if vnode.key().is_some() {
++            panic!("keyed VNodes are not supported by the Clay renderer")
++        }
++
++        match vnode {
++            VNode::VText(_) => {}
++            VNode::VTag(tag) => {
++                if tag.node_ref.is_clay_binding() {
++                    panic!("NodeRef bindings are not supported by the Clay renderer")
++                }
++                if let Listeners::Pending(listeners) = &tag.listeners {
++                    for listener in listeners.iter().flatten() {
++                        let name = listener.kind().type_name();
++                        if name.as_ref() != "tap" {
++                            panic!("event `{name}` is not supported by the Clay renderer")
++                        }
++                    }
++                }
++                if let Some(children) = tag.children() {
++                    Self::validate(children);
++                }
++            }
++            VNode::VList(list) => {
++                for child in list.iter() {
++                    Self::validate(child);
++                }
++            }
++            VNode::VComp(_) => {
++                panic!("nested Yew components are not supported by the Clay renderer yet")
++            }
++            VNode::VRef(_) => panic!("VRef is specific to the browser DOM"),
++            VNode::VPortal(_) => panic!("portals are not supported by the Clay renderer"),
++            VNode::VSuspense(_) => panic!("Suspense is not supported by the Clay renderer"),
++            VNode::VRaw(_) => panic!("raw HTML cannot be rendered by Clay"),
++        }
++    }
++
++    fn attach(
++        backend: &Rc<dyn ClayBackend>,
++        parent: ClayNode,
++        reference: Option<ClayNode>,
++        vnode: VNode,
++    ) -> Self {
++        let kind = match &vnode {
++            VNode::VText(text) => {
++                let node = backend.create_text(&text.text);
++                let mut pending = PendingNode {
++                    backend,
++                    parent,
++                    node: Some(node),
++                    inserted: false,
++                    children: Vec::new(),
++                    listeners: Vec::new(),
++                };
++                backend.insert_before(parent, node, reference);
++                pending.inserted = true;
++                pending.finish()
++            }
++            VNode::VTag(tag) => Self::attach_tag(backend, parent, reference, tag),
++            VNode::VList(list) => {
++                let mut pending = PendingChildren {
++                    backend,
++                    parent,
++                    children: Vec::with_capacity(list.len()),
++                };
++                for child in list.iter() {
++                    pending
++                        .children
++                        .push(Self::attach(backend, parent, reference, child.clone()));
++                }
++                ClayBundleKind::List(pending.finish())
++            }
++            VNode::VComp(_) => unreachable!("Clay VNode validation rejected nested components"),
++            VNode::VRef(_) => panic!("VRef is specific to the browser DOM"),
++            VNode::VPortal(_) => panic!("portals are not supported by the Clay renderer"),
++            VNode::VSuspense(_) => panic!("Suspense is not supported by the Clay renderer"),
++            VNode::VRaw(_) => panic!("raw HTML cannot be rendered by Clay"),
++        };
++
++        Self {
++            vnode: Some(vnode),
++            kind,
++        }
++    }
++
++    fn attach_tag(
++        backend: &Rc<dyn ClayBackend>,
++        parent: ClayNode,
++        reference: Option<ClayNode>,
++        tag: &VTag,
++    ) -> ClayBundleKind {
++        let node = backend.create_element(tag.tag());
++        let mut pending = PendingNode {
++            backend,
++            parent,
++            node: Some(node),
++            inserted: false,
++            children: Vec::new(),
++            listeners: Vec::new(),
++        };
++        let attributes: BTreeMap<&str, &str> = tag.attributes.iter().collect();
++        for (name, value) in attributes {
++            backend.set_attribute(node, name, Some(value));
++        }
++        if let Some(value) = tag.value() {
++            backend.set_attribute(node, "value", Some(value));
++        }
++        if let Some(checked) = tag.checked() {
++            backend.set_attribute(node, "checked", checked.then_some("true"));
++        }
++
++        if let Listeners::Pending(listeners) = &tag.listeners {
++            for listener in listeners.iter().flatten() {
++                let listener = Rc::clone(listener);
++                let name = listener.kind().type_name();
++                let name = match name.as_ref() {
++                    "tap" => "tap",
++                    name => panic!("event `{name}` is not supported by the Clay renderer"),
++                };
++                pending.listeners.push(backend.add_event_listener(
++                    node,
++                    name,
++                    Box::new(move |event: ClayEvent| listener.handle_clay(event)),
++                ));
++            }
++        }
++
++        backend.insert_before(parent, node, reference);
++        pending.inserted = true;
++        if let Some(children) = tag.children() {
++            pending
++                .children
++                .push(Self::attach(backend, node, None, children.clone()));
++        }
++
++        pending.finish()
++    }
++}
+diff --git a/packages/yew/src/clay_renderer.rs b/packages/yew/src/clay_renderer.rs
+new file mode 100644
+index 00000000..425a36b3
+--- /dev/null
++++ b/packages/yew/src/clay_renderer.rs
+@@ -0,0 +1,669 @@
++use std::fmt;
++use std::ops::Deref;
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++use std::rc::Rc;
++
++use crate::clay_bundle::ClayBundle;
++use crate::html::{BaseComponent, Scope};
++
++/// An opaque node owned by a [`ClayBackend`].
++#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++pub struct ClayNode(pub u64);
++
++/// An opaque event-listener registration owned by a [`ClayBackend`].
++#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++pub struct ClayListener(pub u64);
++
++/// The event value delivered by the experimental Clay renderer.
++///
++/// The first prototype intentionally carries only the event name. Event detail
++/// can be added without changing Yew's component or reconciliation API.
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub struct ClayEvent {
++    name: Rc<str>,
++}
++
++impl ClayEvent {
++    /// Creates a backend event with a host event name.
++    pub fn new(name: impl Into<Rc<str>>) -> Self {
++        Self { name: name.into() }
++    }
++
++    /// Returns the host event name.
++    pub fn name(&self) -> &str {
++        &self.name
++    }
++}
++
++/// Node operations required by Yew's experimental Clay renderer.
++///
++/// A backend is responsible for forwarding these operations to a concrete
++/// element tree. All methods are called synchronously on the thread that owns
++/// the renderer, and implementations must neither move callbacks to another
++/// thread nor call any backend method from another thread.
++///
++/// Backend methods must not panic. In particular, teardown can run while a
++/// component panic is unwinding, when a second panic would abort the process.
++/// After [`ClayBackend::remove_event_listener`] returns, the callback associated
++/// with that listener must be disconnected and released, and the backend must
++/// never invoke it again. A registered callback may be invoked only on the
++/// renderer's owner thread.
++///
++/// Each created node is initially detached. Insertion gives it one direct
++/// parent, removal makes it detached again, and destruction receives a detached
++/// node whose listeners and direct children have already been removed. The
++/// renderer applies that sequence recursively and never destroys the root node
++/// supplied to [`ClayRenderer`].
++pub trait ClayBackend: fmt::Debug + 'static {
++    /// Creates a container element.
++    fn create_element(&self, tag: &str) -> ClayNode;
++
++    /// Creates a text-content node.
++    fn create_text(&self, text: &str) -> ClayNode;
++
++    /// Inserts detached `child` before a direct child `reference`, or appends it
++    /// when no reference is provided.
++    fn insert_before(&self, parent: ClayNode, child: ClayNode, reference: Option<ClayNode>);
++
++    /// Detaches the direct `child` from `parent` without destroying it.
++    fn remove(&self, parent: ClayNode, child: ClayNode);
++
++    /// Releases a detached node with no listeners or direct children.
++    fn destroy_node(&self, node: ClayNode);
++
++    /// Sets or clears an element attribute.
++    fn set_attribute(&self, node: ClayNode, name: &str, value: Option<&str>);
++
++    /// Registers an event listener.
++    fn add_event_listener(
++        &self,
++        node: ClayNode,
++        name: &str,
++        callback: Box<dyn Fn(ClayEvent)>,
++    ) -> ClayListener;
++
++    /// Synchronously removes an event listener and releases its callback.
++    fn remove_event_listener(&self, node: ClayNode, listener: ClayListener);
++
++    /// Flushes pending element mutations into the host render pipeline.
++    fn flush(&self, root: ClayNode);
++}
++
++/// A mounted Yew application backed by Clay.
++#[derive(Debug)]
++pub struct ClayAppHandle<COMP: BaseComponent> {
++    pub(crate) scope: Scope<COMP>,
++}
++
++impl<COMP: BaseComponent> ClayAppHandle<COMP> {
++    /// Synchronously destroys the application on its owner thread.
++    ///
++    /// If the component's destroy lifecycle panics with unwind enabled, the
++    /// Clay tree and listeners are still removed before the panic resumes.
++    pub fn destroy(self) {
++        self.scope.destroy_clay();
++    }
++}
++
++impl<COMP: BaseComponent> Deref for ClayAppHandle<COMP> {
++    type Target = Scope<COMP>;
++
++    fn deref(&self) -> &Self::Target {
++        &self.scope
++    }
++}
++
++/// Renders a Yew component tree into a [`ClayBackend`] on a native target.
++#[derive(Debug)]
++#[must_use = "ClayRenderer does nothing unless render() is called."]
++pub struct ClayRenderer<COMP: BaseComponent> {
++    backend: Rc<dyn ClayBackend>,
++    root: ClayNode,
++    props: COMP::Properties,
++}
++
++impl<COMP> ClayRenderer<COMP>
++where
++    COMP: BaseComponent<Properties: Default>,
++{
++    /// Creates a renderer with default component properties.
++    pub fn new(backend: Rc<dyn ClayBackend>, root: ClayNode) -> Self {
++        Self::with_props(backend, root, Default::default())
++    }
++}
++
++impl<COMP> ClayRenderer<COMP>
++where
++    COMP: BaseComponent,
++{
++    /// Creates a renderer with explicit component properties.
++    pub fn with_props(
++        backend: Rc<dyn ClayBackend>,
++        root: ClayNode,
++        props: COMP::Properties,
++    ) -> Self {
++        Self {
++            backend,
++            root,
++            props,
++        }
++    }
++
++    /// Mounts the component and synchronously commits its first Clay tree.
++    ///
++    /// Unsupported output panics before host mutation. Cleanup of a later panic
++    /// requires `panic = "unwind"`; aborting panics cannot run cleanup guards.
++    pub fn render(self) -> ClayAppHandle<COMP> {
++        let app = ClayAppHandle {
++            scope: Scope::new(None),
++        };
++        let mounted = catch_unwind(AssertUnwindSafe(|| {
++            app.scope
++                .mount_in_clay(self.backend, self.root, Rc::new(self.props));
++        }));
++        if let Err(payload) = mounted {
++            app.scope.clone().destroy_clay();
++            resume_unwind(payload);
++        }
++        app
++    }
++}
++
++pub(crate) fn empty_bundle() -> ClayBundle {
++    ClayBundle::new()
++}
++
++#[cfg(test)]
++mod tests {
++    use std::cell::{Cell, RefCell};
++    use std::collections::{BTreeMap, HashMap};
++    use std::fmt::Write as _;
++
++    use super::*;
++    use crate::html::NodeRef;
++    use crate::{Component, Context, Html, Properties, function_component, html, use_state};
++
++    #[derive(Debug)]
++    struct NodeState {
++        tag: String,
++        text: Option<String>,
++        attributes: BTreeMap<String, String>,
++        parent: Option<ClayNode>,
++        children: Vec<ClayNode>,
++    }
++
++    struct ListenerState {
++        node: ClayNode,
++        name: String,
++        callback: Rc<dyn Fn(ClayEvent)>,
++    }
++
++    struct MockBackend {
++        next_node: Cell<u64>,
++        next_listener: Cell<u64>,
++        nodes: RefCell<HashMap<ClayNode, NodeState>>,
++        listeners: RefCell<HashMap<ClayListener, ListenerState>>,
++        flushes: Cell<usize>,
++    }
++
++    impl fmt::Debug for MockBackend {
++        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++            f.debug_struct("MockBackend").finish_non_exhaustive()
++        }
++    }
++
++    impl MockBackend {
++        fn new() -> Rc<Self> {
++            let root = ClayNode(1);
++            Rc::new(Self {
++                next_node: Cell::new(2),
++                next_listener: Cell::new(1),
++                nodes: RefCell::new(HashMap::from([(
++                    root,
++                    NodeState {
++                        tag: "page".into(),
++                        text: None,
++                        attributes: BTreeMap::new(),
++                        parent: None,
++                        children: Vec::new(),
++                    },
++                )])),
++                listeners: RefCell::new(HashMap::new()),
++                flushes: Cell::new(0),
++            })
++        }
++
++        fn create_node(&self, tag: &str, text: Option<&str>) -> ClayNode {
++            let node = ClayNode(self.next_node.get());
++            self.next_node.set(node.0 + 1);
++            self.nodes.borrow_mut().insert(
++                node,
++                NodeState {
++                    tag: tag.into(),
++                    text: text.map(Into::into),
++                    attributes: BTreeMap::new(),
++                    parent: None,
++                    children: Vec::new(),
++                },
++            );
++            node
++        }
++
++        fn render_node(&self, node: ClayNode) -> String {
++            let nodes = self.nodes.borrow();
++            fn render(nodes: &HashMap<ClayNode, NodeState>, node: ClayNode) -> String {
++                let state = &nodes[&node];
++                if let Some(text) = &state.text {
++                    return text.clone();
++                }
++                let mut attributes = String::new();
++                for (name, value) in &state.attributes {
++                    write!(&mut attributes, " {name}=\"{value}\"").unwrap();
++                }
++                let children = state
++                    .children
++                    .iter()
++                    .map(|child| render(nodes, *child))
++                    .collect::<String>();
++                format!("<{tag}{attributes}>{children}</{tag}>", tag = state.tag)
++            }
++            render(&nodes, node)
++        }
++
++        fn tap(&self) {
++            let callback = self
++                .listeners
++                .borrow()
++                .values()
++                .find(|listener| listener.name == "tap")
++                .map(|listener| Rc::clone(&listener.callback))
++                .expect("tap listener not found");
++            callback(ClayEvent::new("tap"));
++        }
++    }
++
++    impl ClayBackend for MockBackend {
++        fn create_element(&self, tag: &str) -> ClayNode {
++            self.create_node(tag, None)
++        }
++
++        fn create_text(&self, text: &str) -> ClayNode {
++            self.create_node("text", Some(text))
++        }
++
++        fn insert_before(&self, parent: ClayNode, child: ClayNode, reference: Option<ClayNode>) {
++            {
++                let nodes = self.nodes.borrow();
++                assert!(nodes.contains_key(&parent));
++                assert_eq!(nodes.get(&child).unwrap().parent, None);
++                if let Some(reference) = reference {
++                    assert_eq!(nodes.get(&reference).unwrap().parent, Some(parent));
++                }
++            }
++            let mut nodes = self.nodes.borrow_mut();
++            let children = &mut nodes.get_mut(&parent).unwrap().children;
++            let index = reference.map_or(children.len(), |reference| {
++                children
++                    .iter()
++                    .position(|candidate| *candidate == reference)
++                    .unwrap()
++            });
++            children.insert(index, child);
++            nodes.get_mut(&child).unwrap().parent = Some(parent);
++        }
++
++        fn remove(&self, parent: ClayNode, child: ClayNode) {
++            let mut nodes = self.nodes.borrow_mut();
++            assert_eq!(nodes.get(&child).unwrap().parent, Some(parent));
++            let children = &mut nodes.get_mut(&parent).unwrap().children;
++            let index = children
++                .iter()
++                .position(|candidate| *candidate == child)
++                .unwrap();
++            children.remove(index);
++            nodes.get_mut(&child).unwrap().parent = None;
++        }
++
++        fn destroy_node(&self, node: ClayNode) {
++            assert!(
++                self.listeners
++                    .borrow()
++                    .values()
++                    .all(|listener| listener.node != node)
++            );
++            let mut nodes = self.nodes.borrow_mut();
++            let state = nodes.get(&node).unwrap();
++            assert_eq!(state.parent, None);
++            assert!(state.children.is_empty());
++            nodes.remove(&node).unwrap();
++        }
++
++        fn set_attribute(&self, node: ClayNode, name: &str, value: Option<&str>) {
++            let mut nodes = self.nodes.borrow_mut();
++            let attributes = &mut nodes.get_mut(&node).unwrap().attributes;
++            match value {
++                Some(value) => {
++                    attributes.insert(name.into(), value.into());
++                }
++                None => {
++                    attributes.remove(name);
++                }
++            }
++        }
++
++        fn add_event_listener(
++            &self,
++            node: ClayNode,
++            name: &str,
++            callback: Box<dyn Fn(ClayEvent)>,
++        ) -> ClayListener {
++            let listener = ClayListener(self.next_listener.get());
++            self.next_listener.set(listener.0 + 1);
++            self.listeners.borrow_mut().insert(
++                listener,
++                ListenerState {
++                    node,
++                    name: name.into(),
++                    callback: Rc::from(callback),
++                },
++            );
++            listener
++        }
++
++        fn remove_event_listener(&self, node: ClayNode, listener: ClayListener) {
++            let removed = self.listeners.borrow_mut().remove(&listener).unwrap();
++            assert_eq!(node, removed.node);
++        }
++
++        fn flush(&self, _root: ClayNode) {
++            self.flushes.set(self.flushes.get() + 1);
++        }
++    }
++
++    #[function_component]
++    fn Counter() -> Html {
++        let value = use_state(|| 0);
++        let increment = {
++            let value = value.clone();
++            move |_: ClayEvent| value.set(*value + 1)
++        };
++
++        html! {
++            <view class="counter">
++                <text>{*value}</text>
++                <view ontap={increment}>
++                    <text>{"Increment"}</text>
++                </view>
++            </view>
++        }
++    }
++
++    #[function_component]
++    fn Nested() -> Html {
++        html! { <text>{"Nested"}</text> }
++    }
++
++    #[function_component]
++    fn UnsupportedNestedComponent() -> Html {
++        html! { <view ontap={|_: ClayEvent| {}}><Nested /></view> }
++    }
++
++    #[function_component]
++    fn UnsupportedSiblingComponent() -> Html {
++        html! { <text>{"First"}</text><Nested /> }
++    }
++
++    #[function_component]
++    fn UnsupportedNodeRef() -> Html {
++        let node_ref = NodeRef::default();
++        html! { <view ref={node_ref} /> }
++    }
++
++    #[function_component]
++    fn FormControls() -> Html {
++        html! {
++            <view>
++                <input value="ready" checked={true} />
++                <input value="off" checked={false} />
++                <textarea value="notes" />
++            </view>
++        }
++    }
++
++    #[function_component]
++    fn NestedTree() -> Html {
++        html! { <view><text><view>{"leaf"}</view></text></view> }
++    }
++
++    #[derive(Clone, PartialEq, Properties)]
++    struct LifecycleProps {
++        events: Rc<RefCell<Vec<&'static str>>>,
++    }
++
++    enum LifecycleMessage {
++        Render,
++    }
++
++    struct LifecycleComponent;
++
++    impl Component for LifecycleComponent {
++        type Message = LifecycleMessage;
++        type Properties = LifecycleProps;
++
++        fn create(_ctx: &Context<Self>) -> Self {
++            Self
++        }
++
++        fn update(&mut self, _ctx: &Context<Self>, _msg: Self::Message) -> bool {
++            true
++        }
++
++        fn view(&self, _ctx: &Context<Self>) -> Html {
++            html! { <view /> }
++        }
++
++        fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
++            ctx.props().events.borrow_mut().push(if first_render {
++                "rendered:first"
++            } else {
++                "rendered"
++            });
++        }
++
++        fn destroy(&mut self, ctx: &Context<Self>) {
++            ctx.props().events.borrow_mut().push("destroy");
++        }
++    }
++
++    enum KeyMessage {
++        Change,
++    }
++
++    struct KeyChange {
++        changed: bool,
++    }
++
++    impl Component for KeyChange {
++        type Message = KeyMessage;
++        type Properties = ();
++
++        fn create(_ctx: &Context<Self>) -> Self {
++            Self { changed: false }
++        }
++
++        fn update(&mut self, _ctx: &Context<Self>, _msg: Self::Message) -> bool {
++            self.changed = true;
++            true
++        }
++
++        fn view(&self, _ctx: &Context<Self>) -> Html {
++            if self.changed {
++                html! { <view key="changed">{"after"}</view> }
++            } else {
++                html! { <view>{"before"}</view> }
++            }
++        }
++    }
++
++    struct PanickingDestroy;
++
++    impl Component for PanickingDestroy {
++        type Message = ();
++        type Properties = ();
++
++        fn create(_ctx: &Context<Self>) -> Self {
++            Self
++        }
++
++        fn view(&self, _ctx: &Context<Self>) -> Html {
++            html! { <view ontap={|_: ClayEvent| {}}><text>{"mounted"}</text></view> }
++        }
++
++        fn destroy(&mut self, _ctx: &Context<Self>) {
++            panic!("destroy lifecycle panic")
++        }
++    }
++
++    #[test]
++    fn unsupported_nested_component_does_not_mutate_host() {
++        let backend = MockBackend::new();
++        let render_backend: Rc<dyn ClayBackend> = backend.clone();
++        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
++            ClayRenderer::<UnsupportedNestedComponent>::new(render_backend, ClayNode(1)).render();
++        }));
++
++        assert!(result.is_err());
++        assert_eq!(backend.render_node(ClayNode(1)), "<page></page>");
++        assert_eq!(backend.nodes.borrow().len(), 1);
++        assert!(backend.listeners.borrow().is_empty());
++    }
++
++    #[test]
++    fn unsupported_sibling_component_does_not_mutate_host() {
++        let backend = MockBackend::new();
++        let render_backend: Rc<dyn ClayBackend> = backend.clone();
++        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
++            ClayRenderer::<UnsupportedSiblingComponent>::new(render_backend, ClayNode(1)).render();
++        }));
++
++        assert!(result.is_err());
++        assert_eq!(backend.render_node(ClayNode(1)), "<page></page>");
++        assert_eq!(backend.nodes.borrow().len(), 1);
++    }
++
++    #[test]
++    fn node_ref_is_rejected_before_host_mutation() {
++        let backend = MockBackend::new();
++        let render_backend: Rc<dyn ClayBackend> = backend.clone();
++        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
++            ClayRenderer::<UnsupportedNodeRef>::new(render_backend, ClayNode(1)).render();
++        }));
++
++        assert!(result.is_err());
++        assert_eq!(backend.render_node(ClayNode(1)), "<page></page>");
++        assert_eq!(backend.nodes.borrow().len(), 1);
++    }
++
++    #[test]
++    fn key_change_is_rejected_before_host_mutation() {
++        let backend = MockBackend::new();
++        let app = ClayRenderer::<KeyChange>::new(backend.clone(), ClayNode(1)).render();
++        let node_count = backend.nodes.borrow().len();
++
++        let result =
++            std::panic::catch_unwind(AssertUnwindSafe(|| app.send_message(KeyMessage::Change)));
++
++        assert!(result.is_err());
++        assert_eq!(
++            backend.render_node(ClayNode(1)),
++            "<page><view>before</view></page>"
++        );
++        assert_eq!(backend.nodes.borrow().len(), node_count);
++        app.destroy();
++    }
++
++    #[test]
++    fn value_and_checked_are_forwarded_as_attributes() {
++        let backend = MockBackend::new();
++        let app = ClayRenderer::<FormControls>::new(backend.clone(), ClayNode(1)).render();
++
++        assert_eq!(
++            backend.render_node(ClayNode(1)),
++            "<page><view><input checked=\"true\" value=\"ready\"></input><input value=\"off\"></input><textarea value=\"notes\"></textarea></view></page>"
++        );
++
++        app.destroy();
++    }
++
++    #[test]
++    fn rendered_and_destroy_lifecycle_run_synchronously() {
++        let backend = MockBackend::new();
++        let events = Rc::new(RefCell::new(Vec::new()));
++        let app = ClayRenderer::<LifecycleComponent>::with_props(
++            backend,
++            ClayNode(1),
++            LifecycleProps {
++                events: events.clone(),
++            },
++        )
++        .render();
++
++        assert_eq!(&*events.borrow(), &["rendered:first"]);
++        app.send_message(LifecycleMessage::Render);
++        assert_eq!(&*events.borrow(), &["rendered:first", "rendered"]);
++        app.destroy();
++        assert_eq!(
++            &*events.borrow(),
++            &["rendered:first", "rendered", "destroy"]
++        );
++    }
++
++    #[test]
++    fn destroy_removes_each_node_from_its_direct_parent() {
++        let backend = MockBackend::new();
++        let app = ClayRenderer::<NestedTree>::new(backend.clone(), ClayNode(1)).render();
++
++        app.destroy();
++
++        assert_eq!(backend.render_node(ClayNode(1)), "<page></page>");
++        assert_eq!(backend.nodes.borrow().len(), 1);
++    }
++
++    #[test]
++    fn destroy_lifecycle_panic_still_tears_down_tree_and_listeners() {
++        let backend = MockBackend::new();
++        let app = ClayRenderer::<PanickingDestroy>::new(backend.clone(), ClayNode(1)).render();
++
++        let result = std::panic::catch_unwind(AssertUnwindSafe(|| app.destroy()));
++
++        assert!(result.is_err());
++        assert_eq!(backend.render_node(ClayNode(1)), "<page></page>");
++        assert_eq!(backend.nodes.borrow().len(), 1);
++        assert!(backend.listeners.borrow().is_empty());
++        assert_eq!(backend.flushes.get(), 2);
++    }
++
++    #[test]
++    fn tap_updates_component_and_clay_tree() {
++        let backend = MockBackend::new();
++        let app = ClayRenderer::<Counter>::new(backend.clone(), ClayNode(1)).render();
++
++        assert_eq!(
++            backend.render_node(ClayNode(1)),
++            "<page><view class=\"counter\"><text>0</text><view><text>Increment</text></view></view></page>"
++        );
++        assert_eq!(backend.flushes.get(), 1);
++
++        backend.tap();
++
++        assert_eq!(
++            backend.render_node(ClayNode(1)),
++            "<page><view class=\"counter\"><text>1</text><view><text>Increment</text></view></view></page>"
++        );
++        assert_eq!(backend.flushes.get(), 2);
++
++        app.destroy();
++        assert_eq!(backend.render_node(ClayNode(1)), "<page></page>");
++        assert_eq!(backend.flushes.get(), 3);
++    }
++}
+diff --git a/packages/yew/src/html/component/lifecycle.rs b/packages/yew/src/html/component/lifecycle.rs
+index 4452cbbc..2d9a2d8b 100644
+--- a/packages/yew/src/html/component/lifecycle.rs
++++ b/packages/yew/src/html/component/lifecycle.rs
+@@ -8,6 +8,10 @@ use web_sys::Element;
+ 
+ use super::BaseComponent;
+ use super::scope::{AnyScope, Scope};
++#[cfg(feature = "clay")]
++use crate::clay_bundle::ClayBundle;
++#[cfg(feature = "clay")]
++use crate::clay_renderer::{ClayBackend, ClayNode};
+ #[cfg(feature = "hydration")]
+ use crate::dom_bundle::Fragment;
+ #[cfg(feature = "csr")]
+@@ -46,6 +50,13 @@ pub(crate) enum ComponentRenderState {
+     Ssr {
+         sender: Option<crate::platform::pinned::oneshot::Sender<Html>>,
+     },
++    #[cfg(feature = "clay")]
++    Clay {
++        bundle: ClayBundle,
++        backend: Rc<dyn ClayBackend>,
++        root: ClayNode,
++        parent: ClayNode,
++    },
+ }
+ 
+ impl std::fmt::Debug for ComponentRenderState {
+@@ -94,6 +105,20 @@ impl std::fmt::Debug for ComponentRenderState {
+                     .field("sender", &sender_repr)
+                     .finish()
+             }
++
++            #[cfg(feature = "clay")]
++            Self::Clay {
++                bundle,
++                backend,
++                root,
++                parent,
++            } => f
++                .debug_struct("ComponentRenderState::Clay")
++                .field("bundle", bundle)
++                .field("backend", backend)
++                .field("root", root)
++                .field("parent", parent)
++                .finish(),
+         }
+     }
+ }
+@@ -130,6 +155,11 @@ impl ComponentRenderState {
+                 #[cfg(debug_assertions)]
+                 panic!("shifting is not possible during SSR");
+             }
++            #[cfg(feature = "clay")]
++            Self::Clay { .. } => {
++                #[cfg(debug_assertions)]
++                panic!("shifting a Clay component through the DOM renderer is not possible");
++            }
+         }
+     }
+ }
+@@ -149,7 +179,7 @@ where
+ /// methods.
+ pub(crate) trait Stateful {
+     fn view(&self) -> HtmlResult;
+-    #[cfg(feature = "csr")]
++    #[cfg(any(feature = "csr", feature = "clay"))]
+     fn rendered(&mut self, first_render: bool);
+     fn destroy(&mut self);
+ 
+@@ -173,7 +203,7 @@ where
+         self.component.view(&self.context)
+     }
+ 
+-    #[cfg(feature = "csr")]
++    #[cfg(any(feature = "csr", feature = "clay"))]
+     fn rendered(&mut self, first_render: bool) {
+         self.component.rendered(&self.context, first_render)
+     }
+@@ -226,7 +256,7 @@ pub(crate) struct ComponentState {
+ 
+     pub(super) render_state: ComponentRenderState,
+ 
+-    #[cfg(feature = "csr")]
++    #[cfg(any(feature = "csr", feature = "clay"))]
+     has_rendered: bool,
+     /// This deals with an edge case. Usually, we want to update props as fast as possible.
+     /// But, when a component hydrates and suspends, we want to continue using the initially given
+@@ -260,6 +290,8 @@ impl ComponentState {
+                 ComponentRenderState::Hydration { .. } => RenderMode::Hydration,
+                 #[cfg(feature = "ssr")]
+                 ComponentRenderState::Ssr { .. } => RenderMode::Ssr,
++                #[cfg(feature = "clay")]
++                ComponentRenderState::Clay { .. } => RenderMode::Render,
+             }
+         };
+ 
+@@ -282,7 +314,7 @@ impl ComponentState {
+             render_state: initial_render_state,
+             suspension: None,
+ 
+-            #[cfg(feature = "csr")]
++            #[cfg(any(feature = "csr", feature = "clay"))]
+             has_rendered: false,
+             #[cfg(feature = "hydration")]
+             pending_props: None,
+@@ -374,6 +406,24 @@ pub(crate) struct DestroyRunner {
+     pub parent_to_detach: bool,
+ }
+ 
++#[cfg(feature = "clay")]
++struct ClayCleanupGuard {
++    bundle: Option<ClayBundle>,
++    backend: Rc<dyn ClayBackend>,
++    root: ClayNode,
++    parent: ClayNode,
++}
++
++#[cfg(feature = "clay")]
++impl Drop for ClayCleanupGuard {
++    fn drop(&mut self) {
++        if let Some(bundle) = self.bundle.take() {
++            bundle.detach(&self.backend, self.parent);
++            self.backend.flush(self.root);
++        }
++    }
++}
++
+ impl ComponentState {
+     #[tracing::instrument(
+         level = tracing::Level::DEBUG,
+@@ -381,9 +431,37 @@ impl ComponentState {
+         fields(component.id = self.comp_id)
+     )]
+     fn destroy(mut self, parent_to_detach: bool) {
++        #[cfg(feature = "clay")]
++        let clay_cleanup = match &mut self.render_state {
++            ComponentRenderState::Clay {
++                bundle,
++                backend,
++                root,
++                parent,
++            } => Some(ClayCleanupGuard {
++                bundle: Some(std::mem::replace(bundle, ClayBundle::new())),
++                backend: Rc::clone(backend),
++                root: *root,
++                parent: *parent,
++            }),
++            #[cfg(feature = "csr")]
++            ComponentRenderState::Render { .. } => None,
++            #[cfg(feature = "hydration")]
++            ComponentRenderState::Hydration { .. } => None,
++            #[cfg(feature = "ssr")]
++            ComponentRenderState::Ssr { .. } => None,
++        };
++
+         self.inner.destroy();
+         self.resume_existing_suspension();
+ 
++        #[cfg(feature = "clay")]
++        if let Some(cleanup) = clay_cleanup {
++            let _ = parent_to_detach;
++            drop(cleanup);
++            return;
++        }
++
+         match self.render_state {
+             #[cfg(feature = "csr")]
+             ComponentRenderState::Render {
+@@ -409,6 +487,8 @@ impl ComponentState {
+             ComponentRenderState::Ssr { .. } => {
+                 let _ = parent_to_detach;
+             }
++            #[cfg(feature = "clay")]
++            ComponentRenderState::Clay { .. } => unreachable!("Clay cleanup returned early"),
+         }
+     }
+ }
+@@ -582,6 +662,27 @@ impl ComponentState {
+                     tx.send(new_vdom).unwrap();
+                 }
+             }
++            #[cfg(feature = "clay")]
++            ComponentRenderState::Clay {
++                ref mut bundle,
++                ref backend,
++                root,
++                parent,
++            } => {
++                bundle.reconcile(backend, parent, new_vdom);
++                backend.flush(root);
++
++                let first_render = !self.has_rendered;
++                self.has_rendered = true;
++                scheduler::push_component_rendered(
++                    self.comp_id,
++                    Box::new(RenderedRunner {
++                        state: shared_state.clone(),
++                        first_render,
++                    }),
++                    first_render,
++                );
++            }
+         };
+     }
+ }
+@@ -598,16 +699,18 @@ impl Runnable for RenderRunner {
+     }
+ }
+ 
+-#[cfg(feature = "csr")]
++#[cfg(any(feature = "csr", feature = "clay"))]
+ mod feat_csr {
+     use super::*;
+ 
++    #[cfg(feature = "csr")]
+     pub(crate) struct PropsUpdateRunner {
+         pub state: Shared<Option<ComponentState>>,
+         pub props: Option<Rc<dyn Any>>,
+         pub next_sibling_slot: Option<DomSlot>,
+     }
+ 
++    #[cfg(feature = "csr")]
+     impl ComponentState {
+         #[tracing::instrument(
+             level = tracing::Level::DEBUG,
+@@ -639,6 +742,8 @@ mod feat_csr {
+                         #[cfg(debug_assertions)]
+                         panic!("properties do not change during SSR");
+                     }
++                    #[cfg(feature = "clay")]
++                    ComponentRenderState::Clay { .. } => {}
+                 }
+             }
+ 
+@@ -688,6 +793,7 @@ mod feat_csr {
+         }
+     }
+ 
++    #[cfg(feature = "csr")]
+     impl Runnable for PropsUpdateRunner {
+         fn run(self: Box<Self>) {
+             let Self {
+@@ -720,11 +826,13 @@ mod feat_csr {
+     /// A `rendered` lifecycle deferred by the ancestor `<Suspense>` so it fires
+     /// only after Suspense un-suspends and children's DOM has been shifted into
+     /// the live tree. See `BaseSuspense::defer_rendered`.
++    #[cfg(feature = "csr")]
+     pub(crate) struct PendingRendered {
+         pub state: Shared<Option<ComponentState>>,
+         pub first_render: bool,
+     }
+ 
++    #[cfg(feature = "csr")]
+     impl PendingRendered {
+         pub(crate) fn new(state: Shared<Option<ComponentState>>, first_render: bool) -> Self {
+             Self {
+@@ -785,6 +893,7 @@ mod feat_csr {
+             if let Some(state) = self.state.borrow_mut().as_mut() {
+                 let has_pending_props = state.rendered(self.first_render);
+ 
++                #[cfg(feature = "csr")]
+                 if has_pending_props {
+                     scheduler::push_component_props_update(Box::new(PropsUpdateRunner {
+                         state: self.state.clone(),
+@@ -792,12 +901,14 @@ mod feat_csr {
+                         next_sibling_slot: None,
+                     }));
+                 }
++                #[cfg(not(feature = "csr"))]
++                let _ = has_pending_props;
+             }
+         }
+     }
+ }
+ 
+-#[cfg(feature = "csr")]
++#[cfg(any(feature = "csr", feature = "clay"))]
+ pub(crate) use feat_csr::*;
+ 
+ #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+diff --git a/packages/yew/src/html/component/mod.rs b/packages/yew/src/html/component/mod.rs
+index 57bebce7..5d262787 100644
+--- a/packages/yew/src/html/component/mod.rs
++++ b/packages/yew/src/html/component/mod.rs
+@@ -1,7 +1,7 @@
+ //! Components wrapped with context including properties, state, and link
+ 
+ mod children;
+-#[cfg(any(feature = "csr", feature = "ssr"))]
++#[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+ mod lifecycle;
+ mod marker;
+ mod properties;
+@@ -230,7 +230,7 @@ where
+ }
+ 
+ #[cfg(test)]
+-#[cfg(any(feature = "ssr", feature = "csr"))]
++#[cfg(any(feature = "ssr", feature = "csr", feature = "clay"))]
+ mod tests {
+     use super::*;
+ 
+diff --git a/packages/yew/src/html/component/scope.rs b/packages/yew/src/html/component/scope.rs
+index 4a4681f3..865f766a 100644
+--- a/packages/yew/src/html/component/scope.rs
++++ b/packages/yew/src/html/component/scope.rs
+@@ -9,12 +9,12 @@ use std::{fmt, iter};
+ use futures::{Stream, StreamExt};
+ 
+ use super::BaseComponent;
+-#[cfg(any(feature = "csr", feature = "ssr"))]
++#[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+ use super::lifecycle::ComponentState;
+ use crate::callback::Callback;
+ use crate::context::{ContextHandle, ContextProvider};
+ use crate::platform::spawn_local;
+-#[cfg(any(feature = "csr", feature = "ssr"))]
++#[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+ use crate::scheduler::Shared;
+ 
+ /// Untyped scope used for accessing parent scope
+@@ -94,10 +94,10 @@ pub struct Scope<COMP: BaseComponent> {
+     _marker: PhantomData<COMP>,
+     parent: Option<Rc<AnyScope>>,
+ 
+-    #[cfg(any(feature = "csr", feature = "ssr"))]
++    #[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+     pub(crate) pending_messages: MsgQueue<COMP::Message>,
+ 
+-    #[cfg(any(feature = "csr", feature = "ssr"))]
++    #[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+     pub(crate) state: Shared<Option<ComponentState>>,
+ 
+     pub(crate) id: usize,
+@@ -114,11 +114,11 @@ impl<COMP: BaseComponent> Clone for Scope<COMP> {
+         Scope {
+             _marker: PhantomData,
+ 
+-            #[cfg(any(feature = "csr", feature = "ssr"))]
++            #[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+             pending_messages: self.pending_messages.clone(),
+             parent: self.parent.clone(),
+ 
+-            #[cfg(any(feature = "csr", feature = "ssr"))]
++            #[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+             state: self.state.clone(),
+ 
+             id: self.id,
+@@ -362,7 +362,7 @@ mod feat_ssr {
+     }
+ }
+ 
+-#[cfg(not(any(feature = "ssr", feature = "csr")))]
++#[cfg(not(any(feature = "ssr", feature = "csr", feature = "clay")))]
+ mod feat_no_csr_ssr {
+     use super::*;
+ 
+@@ -382,7 +382,7 @@ mod feat_no_csr_ssr {
+     }
+ }
+ 
+-#[cfg(any(feature = "ssr", feature = "csr"))]
++#[cfg(any(feature = "ssr", feature = "csr", feature = "clay"))]
+ mod feat_csr_ssr {
+     use std::cell::{Ref, RefCell};
+     use std::sync::atomic::{AtomicUsize, Ordering};
+@@ -494,7 +494,7 @@ mod feat_csr_ssr {
+     }
+ }
+ 
+-#[cfg(any(feature = "ssr", feature = "csr"))]
++#[cfg(any(feature = "ssr", feature = "csr", feature = "clay"))]
+ pub(crate) use feat_csr_ssr::*;
+ 
+ #[cfg(feature = "csr")]
+@@ -590,6 +590,8 @@ mod feat_csr {
+                     }
+                     #[cfg(feature = "ssr")]
+                     ComponentRenderState::Ssr { .. } => {}
++                    #[cfg(feature = "clay")]
++                    ComponentRenderState::Clay { .. } => {}
+                 }
+             }
+             schedule_props_update(self.state.clone(), props, slot)
+@@ -648,6 +650,54 @@ mod feat_csr {
+ #[cfg(feature = "csr")]
+ pub(crate) use feat_csr::*;
+ 
++#[cfg(feature = "clay")]
++mod feat_clay {
++    use super::*;
++    use crate::clay_renderer::{ClayBackend, ClayNode, empty_bundle};
++    use crate::html::component::lifecycle::{
++        ComponentRenderState, CreateRunner, DestroyRunner, RenderRunner,
++    };
++    use crate::scheduler;
++
++    impl<COMP: BaseComponent> Scope<COMP> {
++        pub(crate) fn mount_in_clay(
++            &self,
++            backend: Rc<dyn ClayBackend>,
++            root: ClayNode,
++            props: Rc<COMP::Properties>,
++        ) {
++            let state = ComponentRenderState::Clay {
++                bundle: empty_bundle(),
++                backend,
++                root,
++                parent: root,
++            };
++            scheduler::push_component_create(
++                self.id,
++                Box::new(CreateRunner {
++                    initial_render_state: state,
++                    props,
++                    scope: self.clone(),
++                    #[cfg(feature = "hydration")]
++                    prepared_state: None,
++                }),
++                Box::new(RenderRunner {
++                    state: self.state.clone(),
++                }),
++            );
++            scheduler::start();
++        }
++
++        pub(crate) fn destroy_clay(self) {
++            scheduler::push_component_destroy(Box::new(DestroyRunner {
++                state: self.state,
++                parent_to_detach: false,
++            }));
++            scheduler::start();
++        }
++    }
++}
++
+ #[cfg(feature = "hydration")]
+ mod feat_hydration {
+     use wasm_bindgen::JsCast;
+diff --git a/packages/yew/src/html/listener/events.rs b/packages/yew/src/html/listener/events.rs
+index 398ed53c..20a93294 100644
+--- a/packages/yew/src/html/listener/events.rs
++++ b/packages/yew/src/html/listener/events.rs
+@@ -211,3 +211,54 @@ impl_passive! {
+     ontouchmove(TouchEvent)
+     ontouchstart(TouchEvent)
+ }
++
++/// A Clay `tap` event listener.
++#[cfg(feature = "clay")]
++pub mod ontap {
++    use std::rc::Rc;
++
++    use crate::ClayEvent;
++    use crate::callback::Callback;
++    use crate::virtual_dom::{Listener, ListenerKind};
++
++    /// A wrapper for a Clay tap callback.
++    #[derive(Clone, Debug)]
++    pub struct Wrapper {
++        callback: Callback<ClayEvent>,
++    }
++
++    impl Wrapper {
++        /// Creates a Clay tap callback wrapper.
++        pub fn new(callback: Callback<ClayEvent>) -> Self {
++            Self { callback }
++        }
++
++        #[doc(hidden)]
++        pub fn __macro_new(
++            callback: impl crate::html::IntoEventCallback<ClayEvent>,
++        ) -> Option<Rc<dyn Listener>> {
++            Some(Rc::new(Self::new(callback.into_event_callback()?)))
++        }
++    }
++
++    /// The event passed to a Clay tap callback.
++    pub type Event = ClayEvent;
++
++    impl Listener for Wrapper {
++        fn kind(&self) -> ListenerKind {
++            ListenerKind::ontap
++        }
++
++        fn handle(&self, _event: web_sys::Event) {
++            unreachable!("Clay events cannot be dispatched by the browser DOM renderer")
++        }
++
++        fn passive(&self) -> bool {
++            false
++        }
++
++        fn handle_clay(&self, event: ClayEvent) {
++            self.callback.emit(event);
++        }
++    }
++}
+diff --git a/packages/yew/src/html/mod.rs b/packages/yew/src/html/mod.rs
+index 622fed48..5a8b6d1f 100644
+--- a/packages/yew/src/html/mod.rs
++++ b/packages/yew/src/html/mod.rs
+@@ -87,8 +87,18 @@ impl IntoHtmlResult for Html {
+ /// ```
+ /// ## Relevant examples
+ /// - [Node Refs](https://github.com/yewstack/yew/tree/master/examples/node_refs)
+-#[derive(Default, Clone, ImplicitClone)]
+-pub struct NodeRef(Rc<RefCell<NodeRefInner>>);
++#[derive(Clone, ImplicitClone)]
++pub struct NodeRef(Rc<RefCell<NodeRefInner>>, #[cfg(feature = "clay")] bool);
++
++impl Default for NodeRef {
++    fn default() -> Self {
++        Self(
++            Rc::default(),
++            #[cfg(feature = "clay")]
++            true,
++        )
++    }
++}
+ 
+ impl PartialEq for NodeRef {
+     fn eq(&self, other: &Self) -> bool {
+@@ -112,6 +122,21 @@ struct NodeRefInner {
+ }
+ 
+ impl NodeRef {
++    /// Creates the internal placeholder used when an element has no `ref` binding.
++    #[doc(hidden)]
++    pub fn __clay_unbound() -> Self {
++        Self(
++            Rc::default(),
++            #[cfg(feature = "clay")]
++            false,
++        )
++    }
++
++    #[cfg(feature = "clay")]
++    pub(crate) fn is_clay_binding(&self) -> bool {
++        self.1
++    }
++
+     /// Get the wrapped Node reference if it exists
+     pub fn get(&self) -> Option<Node> {
+         let inner = self.0.borrow();
+diff --git a/packages/yew/src/lib.rs b/packages/yew/src/lib.rs
+index 677d61b1..3e67700d 100644
+--- a/packages/yew/src/lib.rs
++++ b/packages/yew/src/lib.rs
+@@ -26,6 +26,8 @@
+ //!   are making a Yew application (not a library).
+ //! - `ssr`: Enables Server-side Rendering support and [`ServerRenderer`].
+ //! - `hydration`: Enables Hydration support.
++//! - `clay`: Enables the experimental native Clay backend. It cannot be combined with `csr` or
++//!   `hydration`.
+ //!
+ //! ## Example
+ //!
+@@ -83,6 +85,16 @@
+ #![recursion_limit = "512"]
+ extern crate self as yew;
+ 
++#[cfg(all(feature = "clay", target_arch = "wasm32", not(documenting)))]
++compile_error!("the `clay` renderer is supported only on native targets");
++
++#[cfg(all(
++    feature = "clay",
++    any(feature = "csr", feature = "hydration"),
++    not(documenting)
++))]
++compile_error!("the `clay` feature cannot be combined with `csr` or `hydration`");
++
+ /// This macro provides a convenient way to create [`Classes`].
+ ///
+ /// The macro takes a list of items similar to the [`vec!`] macro and returns a [`Classes`]
+@@ -271,6 +283,10 @@ pub mod macros {
+ }
+ 
+ pub mod callback;
++#[cfg(feature = "clay")]
++mod clay_bundle;
++#[cfg(feature = "clay")]
++mod clay_renderer;
+ pub mod context;
+ #[cfg(feature = "csr")]
+ mod dom_bundle;
+@@ -284,6 +300,8 @@ mod server_renderer;
+ pub mod suspense;
+ pub mod utils;
+ pub mod virtual_dom;
++#[cfg(feature = "clay")]
++pub use clay_renderer::*;
+ #[cfg(feature = "ssr")]
+ pub use server_renderer::*;
+ 
+@@ -328,6 +346,8 @@ pub mod prelude {
+     #[cfg(feature = "csr")]
+     pub use crate::app_handle::AppHandle;
+     pub use crate::callback::{Callback, CallbackRef, CallbackRefMut};
++    #[cfg(feature = "clay")]
++    pub use crate::clay_renderer::{ClayAppHandle, ClayEvent, ClayRenderer};
+     pub use crate::context::{ContextHandle, ContextProvider};
+     pub use crate::events::*;
+     pub use crate::functional::*;
+diff --git a/packages/yew/src/scheduler.rs b/packages/yew/src/scheduler.rs
+index 2c94f1cb..a9454841 100644
+--- a/packages/yew/src/scheduler.rs
++++ b/packages/yew/src/scheduler.rs
+@@ -78,7 +78,7 @@ impl TopologicalQueue {
+         }
+     }
+ 
+-    #[cfg(any(feature = "ssr", feature = "csr"))]
++    #[cfg(any(feature = "ssr", feature = "csr", feature = "clay"))]
+     fn push(&mut self, component_id: usize, task: Box<dyn Runnable>) {
+         self.inner.insert(component_id, QueueEntry { task });
+     }
+@@ -160,7 +160,7 @@ pub fn push(runnable: Box<dyn Runnable>) {
+     start();
+ }
+ 
+-#[cfg(any(feature = "ssr", feature = "csr"))]
++#[cfg(any(feature = "ssr", feature = "csr", feature = "clay"))]
+ mod feat_csr_ssr {
+     use super::*;
+     /// Push a component creation, first render and first rendered [Runnable]s to be executed
+@@ -193,10 +193,10 @@ mod feat_csr_ssr {
+     }
+ }
+ 
+-#[cfg(any(feature = "ssr", feature = "csr"))]
++#[cfg(any(feature = "ssr", feature = "csr", feature = "clay"))]
+ pub(crate) use feat_csr_ssr::*;
+ 
+-#[cfg(feature = "csr")]
++#[cfg(any(feature = "csr", feature = "clay"))]
+ mod feat_csr {
+     use super::*;
+ 
+@@ -214,12 +214,13 @@ mod feat_csr {
+         });
+     }
+ 
++    #[cfg(feature = "csr")]
+     pub(crate) fn push_component_props_update(props_update: Box<dyn Runnable>) {
+         with(|s| s.props_update.push(props_update));
+     }
+ }
+ 
+-#[cfg(feature = "csr")]
++#[cfg(any(feature = "csr", feature = "clay"))]
+ pub(crate) use feat_csr::*;
+ 
+ #[cfg(feature = "hydration")]
+diff --git a/packages/yew/src/suspense/component.rs b/packages/yew/src/suspense/component.rs
+index f2ba1213..75e86fd2 100644
+--- a/packages/yew/src/suspense/component.rs
++++ b/packages/yew/src/suspense/component.rs
+@@ -12,7 +12,7 @@ pub struct SuspenseProps {
+     pub fallback: Html,
+ }
+ 
+-#[cfg(any(feature = "csr", feature = "ssr"))]
++#[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+ mod feat_csr_ssr {
+     #[cfg(feature = "csr")]
+     use std::cell::RefCell;
+@@ -226,10 +226,10 @@ mod feat_csr_ssr {
+     }
+ }
+ 
+-#[cfg(any(feature = "csr", feature = "ssr"))]
++#[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+ pub use feat_csr_ssr::*;
+ 
+-#[cfg(not(any(feature = "ssr", feature = "csr")))]
++#[cfg(not(any(feature = "ssr", feature = "csr", feature = "clay")))]
+ mod feat_no_csr_ssr {
+     use super::*;
+     use crate::component;
+@@ -241,5 +241,5 @@ mod feat_no_csr_ssr {
+     }
+ }
+ 
+-#[cfg(not(any(feature = "ssr", feature = "csr")))]
++#[cfg(not(any(feature = "ssr", feature = "csr", feature = "clay")))]
+ pub use feat_no_csr_ssr::*;
+diff --git a/packages/yew/src/suspense/mod.rs b/packages/yew/src/suspense/mod.rs
+index 339e2ffc..83213694 100644
+--- a/packages/yew/src/suspense/mod.rs
++++ b/packages/yew/src/suspense/mod.rs
+@@ -4,7 +4,7 @@ mod component;
+ mod hooks;
+ mod suspension;
+ 
+-#[cfg(any(feature = "csr", feature = "ssr"))]
++#[cfg(any(feature = "csr", feature = "ssr", feature = "clay"))]
+ pub(crate) use component::BaseSuspense;
+ pub use component::{Suspense, SuspenseProps};
+ pub use hooks::*;
+diff --git a/packages/yew/src/virtual_dom/listeners.rs b/packages/yew/src/virtual_dom/listeners.rs
+index 318c7561..816f3bdc 100644
+--- a/packages/yew/src/virtual_dom/listeners.rs
++++ b/packages/yew/src/virtual_dom/listeners.rs
+@@ -14,6 +14,10 @@ pub trait Listener {
+     /// Makes the event listener passive. See
+     /// [addEventListener](https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener).
+     fn passive(&self) -> bool;
++
++    /// Handles an event delivered by the experimental Clay renderer.
++    #[cfg(feature = "clay")]
++    fn handle_clay(&self, _event: crate::ClayEvent) {}
+ }
+ 
+ impl std::fmt::Debug for dyn Listener {
+@@ -157,6 +161,7 @@ gen_listener_kinds! {
+     ontransitionend
+     ontransitionrun
+     ontransitionstart
++    ontap
+ }
+ 
+ /// A list of event listeners
+diff --git a/packages/yew/src/virtual_dom/vtag.rs b/packages/yew/src/virtual_dom/vtag.rs
+index 18cd215a..38041248 100644
+--- a/packages/yew/src/virtual_dom/vtag.rs
++++ b/packages/yew/src/virtual_dom/vtag.rs
+@@ -161,7 +161,16 @@ impl VTag {
+                     children: Default::default(),
+                 },
+             },
+-            Default::default(),
++            {
++                #[cfg(feature = "clay")]
++                {
++                    NodeRef::__clay_unbound()
++                }
++                #[cfg(not(feature = "clay"))]
++                {
++                    NodeRef::default()
++                }
++            },
+             Default::default(),
+             Default::default(),
+             Default::default(),
+-- 
+2.39.5
+
