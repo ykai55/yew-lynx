@@ -1,6 +1,6 @@
 [package]
 name = "yew-lynx-counter"
-description = "Focused recording fixture for Yew Clay render, tap, and cleanup checks"
+description = "Focused recording fixture for Yew native render, tap, and cleanup checks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,5 +12,9 @@ publish.workspace = true
 fixture = "host-independent-recording-backend"
 verified-behavior = ["initial-render", "tap-update", "listener-cleanup", "flush"]
 
+[lib]
+crate-type = ["staticlib"]
+
 [dependencies]
 yew.workspace = true
+yew-lynx-adapter.workspace = true

@@ -1,5 +1,5 @@
 [workspace]
-members = ["examples/counter"]
+members = ["crates/native-renderer-adapter", "examples/counter"]
 exclude = [".deps/yew"]
 resolver = "3"
 
@@ -12,4 +12,7 @@ repository = "https://github.com/ykai55/yew-lynx"
 publish = false
 
 [workspace.dependencies]
-yew = { path = ".deps/yew/packages/yew", features = ["clay"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+yew = { path = ".deps/yew/packages/yew", features = ["native_renderer"] }
+yew-lynx-adapter = { path = "crates/native-renderer-adapter" }

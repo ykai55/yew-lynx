@@ -1,0 +1,24 @@
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+
+def primjsRepository = System.getenv('YEW_LYNX_PRIMJS_REPO')
+if (!primjsRepository) {
+    throw new GradleException('YEW_LYNX_PRIMJS_REPO must point to the locked PrimJS Maven repository')
+}
+
+allprojects {
+    repositories {
+        maven {
+            url = uri(primjsRepository)
+            content {
+                includeModule('org.lynxsdk.lynx', 'primjs')
+                includeModule('org.lynxsdk.lynx', 'primjsWasm')
+            }
+        }
+        all { repository ->
+            if (repository instanceof MavenArtifactRepository &&
+                    repository.url.toString().contains('/repository/maven-snapshots')) {
+                remove(repository)
+            }
+        }
+    }
+}

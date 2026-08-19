@@ -906,10 +906,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yew-lynx-adapter"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "yew",
+]
+
+[[package]]
 name = "yew-lynx-counter"
 version = "0.1.0"
 dependencies = [
  "yew",
+ "yew-lynx-adapter",
 ]
 
 [[package]]
