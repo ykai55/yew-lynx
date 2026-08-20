@@ -120,7 +120,7 @@ trap cleanup EXIT
 printf '==> Checking shell scripts\n'
 bash -n "${SCRIPTS[@]}"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "${SCRIPTS[@]}"
+  shellcheck -x -P SCRIPTDIR "${SCRIPTS[@]}"
 else
   printf 'shellcheck not found; skipping optional lint\n'
 fi
