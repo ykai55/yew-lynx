@@ -1,5 +1,13 @@
 [workspace]
-members = ["crates/native-renderer-adapter", "examples/counter"]
+members = [
+  "crates/element-bridge-core",
+  "crates/element-bridge-wire",
+  "adapters/yew",
+  "adapters/dioxus",
+  "crates/adapter-conformance",
+  "examples/counter",
+  "examples/dioxus-counter",
+]
 exclude = [".deps/yew"]
 resolver = "3"
 
@@ -14,5 +22,9 @@ publish = false
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+flatbuffers = "=25.2.10"
+dioxus-core = "=0.7.10"
+lynx-element-bridge-core = { path = "crates/element-bridge-core" }
+lynx-element-bridge-wire = { path = "crates/element-bridge-wire" }
 yew = { path = ".deps/yew/packages/yew", features = ["native_renderer"] }
-yew-lynx-adapter = { path = "crates/native-renderer-adapter" }
+lynx-element-bridge-yew = { path = "adapters/yew" }

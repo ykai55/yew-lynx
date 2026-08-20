@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BrokerError, createBroker } from "../src/broker-core.js";
+import { decodeBridgeEnvelope } from "../src/wire-generated.js";
 import {
   batch,
   createFakeNativeModule,
@@ -62,11 +63,25 @@ test("numeric native ElementRefs remain opaque to the broker", () => {
   ]);
 });
 
-test("mount applies protocol v1 through a strict Fiber host and flushes once", () => {
+test("indexed ByteArray views do not need JavaScript object typeof semantics", () => {
+  const encoded = batch([{ op: "create_text", node: 2, text: "计数器🙂" }]);
+  const byteView = function byteView() {};
+  Object.defineProperty(byteView, "length", { value: encoded.length });
+  encoded.forEach((byte, index) => {
+    byteView[index] = byte;
+  });
+
+  assert.equal(typeof byteView, "function");
+  const decoded = decodeBridgeEnvelope(byteView, 1);
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.operations[0].text, "计数器🙂");
+});
+
+test("mount applies protocol v2 through a strict Fiber host and flushes once", () => {
   const fake = createStrictFiberHost();
   const nativeModule = createFakeNativeModule({
     mount(rootId) {
-      assert.equal(rootId, "1");
+      assert.equal(rootId, 1);
       return batch([
         { op: "create_element", node: 2, tag: "view" },
         { op: "create_element", node: 3, tag: "text" },
@@ -80,7 +95,7 @@ test("mount applies protocol v1 through a strict Fiber host and flushes once", (
         { op: "insert_before", parent: 2, child: 3, reference: null },
         { op: "insert_before", parent: 3, child: 5, reference: null },
         { op: "insert_before", parent: 2, child: 4, reference: 3 },
-        { op: "add_event_listener", node: 2, listener: 10, name: "tap" },
+        { op: "add_event_listener", node: 2, listener: 10, callback: 11, name: "tap" },
       ]);
     },
   });
@@ -150,6 +165,73 @@ test("mount applies protocol v1 through a strict Fiber host and flushes once", (
   });
 });
 
+test("typed Element API commands return values and report capability gaps", () => {
+  const fake = createStrictFiberHost();
+  const calls = [];
+  fake.host.invokeElementApi = (name, args) => {
+    calls.push([name, args]);
+    return ["card", "active"];
+  };
+  const completed = [];
+  const nativeModule = createFakeNativeModule({
+    completeBatch(bytes) {
+      completed.push(decodeBridgeEnvelope(bytes, 1));
+      return bytes;
+    },
+  });
+  const broker = makeBroker(fake, nativeModule);
+  broker.applyBatch(batch([
+    { op: "create_element", node: 2, tag: "view" },
+    { op: "insert_before", parent: 1, child: 2, reference: null },
+  ]));
+
+  broker.applyBatch(batch([{ op: "get_classes", node: 2, result_slot: 7 }]));
+  assert.deepEqual(calls, [["__GetClasses", [fake.root.children[0]]]]);
+  assert.deepEqual(completed.at(-1).results, [{
+    slot: 7,
+    status: 0,
+    message: undefined,
+    resultKind: "strings",
+    value: ["card", "active"],
+  }]);
+
+  broker.applyBatch(batch([{
+    op: "set_static_style",
+    node: 2,
+    key: 1,
+    result_slot: 8,
+  }]));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(completed.at(-1).results, [{
+    slot: 8,
+    status: 4,
+    message: "capability set_static_style is unavailable on the pinned Lynx revision",
+    resultKind: "void",
+  }]);
+});
+
+test("native completion failures poison the broker", () => {
+  const fake = createStrictFiberHost();
+  fake.host.invokeElementApi = () => "page";
+  const nativeModule = createFakeNativeModule({
+    completeBatch() {
+      return failure(2, "completion session mismatch");
+    },
+  });
+  const broker = makeBroker(fake, nativeModule);
+
+  assert.throws(
+    () => broker.applyBatch(batch([{ op: "get_tag", node: 1, result_slot: 7 }])),
+    (error) => error instanceof BrokerError
+      && error.code === "E_NATIVE"
+      && error.status === 2,
+  );
+  assert.throws(
+    () => broker.applyBatch(batch([])),
+    (error) => error instanceof BrokerError && error.code === "E_HOST",
+  );
+});
+
 test("the complete batch is validated before any host mutation", () => {
   const fake = createStrictFiberHost();
   const nativeModule = createFakeNativeModule();
@@ -174,7 +256,7 @@ test("the complete batch is validated before any host mutation", () => {
   assert.ok(fake.findById("valid"));
 });
 
-test("protocol v1 rejects malformed ownership and unsupported surface", () => {
+test("protocol v2 rejects malformed buffers, ownership, and unsupported surface", () => {
   const cases = [
     "not json",
     JSON.stringify({ version: 1, operations: [{ op: "flush", root: 1 }] }),
@@ -192,15 +274,12 @@ test("protocol v1 rejects malformed ownership and unsupported surface", () => {
     batch([{ op: "create_element", node: 2, tag: "list-container" }]),
     batch([{ op: "create_element", node: 2, tag: "waterfall" }]),
     batch([{ op: "create_element", node: Number.MAX_SAFE_INTEGER + 1, tag: "view" }]),
-    batch([{ op: "create_element", node: 2, tag: "view", extra: true }]),
     batch([{ op: "create_element", node: 2, tag: `x-${"a".repeat(64)}` }]),
     batch([{ op: "create_element", node: 2, tag: "view" }, { op: "create_element", node: 2, tag: "text" }]),
     batch([{ op: "create_text", node: 2, text: "raw" }, { op: "insert_before", parent: 1, child: 2, reference: null }]),
-    batch([{ op: "create_element", node: 2, tag: "view" }, { op: "add_event_listener", node: 2, listener: 1, name: "click" }]),
     batch([{ op: "create_element", node: 2, tag: "view" }, { op: "add_event_listener", node: 2, listener: Number.MAX_SAFE_INTEGER + 1, name: "tap" }]),
     batch([{ op: "create_element", node: 2, tag: "view" }, { op: "set_attribute", node: 2, name: "Constructor", value: "bad" }]),
     batch([{ op: "create_element", node: 2, tag: "view" }, { op: "set_attribute", node: 2, name: "a".repeat(129), value: "bad" }]),
-    failure(6, "bad listener", [{ op: "flush", root: 1 }]),
   ];
 
   for (const invalid of cases) {
@@ -264,7 +343,7 @@ test("listener validation rejects duplicate IDs and duplicate node-event registr
   }
 });
 
-test("native failures retain their status and cannot carry ordinary mutations", () => {
+test("native failures retain their status without mutating the host", () => {
   const fake = createStrictFiberHost();
   const broker = makeBroker(fake, createFakeNativeModule());
 
@@ -277,13 +356,6 @@ test("native failures retain their status and cannot carry ordinary mutations", 
   );
   assert.deepEqual(fake.calls, []);
 
-  assert.throws(
-    () => broker.applyBatch(failure(6, "invalid listener", [
-      { op: "set_attribute", node: 1, name: "data-state", value: "bad" },
-    ])),
-    (error) => error instanceof BrokerError && error.code === "E_PROTOCOL",
-  );
-  assert.deepEqual(fake.calls, []);
 });
 
 test("attribute clears use the exact public Fiber API sentinel values", () => {
@@ -319,23 +391,26 @@ test("attribute clears use the exact public Fiber API sentinel values", () => {
   ]);
 });
 
-test("mount and dispatch pass decimal String IDs and mount flush can be suppressed", () => {
+test("mount and dispatch pass opaque 32-bit numeric IDs and mount flush can be suppressed", () => {
   const fake = createStrictFiberHost();
   const nativeModule = createFakeNativeModule({
     mount(rootId) {
-      assert.equal(rootId, "1");
-      assert.equal(typeof rootId, "string");
+      assert.equal(rootId, 1);
+      assert.equal(typeof rootId, "number");
       return batch([
         { op: "create_element", node: 2, tag: "view" },
         { op: "set_attribute", node: 2, name: "id", value: "button" },
         { op: "insert_before", parent: 1, child: 2, reference: null },
-        { op: "add_event_listener", node: 2, listener: 10, name: "tap" },
+        { op: "add_event_listener", node: 2, listener: 10, callback: 11, name: "tap" },
       ]);
     },
-    dispatch(listenerId, eventName) {
-      assert.equal(listenerId, "10");
-      assert.equal(typeof listenerId, "string");
-      assert.equal(eventName, "tap");
+    dispatchEvent(eventBytes) {
+      const event = decodeBridgeEnvelope(eventBytes, 1);
+      assert.equal(event.session, 1);
+      assert.equal(event.event.listener, 10);
+      assert.equal(event.event.callback, 11);
+      assert.equal(event.event.contentType, "application/json");
+      assert.deepEqual(JSON.parse(new TextDecoder().decode(event.event.payload)), { type: "tap" });
       return batch([]);
     },
   });
@@ -356,9 +431,10 @@ test("mount and dispatch pass decimal String IDs and mount flush can be suppress
 test("tap dispatch is synchronous and listener removal uses the exact callback", () => {
   const fake = createStrictFiberHost();
   const nativeModule = createFakeNativeModule({
-    dispatch(listenerId, name) {
-      assert.equal(listenerId, "10");
-      assert.equal(name, "tap");
+    dispatchEvent(eventBytes) {
+      const event = decodeBridgeEnvelope(eventBytes, 1);
+      assert.equal(event.event.listener, 10);
+      assert.equal(event.event.callback, 12);
       return batch([
         { op: "set_attribute", node: 2, name: "data-count", value: "1" },
       ]);
@@ -369,16 +445,17 @@ test("tap dispatch is synchronous and listener removal uses the exact callback",
     { op: "create_element", node: 2, tag: "view" },
     { op: "set_attribute", node: 2, name: "id", value: "button" },
     { op: "insert_before", parent: 1, child: 2, reference: null },
-    { op: "add_event_listener", node: 2, listener: 10, name: "tap" },
+    { op: "add_event_listener", node: 2, listener: 10, callback: 12, name: "tap" },
   ]));
 
   fake.emitTapById("button");
-  assert.deepEqual(nativeModule.calls.at(-1), ["dispatch", "10", "tap"]);
+  assert.equal(nativeModule.calls.at(-1)[0], "dispatchEvent");
+  assert.ok(nativeModule.calls.at(-1)[1] instanceof ArrayBuffer);
   assert.equal(fake.findById("button").attributes.get("data-count"), "1");
   assert.equal(fake.flushes.length, 2);
 
   broker.applyBatch(batch([
-    { op: "remove_event_listener", node: 2, listener: 10 },
+    { op: "remove_event_listener", node: 2, listener: 10, callback: 12 },
   ]));
   assert.equal(fake.listenerCount(), 0);
   assert.throws(() => fake.emitTapById("button"), /has no tap listener/);
@@ -395,7 +472,7 @@ test("invalid dispatch batches and reentrant callbacks cannot partially mutate",
     { op: "add_event_listener", node: 2, listener: 10, name: "tap" },
   ]));
 
-  nativeModule.setHandler("dispatch", () => batch([
+  nativeModule.setHandler("dispatchEvent", () => batch([
     { op: "set_attribute", node: 2, name: "data-state", value: "bad" },
     { op: "remove", parent: 1, child: 99 },
   ]));
@@ -407,7 +484,7 @@ test("invalid dispatch batches and reentrant callbacks cannot partially mutate",
   assert.equal(fake.calls.length, callsBeforeInvalid);
   assert.equal(fake.findById("button").attributes.has("data-state"), false);
 
-  nativeModule.setHandler("dispatch", () => {
+  nativeModule.setHandler("dispatchEvent", () => {
     fake.emitTapById("button");
     return batch([]);
   });
@@ -416,7 +493,7 @@ test("invalid dispatch batches and reentrant callbacks cannot partially mutate",
     (error) => error instanceof BrokerError && error.code === "E_REENTRANT",
   );
 
-  nativeModule.setHandler("dispatch", () => batch([
+  nativeModule.setHandler("dispatchEvent", () => batch([
     { op: "set_attribute", node: 2, name: "data-state", value: "recovered" },
   ]));
   fake.emitTapById("button");
@@ -497,14 +574,10 @@ test("destroy clears host state even when the native cleanup batch is invalid", 
   );
 });
 
-test("destroy applies valid cleanup from a failed native response before surfacing status", () => {
+test("destroy falls back to host cleanup after a failed native response", () => {
   const fake = createStrictFiberHost();
   const nativeModule = createFakeNativeModule({
-    destroySession: () => failure(9, "teardown panic", [
-      { op: "remove_event_listener", node: 2, listener: 10 },
-      { op: "remove", parent: 1, child: 2 },
-      { op: "destroy_node", node: 2 },
-    ]),
+    destroySession: () => failure(9, "teardown panic"),
   });
   const broker = makeBroker(fake, nativeModule);
   broker.applyBatch(batch([

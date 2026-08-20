@@ -1,193 +1,115 @@
-# yew-lynx
+# Lynx Element Bridge
 
 > [!WARNING]
-> **Experimental public preview.** This is an independent research prototype,
-> not an officially supported Yew or Lynx integration. It provides the source
-> adapters, a standalone Android example, and the pinned build and device
-> evidence described below. Compatibility must not be generalized beyond those
-> exact inputs.
+> **Experimental public preview.** This is an independent research project,
+> not an officially supported Lynx, Yew, or Dioxus integration. Compatibility
+> is limited to the pinned revisions and verification described here.
 
-This repository implements an ordinary stock OSS Lynx integration path:
+Lynx Element Bridge is a framework-neutral SDK for driving Lynx's public
+Element API from native UI frameworks. Framework adapters emit ordered command
+batches; the core owns sessions, capabilities, opaque IDs, validation, results,
+events, and teardown; Android and MTS provide the reference host.
 
 ```text
-patched Yew native_renderer
-  -> Rust validated protocol v1 and counter staticlib
-  -> Android public LynxModule and JNI UTF-8 byte[] bridge
-  -> synchronous MTS broker
-  -> ordinary context-type 1 LepusNG/Fiber template
-  -> stock Lynx renderer
+Yew native_renderer        Dioxus WriteMutations
+          \                    /
+           framework-neutral core
+                    |
+        FlatBuffers v2 (LEB2 ByteArray)
+                    |
+        Android LynxModule/JNI <-> MTS broker
+                    |
+        pinned public Lynx Element API
 ```
 
-The Lynx API audit is pinned to
-[`0df14207cebb060f1bed8de12b64a1119dee8f06`](https://github.com/lynx-family/lynx/tree/0df14207cebb060f1bed8de12b64a1119dee8f06).
-The path uses the revision's public typed
-[Fiber Element globals](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/js_libraries/type-element-api/types/element-api.d.ts)
-and public Android
-[`LynxModule`](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/platform/android/lynx_android/src/main/java/com/lynx/jsbridge/LynxModule.java)
-surface. Stock LepusNG registers `lynx.module()` in its
-[renderer bindings](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/core/runtime/lepusng/bindings/renderer_ng.cc),
-but `module()` is absent from that revision's declared public
-[main-thread `Lynx` TypeScript interface](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/js_libraries/types/types/main-thread/lynx.d.ts).
-It is therefore a revision-pinned integration surface, not a stable declared
-TypeScript API.
+## Pinned Inputs
 
-`third_party/lynx` pins that exact public revision as a source submodule. The
-integration applies no Lynx patch and makes no direct JNI call into hidden stock
-Lynx C++ symbols.
+- Lynx: `0df14207cebb060f1bed8de12b64a1119dee8f06`
+- Yew patch base: `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`
+- Dioxus Core: `0.7.10`
+- FlatBuffers compiler/runtime: `25.2.10`
+- Rust: `1.85.0`
+
+`third_party/lynx` pins the audited Lynx source. `patches/lynx` contains one
+minimal read-only ByteArray patch needed for ordinary LepusNG/MTS to consume
+the binary protocol without Base64 or string conversion. `patches/yew`
+contains the host-independent native renderer patch.
 
 ## Status
 
-| Area | Status |
+| Area | Current state |
 | --- | --- |
-| Yew base | Pinned to exactly [`0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`](https://github.com/yewstack/yew/tree/0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3) |
-| Yew patch | Experimental `native_renderer` feature with focused renderer and macro tests |
-| Rust bridge | Protocol-v1 mutation validation, counter lifecycle, C ABI, and `staticlib` verified by host tests |
-| MTS/Fiber bridge | Broker tests plus an encoded and decoded ordinary LepusNG bundle |
-| Android bridge | Public Kotlin host, `LynxModule`, real JNI/NDK link, and arm64 APK built against locally published stock Lynx AARs |
-| Stock Lynx runtime/device | Pinned APK accepted on one Dora Android 15 / API 35 / `arm64-v8a` physical device; not a broader device claim |
-| Support level | Experimental preview with no official support or stability commitment |
+| Protocol | FlatBuffers v2 with `LEB2` identifier and committed Rust, TypeScript, and Java generated code |
+| Element API | 107 typed command tables generated from the pinned declaration package |
+| Capabilities | 100 Android capabilities available; 7 gaps reported as `UNSUPPORTED` |
+| Core | Session negotiation, owner-thread enforcement, opaque 32-bit IDs, ordered batches, Result/Event channels, host fake, and deterministic destroy |
+| Yew | Real patched `NativeRenderer` adapter and Android counter staticlib |
+| Dioxus | Real `dioxus-core` `VirtualDom` counter through the `WriteMutations` adapter |
+| MTS | ByteArray verifier/decoder, typed Element dispatcher, Fiber host, Result return path, and lifecycle broker |
+| Android | Numeric ID and `byte[]` Java/JNI boundary with Java, JNI, and real staticlib host checks |
+| Lynx patch | Clean-apply gate plus focused upstream-style LepusNG ByteArray test |
 
-## Included
+The earlier protocol-v1 JSON recorder has been removed. The v2 Yew counter has
+passed the repository's physical-device acceptance flow on an Android 15/API 35
+arm64 device, including mount, tap, recreation, force-stop/reopen, and repeated
+teardown. Dioxus device acceptance has not yet been run.
 
-- `patches/yew/`: a format-patch series adding Yew's opt-in
-  `native_renderer` API.
-- `crates/native-renderer-adapter/`: strict protocol-v1 envelopes and a
-  validated mutation recorder.
-- `examples/counter/`: a Rust `staticlib` counter and public C ABI for mount,
-  tap dispatch, destroy, and response-buffer ownership.
-- `adapters/mts/`: the synchronous MTS broker, public Fiber host, ordinary
-  LepusNG shell, bundle build, and host-independent tests.
-- `adapters/android/`: a public `LynxModule`, JNI bridge, Android integration
-  sources, and Java/JNI mock checks.
-- `third_party/lynx/`: the exact public Lynx source submodule used to build the
-  local Android AAR repository, without source patches.
-- `examples/android/`: the standalone Kotlin/Gradle Kotlin DSL host that links
-  the real Rust archive and loads the generated bundle in a `LynxView`.
-- `android/` and `scripts/build-android.sh`: locked Habitat/PrimJS inputs and the
-  clean, cached, and offline-capable Android orchestration.
-- `scripts/bootstrap-yew.sh`: reproducible bootstrap for the exact Yew base and
-  patch series.
-- `scripts/verify.sh`: the local and CI verification entry point.
+## Repository Layout
 
-## Evidence boundary
+- `crates/element-bridge-core/`: framework-neutral domain model, validation,
+  capability negotiation, result/event types, and in-memory host fake.
+- `crates/element-bridge-wire/`: verified FlatBuffers v2 encoding and decoding.
+- `adapters/yew/`: patched Yew `NativeRendererBackend` adapter.
+- `adapters/dioxus/`: Dioxus 0.7.10 `WriteMutations` adapter.
+- `crates/adapter-conformance/`: identical Yew/Dioxus mount, event, query,
+  capability-gap, and destroy scenarios.
+- `examples/counter/`: Yew counter staticlib and Android C ABI.
+- `examples/dioxus-counter/`: real Dioxus `VirtualDom` counter fixture.
+- `adapters/mts/`: protocol reader/writer, typed dispatcher, Fiber host, shell,
+  and mock-host tests.
+- `adapters/android/`: public `LynxModule`, JNI bridge, and integration checks.
+- `protocol/`: schema, revision capability manifest, lock, and generated code.
+- `patches/lynx/`: pinned ByteArray patch and focused runtime test.
+- `patches/yew/`: pinned native renderer patch.
+- `examples/android/`: standalone Android reference host.
 
-The normal verification workflow remains the fast source and host-test seam:
+See [`docs/adapter-authoring.md`](docs/adapter-authoring.md) to add another UI
+framework.
 
-- Rust tests cover strict protocol decoding, positive JavaScript-safe IDs,
-  mutation ownership, initial counter mount, one tap update, thread ownership,
-  explicit destroy, stale handles, and panic-to-error boundaries.
-- Patched-Yew tests cover the narrow renderer surface, synchronous lifecycle,
-  direct-parent teardown, selected pre-mutation rejection, unwind cleanup, and
-  typed `ontap` macro behavior. They also reject mounting another native
-  renderer while Yew's scheduler is already executing and verify emergency
-  state abandonment without host mutation.
-- `npm run build` creates an ordinary LepusNG template bundle and decodes it to
-  verify `context-type` 1 and `is-lepusng-binary: true`; broker tests use mock
-  Element globals and native modules.
-- Android checks compile and run the Java lifecycle/schema tests, compile the
-  real JNI source against a mock Rust implementation, run a JNI round trip, and
-  syntax-check the JNI source against the repository C header. A separate C
-  smoke program links and calls the real host Rust `staticlib`, and verification
-  also builds the Android arm64 archive.
+## Protocol Contract
 
-The separate Android integration workflow builds the six required AARs from the
-pinned stock Lynx submodule, publishes them locally, links the real Rust/JNI
-shared library, assembles the app, repeats assembly offline, checks APK ABI and
-native-library contents, and uploads the APK plus build evidence. An
-authenticated local Dora run additionally proved initial `Count: 0`, a real
-tap to `Count: 1`, Activity recreation, force-stop/reopen reset, and repeated
-mount/tap/destroy cycles on one Android 15 ARM64 physical device. Screenshots
-and device connection details remain ignored local evidence. See
-[COMPATIBILITY.md](COMPATIBILITY.md) for the exact claim boundary.
+- All sessions, nodes, listeners, and callbacks use nonzero opaque `u32` IDs.
+- Calls are synchronous and remain on the session's mounting thread.
+- A `CommandBatch` is ordered and ends at one final commit boundary.
+- Scalar and query returns use `ResponseBatch` on the Result channel.
+- Host callbacks use `EventMessage` with an opaque byte payload and content
+  type; the bridge does not interpret framework semantics.
+- Missing required capabilities fail session creation. Missing optional
+  capabilities produce an item-level `UNSUPPORTED` result.
+- Batches are validated before host mutation. Host failures do not imply
+  transactional rollback of mutations already applied.
+- Destroy releases listeners, descendants, host references, and adapter state;
+  stale IDs are rejected.
 
-## Protocol and lifecycle bounds
+The capability manifest is generated from Lynx's pinned public
+`element-api.d.ts`. The seven currently unsupported Android declarations are
+`__SetStaticStyle`, `__CreateGestureDetector`, `__GeneratePipelineOptions`,
+`__OnPipelineStart`, `__BindPipelineIDWithTimingFlag`, `__MarkTiming`, and
+`__AddTimingListener`.
 
-- Protocol v1 accepts only positive IDs up to `Number.MAX_SAFE_INTEGER`
-  (`9007199254740991`). IDs cross MTS and Java as decimal `String` values and
-  cross JNI as UTF-8 bytes.
-- Every response has an exact success or failure envelope with no unknown
-  fields. Every successful batch, including a no-op, ends in exactly one final
-  `flush`. Initial mount validates but suppresses that flush because the outer
-  Lynx render pipeline flushes after `__RenderPage` returns.
-- The only event is `tap`; protocol v1 has no event payload, propagation, or
-  asynchronous dispatch.
-- The Lynx adapter accepts raw text only beneath a `<text>` element. Other Yew
-  native backends may define a different text-node ownership rule.
-- One `YewLynxModule` owns at most one live Rust session. All calls for that
-  session run synchronously on its mounting thread.
-- Cached `initPage` roots, nonempty cache data, and SSR hydration roots are
-  rejected. Reload destroys and remounts; component removal destroys and
-  permits a later fresh mount.
-- Teardown is explicit. Hosts must route removal, reload, lifetime destruction,
-  and module destruction to the broker/module destroy path.
-- `NativeRenderer::render()` is rejected from inside a running Yew scheduler
-  callback. If a host thread exits without explicit destroy, Rust abandons its
-  local state to break reference cycles, but it cannot clean the host tree.
-- Panic containment depends on unwinding. `panic = "abort"` cannot run cleanup
-  guards, and a second panic from a backend during unwinding can abort. Backend
-  methods and callbacks must not panic.
-
-## Android host responsibilities
-
-A consuming Android host must:
-
-1. Use a stock OSS Lynx build compatible with the audited APIs.
-2. Enable MTS modules with `setEnableMTSModule(true)`.
-3. Register `YewLynxModule` per runtime, not as a shared module.
-4. Build the Rust counter archive for each packaged Android ABI and link it into
-   `libyew_lynx_bridge.so`.
-5. Package and load the JNI shared library.
-6. Load `adapters/mts/dist/yew-lynx-counter.lynx.bundle` through the normal
-   `LynxView` template-loading path.
-7. Preserve same-owner-thread synchronous calls and explicit teardown.
-
-`examples/android` implements these responsibilities for
-`aarch64-linux-android` / `arm64-v8a` only and limits `abiFilters`
-accordingly. Other hosts and ABIs remain untested.
-
-## Prerequisites
-
-- Git with network access to <https://github.com/yewstack/yew>
-- Rust 1.85.0 with `rustfmt` and `clippy`, as declared in
-  `rust-toolchain.toml`
-- Node.js 22.18.0 (pinned by `.nvmrc`) and npm
-- Bash, a JDK, and a C++17 compiler for Android mock checks
-- For the standalone APK: JDK 11, Android platform/build-tools 33/33.0.1,
-  NDKs 21.1.6352462 and 25.2.9519653, and CMake 3.22.1
-- Optional ShellCheck, which `scripts/verify.sh` runs when available
-
-## Bootstrap and build
-
-From the repository root:
+## Bootstrap
 
 ```bash
 ./scripts/bootstrap-yew.sh
+./scripts/prepare-flatc.sh
 npm --prefix adapters/mts ci
-npm --prefix adapters/mts run build
+node scripts/generate-protocol.mjs
 ```
 
-For the complete Android integration, initialize the toolchains listed above
-and run the single orchestration entry point:
-
-```bash
-./scripts/build-android.sh
-```
-
-It initializes the pinned Lynx submodule, bootstraps patched Yew, verifies and
-materializes locked Habitat and PrimJS bytes, builds and publishes local stock
-Lynx AARs, links the real arm64 bridge, assembles the APK, and repeats app
-assembly with Gradle, npm, and Cargo offline. `--clean` discards generated
-Android outputs; `--offline` requires a matching cache prepared by a successful
-online build. See [`examples/android/README.md`](examples/android/README.md).
-
-The template build uses exact development dependencies `esbuild` 0.25.9 and
-`@lynx-js/tasm` 0.0.51. It emits these ignored files:
-
-```text
-adapters/mts/dist/shell.js
-adapters/mts/dist/template-input.json
-adapters/mts/dist/yew-lynx-counter.lynx.bundle
-```
+`scripts/generate-protocol.mjs` is the single source-generation entry point.
+It reads the pinned Lynx declarations and emits the schema, capability manifest,
+typed command tables, and language bindings. Generated files are committed and
+CI requires regeneration to produce no diff.
 
 ## Verify
 
@@ -195,23 +117,31 @@ adapters/mts/dist/yew-lynx-counter.lynx.bundle
 ./scripts/verify.sh
 ```
 
-Verification performs:
+The verification entry point checks:
 
-1. Shell syntax checks and optional ShellCheck.
-2. Lynx gitlink/submodule URL and Android lock-metadata validation.
-3. Idempotent Yew bootstrap and patch identity validation.
-4. `cargo fmt --check`, workspace `cargo check`, `cargo test`, and
-   `cargo clippy -D warnings` with locked dependencies.
-5. `npm ci`, `npm run build`, and `npm test` for the ordinary LepusNG/MTS
-   template and broker, plus a forced WASM codec build.
-6. Android Java lifecycle/schema and JNI mock integration checks, a real host
-   C/staticlib ABI smoke test, and an Android arm64 staticlib build.
-7. Patched-Yew `native_renderer` checks and focused renderer tests.
-8. Yew macro tests with and without `native_renderer`.
+1. Shell syntax, pins, lock metadata, and clean application of both patch series.
+2. Protocol regeneration with locked `flatc` and committed-output consistency.
+3. Workspace formatting, checks, tests, and Clippy with locked dependencies.
+4. The shared Yew/Dioxus conformance scenario and real framework counters.
+5. MTS bundle builds, ByteArray/FlatBuffers decoding, typed dispatch, Result
+   return, lifecycle, and mock Fiber behavior.
+6. Android Java lifecycle/schema checks, JNI binary round trips, a real host
+   staticlib smoke test, and Android arm64 Rust compilation.
+7. Focused patched-Yew renderer and macro tests.
+
+For the complete Android build, use `./scripts/build-android.sh`. It temporarily
+applies the pinned Lynx patch to a verified clean submodule, builds the required
+AARs, and removes the patch on exit. JDK 11, Android SDK 33, build-tools 33.0.1,
+NDKs 21.1.6352462 and 25.2.9519653, and CMake 3.22.1 are required.
+
+## Compatibility
+
+See [`COMPATIBILITY.md`](COMPATIBILITY.md) for the exact support and evidence
+boundary. Revision changes require a new capability manifest, patch rebase,
+generated-code review, and complete verification.
 
 ## Licensing
 
-This repository is licensed under the [Apache License 2.0](LICENSE). Yew is
-available under MIT or Apache-2.0. Lynx, PrimJS, Habitat, and the downloaded
-`@lynx-js/tasm` development package are Apache-2.0; esbuild is MIT. See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This repository is Apache-2.0. Yew is MIT OR Apache-2.0. Lynx, PrimJS,
+Habitat, FlatBuffers, Dioxus, and `@lynx-js/tasm` retain their upstream terms.
+See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

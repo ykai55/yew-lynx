@@ -1,6 +1,14 @@
-export const PROTOCOL_VERSION = 1;
+import {
+  decodeBridgeEnvelope,
+  encodeHostEvent,
+  encodeHostResponse,
+  PROTOCOL_VERSION,
+} from "./wire-generated.js";
+
+export { PROTOCOL_VERSION };
 
 const EVENT_OPTIONS = Object.freeze({});
+const NO_RESULT_SLOT = 0xffff_ffff;
 const UNSUPPORTED_ELEMENT_TAGS = new Set([
   "block",
   "component",
@@ -65,8 +73,8 @@ function assertExactKeys(value, expected, path) {
 }
 
 function assertId(value, path) {
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    protocolError(`${path} must be a positive safe integer`);
+  if (!Number.isInteger(value) || value <= 0 || value > 0xffffffff) {
+    protocolError(`${path} must be a positive 32-bit integer`);
   }
 }
 
@@ -256,15 +264,16 @@ function validateMutation(mutation, path, nodes, listeners, rootId) {
     }
 
     case "add_event_listener": {
-      assertExactKeys(mutation, ["op", "node", "listener", "name"], path);
+      assertExactKeys(mutation, ["op", "node", "listener", "callback", "name"], path);
       const node = requireNode(nodes, mutation.node, `${path}.node`);
       assertId(mutation.listener, `${path}.listener`);
       assertString(mutation.name, `${path}.name`);
       if (node.kind !== "element") {
         protocolError(`${path}.node must refer to an element`);
       }
-      if (mutation.name !== "tap") {
-        protocolError(`${path}.name must be tap in protocol v1`);
+      assertId(mutation.callback, `${path}.callback`);
+      if (mutation.name.length === 0) {
+        protocolError(`${path}.name must not be empty`);
       }
       if (listeners.has(mutation.listener)) {
         protocolError(`${path}.listener ${mutation.listener} is already registered`);
@@ -277,12 +286,13 @@ function validateMutation(mutation, path, nodes, listeners, rootId) {
       listeners.set(mutation.listener, {
         nodeId: mutation.node,
         name: mutation.name,
+        callbackId: mutation.callback,
       });
       return;
     }
 
     case "remove_event_listener": {
-      assertExactKeys(mutation, ["op", "node", "listener"], path);
+      assertExactKeys(mutation, ["op", "node", "listener", "callback", "name"], path);
       requireNode(nodes, mutation.node, `${path}.node`);
       assertId(mutation.listener, `${path}.listener`);
       const listener = listeners.get(mutation.listener);
@@ -292,7 +302,84 @@ function validateMutation(mutation, path, nodes, listeners, rootId) {
       if (listener.nodeId !== mutation.node) {
         protocolError(`${path} does not match the registered listener`);
       }
+      if (listener.callbackId !== mutation.callback || listener.name !== mutation.name) {
+        protocolError(`${path} does not match the registered callback`);
+      }
       listeners.delete(mutation.listener);
+      return;
+    }
+
+    case "get_tag": {
+      assertExactKeys(mutation, ["op", "node", "result_slot"], path);
+      requireNode(nodes, mutation.node, `${path}.node`);
+      if (!Number.isSafeInteger(mutation.result_slot) || mutation.result_slot < 0
+          || mutation.result_slot > NO_RESULT_SLOT) {
+        protocolError(`${path}.result_slot must be a 32-bit unsigned integer`);
+      }
+      return;
+    }
+
+    case "element_api": {
+      assertExactKeys(
+        mutation,
+        [
+          "op",
+          "name",
+          "capability",
+          "available",
+          "resultKind",
+          "args",
+          "result_slot",
+          "result_node",
+          "result_nodes",
+          "listener",
+        ],
+        path,
+      );
+      assertString(mutation.name, `${path}.name`);
+      assertString(mutation.capability, `${path}.capability`);
+      if (typeof mutation.available !== "boolean") {
+        protocolError(`${path}.available must be a boolean`);
+      }
+      if (!Array.isArray(mutation.args) || !Array.isArray(mutation.result_nodes)) {
+        protocolError(`${path} has invalid argument or result vectors`);
+      }
+      for (let index = 0; index < mutation.args.length; index += 1) {
+        const argument = mutation.args[index];
+        assertPlainObject(argument, `${path}.args[${index}]`);
+        assertExactKeys(argument, ["name", "kind", "value"], `${path}.args[${index}]`);
+        if (argument.kind === "node") {
+          requireNode(nodes, argument.value, `${path}.args[${index}].value`);
+        } else if (argument.kind === "node_or_nodes") {
+          const values = Array.isArray(argument.value) ? argument.value : [argument.value];
+          for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+            if (values[valueIndex] !== null) {
+              requireNode(nodes, values[valueIndex], `${path}.args[${index}].value[${valueIndex}]`);
+            }
+          }
+        } else if (argument.kind === "callback" && argument.value !== null) {
+          assertId(argument.value, `${path}.args[${index}].value`);
+        } else if (argument.kind !== "value") {
+          protocolError(`${path}.args[${index}].kind is invalid`);
+        }
+      }
+      const resultIds = mutation.available && mutation.result_node === 0
+        ? mutation.result_nodes
+        : mutation.available
+          ? [mutation.result_node, ...mutation.result_nodes]
+          : [];
+      for (const node of resultIds) {
+        assertId(node, `${path}.result_node`);
+        if (nodes.has(node)) {
+          protocolError(`${path} result node ${node} is already registered`);
+        }
+        nodes.set(node, {
+          kind: "element",
+          tag: "unknown",
+          parent: null,
+          children: [],
+        });
+      }
       return;
     }
 
@@ -306,36 +393,22 @@ function validateMutation(mutation, path, nodes, listeners, rootId) {
     }
 
     default:
-      protocolError(`${path}.op is not supported by protocol v1`);
+      protocolError(`${path}.op is not supported by protocol v2`);
   }
 }
 
-function decodeResponse(responseJson, currentNodes, currentListeners, rootId, destroy = false) {
-  if (typeof responseJson !== "string") {
-    protocolError("response must be a JSON string");
-  }
-
+function decodeResponse(responseBytes, currentNodes, currentListeners, rootId, destroy = false) {
   let response;
   try {
-    response = JSON.parse(responseJson);
+    response = decodeBridgeEnvelope(responseBytes, rootId);
   } catch (error) {
-    throw new BrokerError("E_PROTOCOL", `response is not valid JSON: ${error.message}`);
+    throw new BrokerError("E_PROTOCOL", `response is not valid FlatBuffers v2: ${error.message}`);
   }
-
-  assertPlainObject(response, "response");
-  if (response.ok === true) {
-    assertExactKeys(response, ["version", "ok", "operations"], "response");
-  } else if (response.ok === false) {
-    assertExactKeys(response, ["version", "ok", "status", "error", "operations"], "response");
+  if (response.ok === false) {
     if (!Number.isSafeInteger(response.status) || response.status <= 0) {
       protocolError("response.status must be a positive safe integer");
     }
     assertString(response.error, "response.error");
-  } else {
-    protocolError("response.ok must be a boolean");
-  }
-  if (response.version !== PROTOCOL_VERSION) {
-    protocolError(`response.version must be ${PROTOCOL_VERSION}`);
   }
   if (!Array.isArray(response.operations)) {
     protocolError("response.operations must be an array");
@@ -408,6 +481,7 @@ export function createBroker(options) {
   let destroyed = false;
   let poisoned = false;
   let mounted = false;
+  let nativeSession = 0;
 
   function ensureUsable() {
     if (destroyed) {
@@ -439,18 +513,27 @@ export function createBroker(options) {
     return ref;
   }
 
-  function dispatchListener(listenerId, eventName) {
+  function dispatchListener(listenerId, eventName, eventData) {
     return runExclusive("event dispatch", () => {
       const listener = listeners.get(listenerId);
       if (listener === undefined || listener.name !== eventName) {
         throw new BrokerError("E_LISTENER", `listener ${listenerId} is no longer registered`);
       }
-      const responseJson = nativeModule.invoke("dispatch", String(listenerId), eventName);
-      const decoded = decodeResponse(responseJson, nodes, listeners, rootId);
+      const responseBytes = nativeModule.invoke(
+        "dispatchEvent",
+        encodeHostEvent(
+          nativeSession,
+          listenerId,
+          listener.callbackId,
+          eventData,
+        ),
+      );
+      const decoded = decodeResponse(responseBytes, nodes, listeners, rootId);
       if (!decoded.response.ok) {
         throw nativeError(decoded.response);
       }
-      applyValidated(decoded.response.operations);
+      const results = applyValidated(decoded.response.operations);
+      completeResults(decoded.response, results);
     });
   }
 
@@ -533,11 +616,12 @@ export function createBroker(options) {
       }
 
       case "add_event_listener": {
-        const callback = () => dispatchListener(mutation.listener, mutation.name);
+        const callback = (event) => dispatchListener(mutation.listener, mutation.name, event);
         host.addEventListener(getRef(mutation.node), mutation.name, callback, EVENT_OPTIONS);
         listeners.set(mutation.listener, {
           nodeId: mutation.node,
           name: mutation.name,
+          callbackId: mutation.callback,
           callback,
           options: EVENT_OPTIONS,
         });
@@ -556,6 +640,85 @@ export function createBroker(options) {
         return;
       }
 
+      case "get_tag":
+        return {
+          slot: mutation.result_slot,
+          status: 0,
+          resultKind: "string",
+          value: host.invokeElementApi("__GetTag", [getRef(mutation.node)]),
+        };
+
+      case "element_api": {
+        if (!mutation.available) {
+          return {
+            slot: mutation.result_slot,
+            status: 4,
+            message: `capability ${mutation.capability} is unavailable on the pinned Lynx revision`,
+            resultKind: mutation.resultKind,
+          };
+        }
+        if (typeof host.invokeElementApi !== "function") {
+          throw new BrokerError("E_HOST", "host.invokeElementApi must be a function");
+        }
+        const args = mutation.args.map((argument) => {
+          if (argument.kind === "node") return getRef(argument.value);
+          if (argument.kind === "node_or_nodes") {
+            if (argument.value === null) return undefined;
+            if (Array.isArray(argument.value)) return argument.value.map(getRef);
+            return getRef(argument.value);
+          }
+          if (argument.kind === "callback") {
+            const callbackId = argument.value;
+            return callbackId === null
+              ? undefined
+              : (event) => dispatchListener(
+                mutation.listener || callbackId,
+                mutation.name,
+                event,
+              );
+          }
+          return argument.value;
+        });
+        const result = host.invokeElementApi(mutation.name, args);
+        if (mutation.result_node !== 0) {
+          if (!isElementRef(result)) {
+            throw new BrokerError("E_HOST", `${mutation.name} did not return an ElementRef`);
+          }
+          refs.set(mutation.result_node, result);
+          nodes.set(mutation.result_node, {
+            kind: "element",
+            tag: "unknown",
+            parent: null,
+            children: [],
+          });
+        }
+        if (mutation.result_nodes.length !== 0) {
+          if (!Array.isArray(result) || result.length !== mutation.result_nodes.length) {
+            throw new BrokerError("E_HOST", `${mutation.name} returned an unexpected ElementRef list`);
+          }
+          mutation.result_nodes.forEach((node, index) => {
+            refs.set(node, result[index]);
+            nodes.set(node, {
+              kind: "element",
+              tag: "unknown",
+              parent: null,
+              children: [],
+            });
+          });
+        }
+        const value = mutation.resultKind === "element_id"
+          ? mutation.result_node
+          : mutation.resultKind === "element_ids"
+            ? mutation.result_nodes
+            : result;
+        return {
+          slot: mutation.result_slot,
+          status: 0,
+          resultKind: mutation.resultKind,
+          value,
+        };
+      }
+
       case "flush":
         host.flush(getRef(mutation.root));
         return;
@@ -563,12 +726,46 @@ export function createBroker(options) {
   }
 
   function applyValidated(operations, skipFlush = false) {
+    const results = [];
     try {
       for (const operation of operations) {
         if (skipFlush && operation.op === "flush") {
           continue;
         }
-        applyMutation(operation);
+        const result = applyMutation(operation);
+        if (result !== undefined && result.slot !== NO_RESULT_SLOT) {
+          results.push(result);
+        }
+      }
+    } catch (error) {
+      poisoned = true;
+      throw error;
+    }
+    return results;
+  }
+
+  function completeResults(response, results) {
+    if (results.length === 0) {
+      return;
+    }
+    try {
+      const acknowledgement = decodeBridgeEnvelope(
+        nativeModule.invoke(
+          "completeBatch",
+          encodeHostResponse(response.session, response.sequence, results),
+        ),
+        rootId,
+      );
+      if (!acknowledgement.ok) {
+        throw nativeError(acknowledgement);
+      }
+      if (
+        acknowledgement.results === undefined
+        || acknowledgement.operations.length !== 0
+        || acknowledgement.session !== response.session
+        || acknowledgement.sequence !== response.sequence
+      ) {
+        protocolError("completeBatch returned a mismatched Result acknowledgement");
       }
     } catch (error) {
       poisoned = true;
@@ -576,13 +773,14 @@ export function createBroker(options) {
     }
   }
 
-  function applyBatch(responseJson) {
+  function applyBatch(responseBytes) {
     return runExclusive("batch application", () => {
-      const decoded = decodeResponse(responseJson, nodes, listeners, rootId);
+      const decoded = decodeResponse(responseBytes, nodes, listeners, rootId);
       if (!decoded.response.ok) {
         throw nativeError(decoded.response);
       }
-      applyValidated(decoded.response.operations);
+      const results = applyValidated(decoded.response.operations);
+      completeResults(decoded.response, results);
     });
   }
 
@@ -591,12 +789,14 @@ export function createBroker(options) {
       if (mounted) {
         throw new BrokerError("E_MOUNTED", "broker mount may only run once");
       }
-      const responseJson = nativeModule.invoke("mount", String(rootId));
-      const decoded = decodeResponse(responseJson, nodes, listeners, rootId);
+      const responseBytes = nativeModule.invoke("mount", rootId);
+      const decoded = decodeResponse(responseBytes, nodes, listeners, rootId);
       if (!decoded.response.ok) {
         throw nativeError(decoded.response);
       }
-      applyValidated(decoded.response.operations, suppressMountFlush);
+      const results = applyValidated(decoded.response.operations, suppressMountFlush);
+      completeResults(decoded.response, results);
+      nativeSession = decoded.response.session;
       mounted = true;
     });
   }
@@ -654,8 +854,8 @@ export function createBroker(options) {
     let failure = null;
     try {
       try {
-        const responseJson = nativeModule.invoke("destroySession");
-        const decoded = decodeResponse(responseJson, nodes, listeners, rootId, true);
+        const responseBytes = nativeModule.invoke("destroySession");
+        const decoded = decodeResponse(responseBytes, nodes, listeners, rootId, true);
         if (decoded.response.ok && (decoded.nodes.size !== 1 || decoded.listeners.size !== 0)) {
           protocolError("successful destroy response must release every non-root node and listener");
         }
@@ -663,7 +863,8 @@ export function createBroker(options) {
           failure = recordFailure(failure, nativeError(decoded.response));
         }
         if (decoded.response.operations.length !== 0) {
-          applyValidated(decoded.response.operations, true);
+          const results = applyValidated(decoded.response.operations, true);
+          completeResults(decoded.response, results);
         }
       } catch (error) {
         failure = recordFailure(failure, error);

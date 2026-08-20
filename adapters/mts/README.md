@@ -1,19 +1,17 @@
 # Stock Lynx MTS/Fiber broker
 
 This directory contains the ordinary LepusNG adapter between the synchronous
-`YewLynx` native module and stock Lynx's public Fiber Element APIs.
+`YewLynx` native module and Lynx's public Fiber Element API.
 
-- `src/broker-core.js` validates protocol v1 and owns every `ElementRef`, node
+- `src/wire.mts` verifies and encodes FlatBuffers v2 `LEB2` envelopes.
+- `src/broker-core.js` validates batches and owns every `ElementRef`, node
   relation, and event callback.
-- `src/lynx-fiber-host.mts` maps validated operations to public typed Fiber
-  globals.
+- `src/lynx-fiber-host.mts` maps typed commands to public Fiber globals.
 - `src/shell-core.js` owns render, reload, removal, SSR rejection, and lifetime
   teardown.
-- `template/shell.mts` installs the shell in an ordinary Lynx template.
-- `template/template.config.json` selects Fiber and `contextType: 1` LepusNG.
-- `PROTOCOL.md` defines the exact native wire contract.
+- `PROTOCOL.md` defines the exact native wire and lifecycle contract.
 
-## Build and test
+## Build And Test
 
 Node.js 22.18.0 is pinned at the repository root. From this directory:
 
@@ -24,57 +22,39 @@ npm run build:wasm
 npm test
 ```
 
-The exact development dependencies are `esbuild` 0.25.9 and
-`@lynx-js/tasm` 0.0.51. The build emits ignored artifacts:
+The build emits ignored shell, encoder-input, and template bundle artifacts
+under `dist/`. Both codec paths decode the result and require `context-type=1`
+and a LepusNG binary.
 
-```text
-dist/shell.js
-dist/template-input.json
-dist/yew-lynx-counter.lynx.bundle
-```
-
-The ordinary build uses the packaged N-API codec where supported and otherwise
-falls back to WebAssembly. `build:wasm` forces that fallback in CI. After
-encoding, each build decodes the bundle and fails unless
-`context-type === 1` and `is-lepusng-binary === true`. This verifies an
-ordinary LepusNG template artifact, not a native-runtime descriptor.
-
-## Stock API boundary
+## Stock API Boundary
 
 The broker uses the public typed globals declared by the pinned revision's
-[`@lynx-js/type-element-api` source](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/js_libraries/type-element-api/types/element-api.d.ts).
-Stock LepusNG registers those Fiber functions and `lynx.module()` in
-[`renderer_ng.cc`](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/core/runtime/lepusng/bindings/renderer_ng.cc),
-and module lookup returns the synchronous proxy implemented by
-[`lynx_lepus_module_manager.cc`](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/core/runtime/lepus/bindings/modules/lynx_lepus_module_manager.cc).
+`@lynx-js/type-element-api` source. Stock LepusNG registers those Fiber globals
+and the synchronous `lynx.module()` proxy. `lynx.module()` is present in the
+pinned implementation but absent from that revision's stable public `Lynx`
+TypeScript interface, so it is a revision-pinned integration surface.
 
-`lynx.module()` is not declared by the same revision's stable public
-[`Lynx` TypeScript interface](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/js_libraries/types/types/main-thread/lynx.d.ts).
-The shell therefore treats it as revision-pinned stock behavior, not a stable
-declared TypeScript API.
+Android `LynxMethodWrapper` supports `byte[]`, but ordinary LepusNG did not
+expose readable ByteArray contents. `patches/lynx` adds a minimal read-only
+`length` and numeric-index view so the FlatBuffers reader can consume native
+buffers without Base64 or string conversion.
 
-## Protocol and lifecycle
+## Protocol And Lifecycle
 
-- IDs are positive safe integers no greater than `Number.MAX_SAFE_INTEGER`.
-  Root and listener IDs are passed to the Java module as decimal strings.
-- The broker rejects unknown fields and invalid ownership before Fiber
-  mutation. Every success, including a no-op, has one final flush.
-- Initial mount validates but skips its protocol flush because Lynx's enclosing
-  render pipeline flushes after `__RenderPage` returns. Event, update remount,
-  and destroy paths flush normally.
-- Protocol v1 supports `tap` only. Calls and event updates are synchronous and
-  must remain on the session's mounting thread; nested operations and
-  reentrancy are rejected.
-- Raw text may only be inserted directly beneath a `<text>` element.
-- One shell has one active broker and one module instance has at most one live
+- IDs are opaque unsigned 32-bit numbers, not strings.
+- Commands, results, and events use distinct `LEB2` channels.
+- Host query values return through `completeBatch`; callbacks send complete
+  `EventMessage` buffers through `dispatchEvent`.
+- The generated dispatcher covers all 107 declarations in the pinned Element
+  API package. The capability manifest reports unavailable optional operations
+  as `UNSUPPORTED`.
+- Complete batches are validated before Fiber mutation. Calls are synchronous
+  on the session's mounting thread and reentrancy is rejected.
+- One shell has one active broker, and one module instance owns at most one live
   Rust session.
-- Cached `initPage` roots, nonempty cache data, and SSR hydration are rejected
-  because the broker cannot adopt `ElementRef` values it did not create.
-- Reload destroys then remounts. Component removal destroys the broker and a
-  later render may mount a fresh session. `__DestroyLifetime` performs explicit
-  teardown.
-- A host mutation failure poisons the broker because Fiber mutations are not
-  transactional; destroy remains a best-effort cleanup path.
+- Cached roots and SSR hydration are rejected. Reload and lifetime destruction
+  explicitly tear down listeners, tree ownership, and native session state.
 
-The tests use mock Fiber globals and a mock native module. They do not load the
-bundle into a stock Lynx runtime or establish renderer/device behavior.
+Tests use mock Fiber globals and a mock native module. They verify the binary
+wire, typed dispatch, result completion, event envelopes, and lifecycle, but do
+not establish device behavior.

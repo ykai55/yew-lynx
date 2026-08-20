@@ -2,39 +2,39 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <string_view>
 
 namespace {
 
-constexpr char kSuccess[] =
-    "{\"version\":1,\"ok\":true,\"operations\":[{\"op\":\"flush\",\"root\":9007199254740991}]}";
-constexpr char kInvalidArgument[] =
-    "{\"version\":1,\"ok\":false,\"status\":1,\"error\":\"invalid_argument\",\"operations\":[]}";
-constexpr char kInvalidSession[] =
-    "{\"version\":1,\"ok\":false,\"status\":3,\"error\":\"invalid_session\",\"operations\":[]}";
+constexpr uint8_t kSuccess[] = {20, 0, 0, 0, 'L', 'E', 'B', '2', 0, 255};
+constexpr uint8_t kInvalidArgument[] = {20, 0, 0, 0, 'L', 'E', 'B', '2', 1};
+constexpr uint8_t kInvalidSession[] = {20, 0, 0, 0, 'L', 'E', 'B', '2', 2};
 
 constexpr YewLynxSession kSession = 41;
 bool g_mounted = false;
 
-YewLynxBuffer Copy(std::string_view json) {
-  auto* data = static_cast<uint8_t*>(std::malloc(json.size()));
+template <size_t Size>
+YewLynxBuffer Copy(const uint8_t (&bytes)[Size]) {
+  auto* data = static_cast<uint8_t*>(std::malloc(Size));
   if (data == nullptr) {
     return {nullptr, 0};
   }
-  std::memcpy(data, json.data(), json.size());
-  return {data, json.size()};
+  std::memcpy(data, bytes, Size);
+  return {data, Size};
 }
 
-bool Equals(const uint8_t* data, size_t length, std::string_view expected) {
-  return data != nullptr && length == expected.size()
-      && std::memcmp(data, expected.data(), length) == 0;
+YewLynxBuffer Copy(const uint8_t* bytes, size_t size) {
+  auto* data = static_cast<uint8_t*>(std::malloc(size));
+  if (data == nullptr) {
+    return {nullptr, 0};
+  }
+  std::memcpy(data, bytes, size);
+  return {data, size};
 }
 
 }  // namespace
 
-extern "C" YewLynxMountResult yew_lynx_mount(const uint8_t* root_id,
-                                               size_t root_id_len) {
-  if (g_mounted || !Equals(root_id, root_id_len, "9007199254740991")) {
+extern "C" YewLynxMountResult yew_lynx_mount(uint32_t root_id) {
+  if (g_mounted || root_id != UINT32_MAX) {
     return {0, Copy(kInvalidArgument)};
   }
   g_mounted = true;
@@ -42,17 +42,23 @@ extern "C" YewLynxMountResult yew_lynx_mount(const uint8_t* root_id,
 }
 
 extern "C" YewLynxBuffer yew_lynx_dispatch(
-    YewLynxSession session, const uint8_t* listener_id,
-    size_t listener_id_len, const uint8_t* event_name,
-    size_t event_name_len) {
+    YewLynxSession session, const uint8_t* event, size_t event_len) {
   if (!g_mounted || session != kSession) {
     return Copy(kInvalidSession);
   }
-  if (!Equals(listener_id, listener_id_len, "9007199254740991")
-      || !Equals(event_name, event_name_len, "tap")) {
+  if (event == nullptr || event_len < 8 || std::memcmp(event + 4, "LEB2", 4) != 0) {
     return Copy(kInvalidArgument);
   }
   return Copy(kSuccess);
+}
+
+extern "C" YewLynxBuffer yew_lynx_complete(
+    YewLynxSession session, const uint8_t* response, size_t response_len) {
+  if (!g_mounted || session != kSession || response == nullptr || response_len < 8
+      || std::memcmp(response + 4, "LEB2", 4) != 0) {
+    return Copy(kInvalidArgument);
+  }
+  return Copy(response, response_len);
 }
 
 extern "C" YewLynxDestroyResult yew_lynx_destroy(

@@ -83,8 +83,13 @@ void DestroyAfterMountFailure(YewLynxSession session) {
   yew_lynx_buffer_free(cleanup.response);
 }
 
-YewLynxSession SessionFromJLong(jlong session) {
-  return static_cast<YewLynxSession>(session);
+bool IdFromJLong(JNIEnv* env, jlong value, const char* name, uint32_t* output) {
+  if (value <= 0 || static_cast<uint64_t>(value) > std::numeric_limits<uint32_t>::max()) {
+    Throw(env, "java/lang/IllegalArgumentException", name);
+    return false;
+  }
+  *output = static_cast<uint32_t>(value);
+  return true;
 }
 
 jlong SessionToJLong(YewLynxSession session) {
@@ -95,7 +100,7 @@ jlong SessionToJLong(YewLynxSession session) {
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_yew_lynx_YewLynxModule_nativeMount(JNIEnv* env, jclass,
-                                             jbyteArray root_id,
+                                             jlong root_id,
                                              jlongArray session_out) {
   try {
     if (session_out == nullptr || env->GetArrayLength(session_out) < 1) {
@@ -107,20 +112,13 @@ Java_com_yew_lynx_YewLynxModule_nativeMount(JNIEnv* env, jclass,
       return nullptr;
     }
 
-    std::vector<uint8_t> root_id_bytes;
-    if (!ReadBytes(env, root_id, &root_id_bytes)) {
+    uint32_t native_root_id = 0;
+    if (!IdFromJLong(env, root_id, "root ID must be a nonzero 32-bit integer",
+                     &native_root_id)) {
       return nullptr;
     }
 
-    YewLynxMountResult mounted =
-        yew_lynx_mount(BytesData(root_id_bytes), root_id_bytes.size());
-    if (mounted.session > YEW_LYNX_JS_MAX_SAFE_INTEGER) {
-      yew_lynx_buffer_free(mounted.response);
-      DestroyAfterMountFailure(mounted.session);
-      Throw(env, "java/lang/IllegalStateException",
-            "Rust returned an unsafe session token");
-      return nullptr;
-    }
+    YewLynxMountResult mounted = yew_lynx_mount(native_root_id);
     jbyteArray batch = CopyAndFreeBuffer(env, mounted.response);
     if (batch == nullptr) {
       DestroyAfterMountFailure(mounted.session);
@@ -144,27 +142,49 @@ Java_com_yew_lynx_YewLynxModule_nativeMount(JNIEnv* env, jclass,
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_yew_lynx_YewLynxModule_nativeDispatch(JNIEnv* env, jclass,
-                                                jlong session,
-                                                jbyteArray listener_id,
-                                                jbyteArray event_name) {
+Java_com_yew_lynx_YewLynxModule_nativeDispatchEvent(JNIEnv* env, jclass,
+                                                     jlong session,
+                                                     jbyteArray event) {
   try {
     if (session == 0) {
       Throw(env, "java/lang/IllegalStateException", "Session is not mounted");
       return nullptr;
     }
 
-    std::vector<uint8_t> listener_id_bytes;
-    std::vector<uint8_t> event_name_bytes;
-    if (!ReadBytes(env, listener_id, &listener_id_bytes) ||
-        !ReadBytes(env, event_name, &event_name_bytes)) {
+    uint32_t native_session = 0;
+    std::vector<uint8_t> event_bytes;
+    if (!IdFromJLong(env, session, "session ID must be a nonzero 32-bit integer",
+                     &native_session) ||
+        !ReadBytes(env, event, &event_bytes)) {
       return nullptr;
     }
 
     return CopyAndFreeBuffer(
-        env, yew_lynx_dispatch(SessionFromJLong(session),
-                               BytesData(listener_id_bytes), listener_id_bytes.size(),
-                               BytesData(event_name_bytes), event_name_bytes.size()));
+        env, yew_lynx_dispatch(native_session, BytesData(event_bytes),
+                               event_bytes.size()));
+  } catch (const std::bad_alloc&) {
+    Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
+  } catch (...) {
+    Throw(env, "java/lang/RuntimeException", "Unexpected native bridge failure");
+  }
+  return nullptr;
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_yew_lynx_YewLynxModule_nativeComplete(JNIEnv* env, jclass,
+                                                jlong session,
+                                                jbyteArray response) {
+  try {
+    uint32_t native_session = 0;
+    std::vector<uint8_t> response_bytes;
+    if (!IdFromJLong(env, session, "session ID must be a nonzero 32-bit integer",
+                     &native_session) ||
+        !ReadBytes(env, response, &response_bytes)) {
+      return nullptr;
+    }
+    return CopyAndFreeBuffer(
+        env, yew_lynx_complete(native_session, BytesData(response_bytes),
+                               response_bytes.size()));
   } catch (const std::bad_alloc&) {
     Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
   } catch (...) {
@@ -191,8 +211,12 @@ Java_com_yew_lynx_YewLynxModule_nativeDestroy(JNIEnv* env, jclass,
       return nullptr;
     }
 
-    YewLynxDestroyResult destroyed =
-        yew_lynx_destroy(SessionFromJLong(session));
+    uint32_t native_session = 0;
+    if (!IdFromJLong(env, session, "session ID must be a nonzero 32-bit integer",
+                     &native_session)) {
+      return nullptr;
+    }
+    YewLynxDestroyResult destroyed = yew_lynx_destroy(native_session);
     const jboolean consumed = destroyed.consumed != 0 ? JNI_TRUE : JNI_FALSE;
     env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
     if (env->ExceptionCheck()) {

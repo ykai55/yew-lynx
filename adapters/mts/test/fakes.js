@@ -1,23 +1,17 @@
 import assert from "node:assert/strict";
 
+import { encodeTestBatch, encodeTestFailure } from "../src/wire-generated.js";
+
 export function batch(operations, root = 1) {
-  return JSON.stringify({
-    version: 1,
-    ok: true,
-    operations: [...operations, { op: "flush", root }],
-  });
+  return encodeTestBatch(operations, root);
 }
 
 export function failure(status, error, operations = [], root = 1) {
-  return JSON.stringify({
-    version: 1,
-    ok: false,
-    status,
-    error,
-    operations: operations.length === 0
-      ? []
-      : [...operations, { op: "flush", root }],
-  });
+  if (operations.length !== 0) {
+    throw new Error("FlatBuffers v2 failure fixtures cannot contain command operations");
+  }
+  void root;
+  return encodeTestFailure(status, error);
 }
 
 export function createFakeNativeModule(initialHandlers = {}) {
@@ -190,6 +184,10 @@ export function createStrictFiberHost() {
       assert.equal(element, root, "only the page root may be flushed");
       calls.push(["flush", root.refId]);
       flushes.push(snapshot(root));
+    },
+
+    invokeElementApi(name) {
+      throw new Error(`unexpected generic Element API call: ${name}`);
     },
   };
 

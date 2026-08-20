@@ -7,10 +7,12 @@ readonly ROOT_DIR
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
 readonly MTS_ADAPTER_DIR="$ROOT_DIR/adapters/mts"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
+readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
 readonly SCRIPTS=(
   "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
   "$ROOT_DIR/scripts/build-android.sh"
+  "$ROOT_DIR/scripts/prepare-flatc.sh"
   "$ROOT_DIR/scripts/prepare-hab.sh"
   "$ROOT_DIR/scripts/prepare-primjs.sh"
   "$ROOT_DIR/scripts/publish-lynx-maven.sh"
@@ -86,6 +88,33 @@ verify_android_metadata() {
     "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
 }
 
+verify_lynx_patches() {
+  local patch_file
+  local patch_name
+  local -a patch_files=()
+
+  [[ -s "$LYNX_PATCH_DIR/series" ]] || {
+    printf 'verify: missing Lynx patch series\n' >&2
+    return 1
+  }
+  while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
+    patch_name="${patch_name%$'\r'}"
+    case "$patch_name" in
+      '' | \#*) continue ;;
+    esac
+    case "/$patch_name/" in
+      */../* | */./*) return 1 ;;
+    esac
+    [[ "$patch_name" != /* ]] || return 1
+    patch_file="$LYNX_PATCH_DIR/$patch_name"
+    [[ -f "$patch_file" ]] || return 1
+    git patch-id --stable < "$patch_file" | grep -Eq '^[0-9a-f]{40} [0-9a-f]{40}$'
+    patch_files+=("$patch_file")
+  done < "$LYNX_PATCH_DIR/series"
+  ((${#patch_files[@]} > 0)) || return 1
+  git -C "$ROOT_DIR/third_party/lynx" apply --check "${patch_files[@]}"
+}
+
 trap cleanup EXIT
 
 printf '==> Checking shell scripts\n'
@@ -98,8 +127,18 @@ fi
 
 printf '==> Checking Android pins and lock metadata\n'
 verify_android_metadata
+printf '==> Checking pinned Lynx patch series\n'
+verify_lynx_patches
 python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], "exec")' \
   "$ROOT_DIR/scripts/android-device-acceptance.py"
+
+printf '==> Regenerating protocol with locked flatc\n'
+flatc="$("$ROOT_DIR/scripts/prepare-flatc.sh")"
+FLATC="$flatc" node "$ROOT_DIR/scripts/generate-protocol.mjs"
+git -C "$ROOT_DIR" diff --exit-code -- \
+  protocol/schema \
+  protocol/capabilities \
+  protocol/generated
 
 printf '==> Bootstrapping pinned Yew checkout\n'
 "$ROOT_DIR/scripts/bootstrap-yew.sh"

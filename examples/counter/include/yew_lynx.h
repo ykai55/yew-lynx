@@ -8,28 +8,24 @@
 extern "C" {
 #endif
 
-#define YEW_LYNX_ABI_VERSION 1u
-#define YEW_LYNX_FIBER_PROTOCOL_VERSION 1u
-#define YEW_LYNX_JS_MAX_SAFE_INTEGER UINT64_C(9007199254740991)
+#define YEW_LYNX_ABI_VERSION 2u
+#define YEW_LYNX_FIBER_PROTOCOL_VERSION 2u
 
 typedef uint32_t yew_lynx_counter_status_t;
 
 #define YEW_LYNX_COUNTER_STATUS_OK ((yew_lynx_counter_status_t)0u)
 #define YEW_LYNX_COUNTER_STATUS_INVALID_ARGUMENT ((yew_lynx_counter_status_t)1u)
-#define YEW_LYNX_COUNTER_STATUS_INVALID_UTF8 ((yew_lynx_counter_status_t)2u)
-#define YEW_LYNX_COUNTER_STATUS_INVALID_SESSION ((yew_lynx_counter_status_t)3u)
-#define YEW_LYNX_COUNTER_STATUS_WRONG_THREAD ((yew_lynx_counter_status_t)4u)
-/* Reserved in ABI v1; roots are scoped to sessions and this status is not emitted. */
-#define YEW_LYNX_COUNTER_STATUS_DUPLICATE_ROOT ((yew_lynx_counter_status_t)5u)
+#define YEW_LYNX_COUNTER_STATUS_INVALID_SESSION ((yew_lynx_counter_status_t)2u)
+#define YEW_LYNX_COUNTER_STATUS_WRONG_THREAD ((yew_lynx_counter_status_t)3u)
+#define YEW_LYNX_COUNTER_STATUS_UNSUPPORTED ((yew_lynx_counter_status_t)4u)
+#define YEW_LYNX_COUNTER_STATUS_INVALID_OWNERSHIP ((yew_lynx_counter_status_t)5u)
 #define YEW_LYNX_COUNTER_STATUS_INVALID_LISTENER ((yew_lynx_counter_status_t)6u)
-#define YEW_LYNX_COUNTER_STATUS_EVENT_MISMATCH ((yew_lynx_counter_status_t)7u)
-#define YEW_LYNX_COUNTER_STATUS_BACKEND_ERROR ((yew_lynx_counter_status_t)8u)
+#define YEW_LYNX_COUNTER_STATUS_RESOURCE_EXHAUSTED ((yew_lynx_counter_status_t)7u)
+#define YEW_LYNX_COUNTER_STATUS_HOST_ERROR ((yew_lynx_counter_status_t)8u)
 #define YEW_LYNX_COUNTER_STATUS_PANIC ((yew_lynx_counter_status_t)9u)
-#define YEW_LYNX_COUNTER_STATUS_SESSION_POISONED ((yew_lynx_counter_status_t)10u)
-#define YEW_LYNX_COUNTER_STATUS_RESOURCE_EXHAUSTED ((yew_lynx_counter_status_t)11u)
-#define YEW_LYNX_COUNTER_STATUS_INTERNAL_ERROR ((yew_lynx_counter_status_t)12u)
+#define YEW_LYNX_COUNTER_STATUS_INTERNAL_ERROR ((yew_lynx_counter_status_t)10u)
 
-typedef uint64_t YewLynxSession;
+typedef uint32_t YewLynxSession;
 
 typedef struct YewLynxBuffer {
   uint8_t* data;
@@ -47,28 +43,24 @@ typedef struct YewLynxDestroyResult {
   YewLynxBuffer response;
 } YewLynxDestroyResult;
 
-YewLynxMountResult yew_lynx_mount(const uint8_t* root_id,
-                                  size_t root_id_len);
+YewLynxMountResult yew_lynx_mount(uint32_t root_id);
 YewLynxBuffer yew_lynx_dispatch(YewLynxSession session,
-                                const uint8_t* listener_id,
-                                size_t listener_id_len,
-                                const uint8_t* event_name,
-                                size_t event_name_len);
+                                const uint8_t* event,
+                                size_t event_len);
+YewLynxBuffer yew_lynx_complete(YewLynxSession session,
+                                const uint8_t* response,
+                                size_t response_len);
 YewLynxDestroyResult yew_lynx_destroy(YewLynxSession session);
 void yew_lynx_buffer_free(YewLynxBuffer buffer);
 
 /*
- * Inputs are exact, non-NUL-terminated UTF-8 spans. Root, node, listener, and
- * session IDs are positive integers no greater than Number.MAX_SAFE_INTEGER.
- * Every returned response buffer is UTF-8 JSON and must be freed exactly once.
+ * IDs are nonzero opaque 32-bit integers scoped to one session. Event and
+ * completion inputs, and every returned response, are FlatBuffers v2 `LEB2`
+ * envelopes. Returned buffers must be freed exactly once.
  *
- * Every successful wire call has exactly these fields:
- *   {"version":1,"ok":true,"operations":[...]}
- * Every failed wire call has exactly these fields:
- *   {"version":1,"ok":false,"status":N,"error":"...","operations":[...]}
- * A successful operations array contains exactly one final flush. A failed
- * call normally has no operations and never exposes mutations from a poisoned
- * backend or session.
+ * Successful calls return a CommandBatch on the Command channel with a final
+ * commit boundary. Failed calls return a ResponseBatch on the Result channel.
+ * No protocol v1 JSON or decimal-string ID encoding is accepted.
  *
  * All session calls must stay on the mounting thread. A wrong-thread destroy
  * returns consumed=0 so the owner can retry. Once consumed=1, the caller must

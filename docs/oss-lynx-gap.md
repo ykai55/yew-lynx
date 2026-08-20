@@ -19,9 +19,10 @@ public Android LynxModule
 ```
 
 The repository implements that path with the exact Lynx revision pinned as a
-source submodule and no Lynx patch. It now includes a standalone Android host,
-local stock AAR build, real Rust/JNI link, arm64 APK, and one physical-device
-acceptance run.
+source submodule. One narrow Lynx patch exposes an existing Java ByteArray to
+ordinary LepusNG as a read-only byte view; it does not add a renderer or hidden
+native bridge. The repository also includes a standalone Android host, local AAR
+build, real Rust/JNI link, and arm64 APK pipeline.
 
 ## Stock implementation evidence
 
@@ -39,7 +40,7 @@ acceptance run.
   [`LynxModule.java`](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/platform/android/lynx_android/src/main/java/com/lynx/jsbridge/LynxModule.java),
   module registration and the MTS opt-in in
   [`LynxBaseConfigurator.java`](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/platform/android/lynx_android/src/main/java/com/lynx/tasm/group/LynxBaseConfigurator.java),
-  and synchronous `String` method signatures through
+  and synchronous numeric and `byte[]` method signatures through
   [`LynxMethodWrapper.java`](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/platform/android/lynx_android/src/main/java/com/lynx/jsbridge/LynxMethodWrapper.java).
 
 The Fiber globals are a declared public typed surface. `lynx.module()` is
@@ -75,18 +76,21 @@ artifacts, then verifies both the native codec path and a forced WebAssembly
 path by decoding the bundle and requiring `context-type` 1 and
 `is-lepusng-binary: true`.
 
-Rust tests validate protocol v1 and the counter C ABI. MTS tests validate the
-broker against mock Fiber globals. Android tests compile the public-module
-adapter and real JNI source against stock-API stubs and a mock Rust ABI. A C
-smoke test links the real host Rust archive, and CI builds the Android arm64
-archive. Patched Yew tests validate the focused native renderer and macro
-behavior.
+Rust tests validate the FlatBuffers v2 command, result, and event channels plus
+the counter C ABI. MTS tests validate typed Element API dispatch, result
+completion, event envelopes, and ownership against mock Fiber globals. Android
+tests compile the public-module adapter and real JNI source against stock-API
+stubs and a mock Rust ABI. A C smoke test links the real host Rust archive, and
+CI builds the Android arm64 archive. Patched Yew tests validate the focused
+native renderer and macro behavior; a real Dioxus `VirtualDom` fixture covers
+the second framework adapter.
 
 `examples/android` closes the audited integration gap: it enables MTS,
 registers one non-shared `YewLynxModule` per `LynxView`, packages the Rust
 archive through the real JNI shared library, and loads the ordinary bundle via
 the stock template API. The build publishes six AARs from the pinned submodule,
-assembles online and offline, and rejects non-arm64 APK contents. One Android 15
-ARM64 physical-device run verified initial render, tap update, recreation,
-process reopen, and repeated teardown. This remains evidence for the exact pin
-and device only, not a general performance or compatibility certification.
+assembles online and offline, and rejects non-arm64 APK contents. On 2026-08-20,
+the v2 Yew counter passed the repository's mount, tap, recreation,
+force-stop/reopen, and repeated-teardown flow on an Android 15/API 35 arm64
+device. This establishes end-to-end evidence for the Yew fixture and exact
+pins; the Dioxus fixture still requires a device host and acceptance run.

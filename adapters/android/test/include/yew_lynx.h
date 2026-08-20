@@ -4,13 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define YEW_LYNX_JS_MAX_SAFE_INTEGER UINT64_C(9007199254740991)
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef uint64_t YewLynxSession;
+typedef uint32_t YewLynxSession;
 
 typedef struct YewLynxBuffer {
   uint8_t* data;
@@ -27,13 +25,13 @@ typedef struct YewLynxDestroyResult {
   YewLynxBuffer response;
 } YewLynxDestroyResult;
 
-YewLynxMountResult yew_lynx_mount(const uint8_t* root_id,
-                                  size_t root_id_len);
+YewLynxMountResult yew_lynx_mount(uint32_t root_id);
 YewLynxBuffer yew_lynx_dispatch(YewLynxSession session,
-                                const uint8_t* listener_id,
-                                size_t listener_id_len,
-                                const uint8_t* event_name,
-                                size_t event_name_len);
+                                const uint8_t* event,
+                                size_t event_len);
+YewLynxBuffer yew_lynx_complete(YewLynxSession session,
+                                const uint8_t* response,
+                                size_t response_len);
 YewLynxDestroyResult yew_lynx_destroy(YewLynxSession session);
 void yew_lynx_buffer_free(YewLynxBuffer buffer);
 

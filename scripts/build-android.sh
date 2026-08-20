@@ -6,6 +6,8 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
 readonly LYNX_SOURCE_DIR="$ROOT_DIR/third_party/lynx"
+readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
+readonly LYNX_PATCH_SERIES="$LYNX_PATCH_DIR/series"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_VERSION="0.0.1-0df14207"
 readonly HAB_EXECUTABLE="$ROOT_DIR/.deps/android/hab/hab.pex"
@@ -25,6 +27,23 @@ readonly LYNX_GRADLE_TASKS=(
 )
 clean=0
 offline=0
+lynx_patches_applied=0
+LYNX_PATCH_FILES=()
+
+restore_lynx_source() {
+  local exit_status=$?
+
+  trap - EXIT
+  if ((lynx_patches_applied)); then
+    if ! git -C "$LYNX_SOURCE_DIR" apply --reverse "${LYNX_PATCH_FILES[@]}"; then
+      printf 'Failed to remove temporary Lynx patches; source checkout is dirty\n' >&2
+      return 1
+    fi
+  fi
+  return "$exit_status"
+}
+
+trap restore_lynx_source EXIT
 
 usage() {
   printf 'Usage: %s [--clean] [--offline]\n' "${0##*/}"
@@ -51,12 +70,13 @@ remove_generated_android_outputs() {
 
 calculate_cache_key() {
   {
-    printf 'lynx_sha=%s\nlynx_patches=none\n' "$LYNX_SHA"
+    printf 'lynx_sha=%s\n' "$LYNX_SHA"
     git -C "$ROOT_DIR" ls-files -co --exclude-standard -- \
       .gitmodules Cargo.lock Cargo.toml rust-toolchain.toml \
       adapters/android adapters/mts/package.json adapters/mts/package-lock.json \
       adapters/mts/scripts adapters/mts/src adapters/mts/template android \
-      crates examples/android examples/counter patches/yew \
+      crates examples/android examples/counter examples/dioxus-counter \
+      patches/lynx patches/yew protocol \
       scripts/bootstrap-yew.sh scripts/build-android.sh scripts/prepare-hab.sh \
       scripts/prepare-primjs.sh scripts/publish-lynx-maven.sh \
       | sort -u \
@@ -88,6 +108,37 @@ while (($#)); do
   esac
   shift
 done
+
+[[ -f "$LYNX_PATCH_SERIES" ]] || {
+  printf 'Missing Lynx patch series: %s\n' "$LYNX_PATCH_SERIES" >&2
+  exit 1
+}
+while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
+  patch_name="${patch_name%$'\r'}"
+  case "$patch_name" in
+    '' | \#*) continue ;;
+  esac
+  case "/$patch_name/" in
+    */../* | */./*)
+      printf 'Unsafe path in Lynx patch series: %s\n' "$patch_name" >&2
+      exit 1
+      ;;
+  esac
+  [[ "$patch_name" != /* ]] || {
+    printf 'Absolute path in Lynx patch series: %s\n' "$patch_name" >&2
+    exit 1
+  }
+  patch_file="$LYNX_PATCH_DIR/$patch_name"
+  [[ -f "$patch_file" ]] || {
+    printf 'Missing Lynx patch: %s\n' "$patch_file" >&2
+    exit 1
+  }
+  LYNX_PATCH_FILES+=("$patch_file")
+done < "$LYNX_PATCH_SERIES"
+((${#LYNX_PATCH_FILES[@]} > 0)) || {
+  printf 'Lynx patch series is empty: %s\n' "$LYNX_PATCH_SERIES" >&2
+  exit 1
+}
 
 if ((clean && offline)); then
   printf -- '--clean and --offline cannot be used together\n' >&2
@@ -138,6 +189,12 @@ if [[ -n "$tracked_lynx_changes" ]]; then
     "$tracked_lynx_changes" >&2
   exit 1
 fi
+if ! git -C "$LYNX_SOURCE_DIR" apply --check "${LYNX_PATCH_FILES[@]}"; then
+  printf 'Lynx patch series does not apply to pinned revision %s\n' "$LYNX_SHA" >&2
+  exit 1
+fi
+git -C "$LYNX_SOURCE_DIR" apply "${LYNX_PATCH_FILES[@]}"
+lynx_patches_applied=1
 
 java_major="$(java -version 2>&1 | awk -F '[".]' '/version/ { print $2; exit }')"
 if [[ "$java_major" != 11 ]]; then
@@ -288,7 +345,7 @@ mkdir -p -- "$(dirname -- "$EVIDENCE")"
 cat >"$EVIDENCE" <<EOF
 lynx_sha=$LYNX_SHA
 lynx_version=$LYNX_VERSION
-lynx_patches=none
+lynx_patches_sha256=$(sha256sum "${LYNX_PATCH_FILES[@]}" | cut -d ' ' -f 1 | sha256sum | cut -d ' ' -f 1)
 hab_lock_sha256=$(sha256sum "$ROOT_DIR/android/hab.lock" | cut -d ' ' -f 1)
 primjs_lock_sha256=$(sha256sum "$ROOT_DIR/android/primjs.lock" | cut -d ' ' -f 1)
 yew_head=$(git -C "$YEW_SOURCE_DIR" rev-parse HEAD)

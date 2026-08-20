@@ -1,0 +1,187 @@
+From 1cd39fe0d16c07831602940b57682ae11057f415 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 12:00:00 +0800
+Subject: [PATCH] Expose ByteArray bytes to LepusNG
+
+Allow ordinary LepusNG code to read the length and indexed bytes of a
+ByteArray-backed LepusRef. Keep the view read-only and return undefined for
+out-of-range indexes. Convert QuickJS ArrayBuffer arguments to ByteArray so
+public native modules preserve Java byte[] parameters.
+---
+ core/runtime/lepusng/jsvalue_helper.cc          | 14 +++++++
+ core/runtime/lepusng/quick_context.cc          | 19 +++++++++++++++++--
+ core/runtime/lepusng/quick_context_unittest.cc | 54 ++++++++++++++++++++++++++
+ 3 files changed, 85 insertions(+), 2 deletions(-)
+
+diff --git a/core/runtime/lepusng/jsvalue_helper.cc b/core/runtime/lepusng/jsvalue_helper.cc
+--- a/core/runtime/lepusng/jsvalue_helper.cc
++++ b/core/runtime/lepusng/jsvalue_helper.cc
+@@ -4,13 +4,15 @@
+ 
+ #include "core/runtime/lepusng/jsvalue_helper.h"
+ 
++#include <cstring>
+ #include <functional>
+ #include <memory>
+ #include <utility>
+ #include <vector>
+ 
+ #include "base/include/value/array.h"
+ #include "base/include/value/base_value.h"
++#include "base/include/value/byte_array.h"
+ #include "base/include/value/ref_counted_class.h"
+ #include "base/include/value/table.h"
+ #include "base/include/vector.h"
+@@ -264,6 +266,15 @@ lepus::Value LEPUSValueHelper::ToLepusValue(LEPUSContext* ctx,
+       }
+     } break;
+     case LEPUS_TAG_OBJECT: {
++      if (LEPUS_IsArrayBuffer(val)) {
++        size_t length = 0;
++        const auto* data = LEPUS_GetArrayBuffer(ctx, &length, val);
++        auto copy = std::make_unique<uint8_t[]>(length);
++        if (length > 0) {
++          std::memcpy(copy.get(), data, length);
++        }
++        return Value(ByteArray::Create(std::move(copy), length));
++      }
+       if (IsJsArray(ctx, val)) {
+         return ToLepusArray(ctx, val, flag);
+       } else if (IsJsFunction(ctx, val)) {
+@@ -465,3 +476,6 @@ lepus::Value LepusValueFactory::Create(const LEPUSValue& val) {
++  if (LEPUS_IsArrayBuffer(val)) {
++    return LEPUSValueHelper::ToLepusValue(ctx_, val);
++  }
+   if (LEPUS_IsLepusRef(val)) {
+     return lepus::Value(
+         LEPUSValueHelper::ConstructLepusRefToLynxValue(ctx_, val));
+diff --git a/core/runtime/lepusng/quick_context.cc b/core/runtime/lepusng/quick_context.cc
+index 8df9983..d855cb1 100644
+--- a/core/runtime/lepusng/quick_context.cc
++++ b/core/runtime/lepusng/quick_context.cc
+@@ -8,7 +8,8 @@
+ 
+ #include <string>
+ #include <utility>
+ 
++#include "base/include/value/byte_array.h"
+ #include "base/include/string/string_number_convert.h"
+ #include "base/include/value/array.h"
+ #include "base/include/value/base_value.h"
+@@ -167,8 +167,18 @@ static LEPUSValue LepusRefGetPropertyCallBack(LEPUSContext* ctx,
+         return LEPUS_NewInt32(ctx, static_cast<int32_t>(carray->size()));
+       }
+     } break;
++    case Value_ByteArray: {
++      auto* bytes = LEPUSValueHelper::GetLepusByteArray(thisObj);
++      if (idx >= 0) {
++        if (static_cast<size_t>(idx) < bytes->GetLength()) {
++          return LEPUS_NewInt32(ctx, bytes->GetPtr()[idx]);
++        }
++        return LEPUS_UNDEFINED;
++      } else if (LEPUSAtomIsLengthProp(ctx, prop)) {
++        return LEPUS_NewInt64(ctx, static_cast<int64_t>(bytes->GetLength()));
++      }
++    } break;
+     case Value_JSObject:
+-    case Value_ByteArray:
+     case Value_RefCounted: {
+       return LEPUS_UNDEFINED;
+     }
+@@ -190,6 +200,8 @@ static size_t LepusRefGetLengthCallBack(LEPUSContext* ctx, LEPUSValue val) {
+       return reinterpret_cast<Dictionary*>(pref->p)->size();
+     case Value_Array:
+       return reinterpret_cast<CArray*>(pref->p)->size();
++    case Value_ByteArray:
++      return reinterpret_cast<ByteArray*>(pref->p)->GetLength();
+     case Value_RefCounted:
+       return 0;
+     default:
+@@ -1083,7 +1095,10 @@ LEPUSValue QuickContext::NewBindingFunction(
+         for (int32_t i = 0; i < argc; ++i) {
+           // High frequency call
+           LEPUSValue val = argv[i];
+-          if (LEPUS_IsLepusRef(val)) {
++          if (LEPUS_IsArrayBuffer(val)) {
++            new (largv + i) lepus::Value(
++                lepus::LEPUSValueHelper::ToLepusValue(ctx, val));
++          } else if (LEPUS_IsLepusRef(val)) {
+             new (largv + i) lepus::Value(
+                 lepus::LEPUSValueHelper::ConstructLepusRefToLynxValue(ctx,
+                                                                       val));
+diff --git a/core/runtime/lepusng/quick_context_unittest.cc b/core/runtime/lepusng/quick_context_unittest.cc
+index 609dbd6..d33fa5e 100644
+--- a/core/runtime/lepusng/quick_context_unittest.cc
++++ b/core/runtime/lepusng/quick_context_unittest.cc
+@@ -5,8 +5,11 @@
+ #include "core/runtime/lepusng/quick_context.h"
+ 
+ #include <cstdint>
++#include <memory>
+ #include <string>
+ 
++#include "base/include/value/byte_array.h"
+ #include "core/runtime/lepus/bytecode_generator.h"
++#include "core/runtime/lepusng/jsvalue_helper.h"
+ #include "quickjs/include/quickjs.h"
+ #include "third_party/googletest/googletest/include/gtest/gtest.h"
+@@ -64,6 +67,57 @@ TEST(QuickContextSourceBundleTest, RejectsInvalidSource) {
+   EXPECT_FALSE(context.DeSerialize(bundle, false, nullptr, "invalid.js"));
+ }
+ 
++TEST(QuickContextSourceBundleTest, ExposesByteArrayAsReadableBytes) {
++  auto data = std::make_unique<uint8_t[]>(3);
++  data[0] = 0;
++  data[1] = 127;
++  data[2] = 255;
++
++  QuickContext context;
++  context.SetGlobalData(
++      "bytes", Value(ByteArray::Create(std::move(data), 3)));
++  QuickContextBundle bundle;
++  bundle.SetSource(
++      "function byteArrayLength() { return bytes.length; }"
++      "function byteArraySum() { return bytes[0] + bytes[1] + bytes[2]; }"
++      "function byteArrayOutOfBounds() { return bytes[3] === undefined; }");
++
++  ASSERT_TRUE(context.DeSerialize(bundle, false, nullptr, "byte-array.js"));
++  ASSERT_TRUE(context.Execute());
++  ExpectIntResult(&context, "byteArrayLength", 3);
++  ExpectIntResult(&context, "byteArraySum", 382);
++
++  LEPUSValue result = context.GetAndCall("byteArrayOutOfBounds", nullptr, 0);
++  ASSERT_EQ(LEPUS_TAG_BOOL, LEPUS_VALUE_GET_TAG(result));
++  EXPECT_TRUE(LEPUS_VALUE_GET_BOOL(result));
++  if (!context.GetGCFlag()) {
++    LEPUS_FreeValue(context.context(), result);
++  }
++}
++
++TEST(QuickContextSourceBundleTest, ConvertsArrayBufferToByteArray) {
++  QuickContext context;
++  QuickContextBundle bundle;
++  bundle.SetSource(
++      "function createBuffer() {"
++      "  return new Uint8Array([0, 127, 255]).buffer;"
++      "}");
++
++  ASSERT_TRUE(context.DeSerialize(bundle, false, nullptr, "array-buffer.js"));
++  ASSERT_TRUE(context.Execute());
++
++  LEPUSValue result = context.GetAndCall("createBuffer", nullptr, 0);
++  Value converted = LepusValueFactory(context.context()).Create(result);
++  ASSERT_TRUE(converted.IsByteArray());
++  ASSERT_EQ(converted.ByteArray()->GetLength(), 3U);
++  EXPECT_EQ(converted.ByteArray()->GetPtr()[0], 0);
++  EXPECT_EQ(converted.ByteArray()->GetPtr()[1], 127);
++  EXPECT_EQ(converted.ByteArray()->GetPtr()[2], 255);
++  if (!context.GetGCFlag()) {
++    LEPUS_FreeValue(context.context(), result);
++  }
++}
++
+ TEST(QuickContextSourceBundleTest, KeepsBytecodeDeserializationWorking) {
+   constexpr char kSource[] = "function bytecodeResult() { return 7; }";
+   QuickContext compiler_context;
+-- 
+2.43.0

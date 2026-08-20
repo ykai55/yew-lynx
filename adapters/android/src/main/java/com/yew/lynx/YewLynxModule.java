@@ -4,29 +4,27 @@ import android.content.Context;
 import com.lynx.jsbridge.LynxMethod;
 import com.lynx.jsbridge.LynxModule;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public final class YewLynxModule extends LynxModule {
   public static final String NAME = "YewLynx";
 
-  private static final String ERROR_NATIVE_UNAVAILABLE =
-      "{\"version\":1,\"ok\":false,\"status\":12,\"error\":\"native_bridge_unavailable\",\"operations\":[]}";
-  private static final String ERROR_ALREADY_MOUNTED =
-      "{\"version\":1,\"ok\":false,\"status\":12,\"error\":\"already_mounted\",\"operations\":[]}";
-  private static final String ERROR_NOT_MOUNTED =
-      "{\"version\":1,\"ok\":false,\"status\":3,\"error\":\"not_mounted\",\"operations\":[]}";
-  private static final String ERROR_MODULE_DESTROYED =
-      "{\"version\":1,\"ok\":false,\"status\":3,\"error\":\"module_destroyed\",\"operations\":[]}";
-  private static final String ERROR_INVALID_ARGUMENT =
-      "{\"version\":1,\"ok\":false,\"status\":1,\"error\":\"invalid_argument\",\"operations\":[]}";
-  private static final String ERROR_NATIVE_FAILURE =
-      "{\"version\":1,\"ok\":false,\"status\":12,\"error\":\"native_bridge_failure\",\"operations\":[]}";
+  private static final long MAX_PROTOCOL_ID = 0xffff_ffffL;
+  private static final byte[] FAILURE_PREFIX = {
+      20, 0, 0, 0, 76, 69, 66, 50, 12, 0, 12, 0, 0, 0, 11, 0,
+      10, 0, 4, 0, 12, 0, 0, 0, 20, 0, 0, 0, 0, 0, 4, 2,
+      12, 0, 12, 0, 0, 0, 0, 0, 10, 0, 4, 0, 12, 0, 0, 0,
+      8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  };
 
   interface NativeCalls {
     boolean isAvailable();
 
-    byte[] mount(byte[] rootId, long[] sessionOut);
+    byte[] mount(long rootId, long[] sessionOut);
 
-    byte[] dispatch(long session, byte[] listenerId, byte[] eventName);
+    byte[] dispatchEvent(long session, byte[] event);
+
+    byte[] complete(long session, byte[] response);
 
     byte[] destroy(long session, boolean[] consumedOut);
   }
@@ -40,13 +38,18 @@ public final class YewLynxModule extends LynxModule {
     }
 
     @Override
-    public byte[] mount(byte[] rootId, long[] sessionOut) {
+    public byte[] mount(long rootId, long[] sessionOut) {
       return nativeMount(rootId, sessionOut);
     }
 
     @Override
-    public byte[] dispatch(long session, byte[] listenerId, byte[] eventName) {
-      return nativeDispatch(session, listenerId, eventName);
+    public byte[] dispatchEvent(long session, byte[] event) {
+      return nativeDispatchEvent(session, event);
+    }
+
+    @Override
+    public byte[] complete(long session, byte[] response) {
+      return nativeComplete(session, response);
     }
 
     @Override
@@ -72,49 +75,65 @@ public final class YewLynxModule extends LynxModule {
   }
 
   @LynxMethod
-  public synchronized String mount(String rootId) {
+  public synchronized byte[] mount(long rootId) {
     if (destroyed) {
-      return ERROR_MODULE_DESTROYED;
+      return failure(2, "module_destroyed");
     }
     if (nativeSession != 0) {
-      return ERROR_ALREADY_MOUNTED;
+      return failure(1, "already_mounted");
     }
-    if (rootId == null) {
-      return ERROR_INVALID_ARGUMENT;
+    if (!isProtocolId(rootId)) {
+      return failure(1, "invalid_argument");
     }
     if (!nativeCalls.isAvailable()) {
-      return ERROR_NATIVE_UNAVAILABLE;
+      return failure(10, "native_bridge_unavailable");
     }
 
     long[] sessionOut = new long[1];
     try {
-      byte[] batch = nativeCalls.mount(rootId.getBytes(StandardCharsets.UTF_8), sessionOut);
+      byte[] batch = nativeCalls.mount(rootId, sessionOut);
       nativeSession = sessionOut[0];
-      return decode(batch);
+      return nativeResponse(batch);
     } catch (RuntimeException | LinkageError error) {
       nativeSession = 0;
-      return ERROR_NATIVE_FAILURE;
+      return failure(8, "native_bridge_failure");
     }
   }
 
   @LynxMethod
-  public synchronized String dispatch(String listenerId, String eventName) {
+  public synchronized byte[] dispatchEvent(byte[] event) {
     if (destroyed) {
-      return ERROR_MODULE_DESTROYED;
+      return failure(2, "module_destroyed");
     }
     if (nativeSession == 0) {
-      return ERROR_NOT_MOUNTED;
+      return failure(2, "not_mounted");
     }
-    if (listenerId == null || eventName == null) {
-      return ERROR_INVALID_ARGUMENT;
+    if (event == null) {
+      return failure(1, "invalid_argument");
     }
 
     try {
-      return decode(nativeCalls.dispatch(nativeSession,
-          listenerId.getBytes(StandardCharsets.UTF_8),
-          eventName.getBytes(StandardCharsets.UTF_8)));
+      return nativeResponse(nativeCalls.dispatchEvent(nativeSession, event));
     } catch (RuntimeException | LinkageError error) {
-      return ERROR_NATIVE_FAILURE;
+      return failure(8, "native_bridge_failure");
+    }
+  }
+
+  @LynxMethod
+  public synchronized byte[] completeBatch(byte[] response) {
+    if (destroyed) {
+      return failure(2, "module_destroyed");
+    }
+    if (nativeSession == 0) {
+      return failure(2, "not_mounted");
+    }
+    if (response == null) {
+      return failure(1, "invalid_argument");
+    }
+    try {
+      return nativeResponse(nativeCalls.complete(nativeSession, response));
+    } catch (RuntimeException | LinkageError error) {
+      return failure(8, "native_bridge_failure");
     }
   }
 
@@ -130,20 +149,20 @@ public final class YewLynxModule extends LynxModule {
   }
 
   @LynxMethod
-  public synchronized String destroySession() {
+  public synchronized byte[] destroySession() {
     if (destroyed) {
-      return ERROR_MODULE_DESTROYED;
+      return failure(2, "module_destroyed");
     }
     return destroySessionLocked();
   }
 
-  private String destroySessionLocked() {
+  private byte[] destroySessionLocked() {
     long session = nativeSession;
     if (session == 0) {
-      return ERROR_NOT_MOUNTED;
+      return failure(2, "not_mounted");
     }
     if (!nativeCalls.isAvailable()) {
-      return ERROR_NATIVE_UNAVAILABLE;
+      return failure(10, "native_bridge_unavailable");
     }
 
     boolean[] consumedOut = new boolean[1];
@@ -152,17 +171,35 @@ public final class YewLynxModule extends LynxModule {
       if (consumedOut[0]) {
         nativeSession = 0;
       }
-      return decode(response);
+      return nativeResponse(response);
     } catch (RuntimeException | LinkageError error) {
       if (consumedOut[0]) {
         nativeSession = 0;
       }
-      return ERROR_NATIVE_FAILURE;
+      return failure(8, "native_bridge_failure");
     }
   }
 
-  private static String decode(byte[] utf8) {
-    return utf8 == null ? ERROR_NATIVE_FAILURE : new String(utf8, StandardCharsets.UTF_8);
+  private static boolean isProtocolId(long value) {
+    return value > 0 && value <= MAX_PROTOCOL_ID;
+  }
+
+  private static byte[] nativeResponse(byte[] response) {
+    return response == null ? failure(8, "native_bridge_failure") : response;
+  }
+
+  private static byte[] failure(int status, String message) {
+    byte[] utf8 = message.getBytes(StandardCharsets.UTF_8);
+    int paddedLength = (utf8.length + 4) & ~3;
+    byte[] response = Arrays.copyOf(FAILURE_PREFIX, FAILURE_PREFIX.length + paddedLength);
+    response[54] = (byte) status;
+    response[55] = (byte) (status >>> 8);
+    response[56] = (byte) utf8.length;
+    response[57] = (byte) (utf8.length >>> 8);
+    response[58] = (byte) (utf8.length >>> 16);
+    response[59] = (byte) (utf8.length >>> 24);
+    System.arraycopy(utf8, 0, response, FAILURE_PREFIX.length, utf8.length);
+    return response;
   }
 
   private static boolean loadNativeLibrary() {
@@ -174,10 +211,11 @@ public final class YewLynxModule extends LynxModule {
     }
   }
 
-  private static native byte[] nativeMount(byte[] rootId, long[] sessionOut);
+  private static native byte[] nativeMount(long rootId, long[] sessionOut);
 
-  private static native byte[] nativeDispatch(
-      long session, byte[] listenerId, byte[] eventName);
+  private static native byte[] nativeDispatchEvent(long session, byte[] event);
+
+  private static native byte[] nativeComplete(long session, byte[] response);
 
   private static native byte[] nativeDestroy(long session, boolean[] consumedOut);
 }

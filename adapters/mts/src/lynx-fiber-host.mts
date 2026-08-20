@@ -59,5 +59,13 @@ export function createLynxFiberHost(parentComponentId) {
     flush(root) {
       __FlushElementTree(root);
     },
+
+    invokeElementApi(name, args) {
+      const operation = globalThis[name];
+      if (typeof operation !== "function") {
+        throw new TypeError(`Element API ${name} is not available`);
+      }
+      return operation(...args);
+    },
   };
 }

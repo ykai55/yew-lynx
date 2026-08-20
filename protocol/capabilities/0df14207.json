@@ -1,0 +1,2671 @@
+{
+  "product": "lynx-element-bridge",
+  "protocolVersion": 2,
+  "lynxRevision": "0df14207cebb060f1bed8de12b64a1119dee8f06",
+  "source": "js_libraries/type-element-api/types/element-api.d.ts",
+  "declarationCount": 107,
+  "nativeOnlyBindingsInScope": false,
+  "capabilities": [
+    {
+      "id": 1,
+      "name": "create_page",
+      "declarationName": "__CreatePage",
+      "declaration": "function __CreatePage(componentId: string, cssId: number, info?: ElementInfo): PageElementRef;",
+      "parameters": [
+        {
+          "name": "componentId",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "cssId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "PageElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 2,
+      "name": "create_component",
+      "declarationName": "__CreateComponent",
+      "declaration": "function __CreateComponent( parentComponentUniId: number, componentId: string, cssId: number, entryName: string, name: string, path: string, config?: Record<string, unknown>, info?: ElementInfo, ): ComponentElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "componentId",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "cssId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "entryName",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "path",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "config",
+          "optional": true,
+          "type": "Record<string, unknown>",
+          "wireType": "Payload"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ComponentElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 3,
+      "name": "create_view",
+      "declarationName": "__CreateView",
+      "declaration": "function __CreateView(parentComponentUniId: number, info?: ElementInfo): ViewElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ViewElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 4,
+      "name": "create_scroll_view",
+      "declarationName": "__CreateScrollView",
+      "declaration": "function __CreateScrollView(parentComponentUniId: number, info?: ElementInfo): ScrollElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ScrollElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 5,
+      "name": "create_text",
+      "declarationName": "__CreateText",
+      "declaration": "function __CreateText(parentComponentUniId: number, info?: ElementInfo): TextElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "TextElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 6,
+      "name": "create_raw_text",
+      "declarationName": "__CreateRawText",
+      "declaration": "function __CreateRawText(text: string, info?: ElementInfo): RawTextElementRef;",
+      "parameters": [
+        {
+          "name": "text",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "RawTextElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 7,
+      "name": "create_image",
+      "declarationName": "__CreateImage",
+      "declaration": "function __CreateImage(parentComponentUniId: number, info?: ElementInfo): ImageElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ImageElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 8,
+      "name": "create_wrapper_element",
+      "declarationName": "__CreateWrapperElement",
+      "declaration": "function __CreateWrapperElement(parentComponentUniId: number): WrapperElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "WrapperElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 9,
+      "name": "create_non_element",
+      "declarationName": "__CreateNonElement",
+      "declaration": "function __CreateNonElement(parentComponentUniId: number): ElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 10,
+      "name": "create_if",
+      "declarationName": "__CreateIf",
+      "declaration": "function __CreateIf(parentComponentUniId: number, info?: ElementInfo): IfElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "IfElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 11,
+      "name": "create_for",
+      "declarationName": "__CreateFor",
+      "declaration": "function __CreateFor(parentComponentUniId: number, info?: ElementInfo): ForElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ForElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 12,
+      "name": "create_block",
+      "declarationName": "__CreateBlock",
+      "declaration": "function __CreateBlock(parentComponentUniId: number, info?: ElementInfo): BlockElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "BlockElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 13,
+      "name": "create_list",
+      "declarationName": "__CreateList",
+      "declaration": "function __CreateList( parentComponentUniId: number, componentAtIndex: ComponentAtIndexCallback, enqueueComponent: EnqueueComponentCallback, info?: ElementInfo, componentAtIndexes?: ComponentAtIndexesCallback, ): ListElementRef;",
+      "parameters": [
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "componentAtIndex",
+          "optional": false,
+          "type": "ComponentAtIndexCallback",
+          "wireType": "uint"
+        },
+        {
+          "name": "enqueueComponent",
+          "optional": false,
+          "type": "EnqueueComponentCallback",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        },
+        {
+          "name": "componentAtIndexes",
+          "optional": true,
+          "type": "ComponentAtIndexesCallback",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ListElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 14,
+      "name": "update_list_callbacks",
+      "declarationName": "__UpdateListCallbacks",
+      "declaration": "function __UpdateListCallbacks( node: ListElementRef, componentAtIndex: ComponentAtIndexCallback, enqueueComponent: EnqueueComponentCallback, componentAtIndexes: ComponentAtIndexesCallback, ): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ListElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "componentAtIndex",
+          "optional": false,
+          "type": "ComponentAtIndexCallback",
+          "wireType": "uint"
+        },
+        {
+          "name": "enqueueComponent",
+          "optional": false,
+          "type": "EnqueueComponentCallback",
+          "wireType": "uint"
+        },
+        {
+          "name": "componentAtIndexes",
+          "optional": false,
+          "type": "ComponentAtIndexesCallback",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 15,
+      "name": "create_element",
+      "declarationName": "__CreateElement",
+      "declaration": "function __CreateElement(tag: string, comParentUniID: number, info?: ElementInfo): ElementRef;",
+      "parameters": [
+        {
+          "name": "tag",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "comParentUniID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "info",
+          "optional": true,
+          "type": "ElementInfo",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 16,
+      "name": "append_element",
+      "declarationName": "__AppendElement",
+      "declaration": "function __AppendElement(parent: ElementRef, current: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "parent",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 17,
+      "name": "remove_element",
+      "declarationName": "__RemoveElement",
+      "declaration": "function __RemoveElement(parent: ElementRef, current: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "parent",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 18,
+      "name": "insert_element_before",
+      "declarationName": "__InsertElementBefore",
+      "declaration": "function __InsertElementBefore(parent: ElementRef, current: ElementRef, marker?: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "parent",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "marker",
+          "optional": true,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 19,
+      "name": "swap_element",
+      "declarationName": "__SwapElement",
+      "declaration": "function __SwapElement(left: ElementRef, right: ElementRef): void;",
+      "parameters": [
+        {
+          "name": "left",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "right",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 20,
+      "name": "replace_element",
+      "declarationName": "__ReplaceElement",
+      "declaration": "function __ReplaceElement(newElement: ElementRef, oldElement: ElementRef): void;",
+      "parameters": [
+        {
+          "name": "newElement",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "oldElement",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 21,
+      "name": "replace_elements",
+      "declarationName": "__ReplaceElements",
+      "declaration": "function __ReplaceElements(parent: ElementRef, insertedChildren: ElementRef | ElementRef[] | undefined, removedChildren: ElementRef | ElementRef[] | undefined): void;",
+      "parameters": [
+        {
+          "name": "parent",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "insertedChildren",
+          "optional": false,
+          "type": "ElementRef | ElementRef[] | undefined",
+          "wireType": "ElementReferences"
+        },
+        {
+          "name": "removedChildren",
+          "optional": false,
+          "type": "ElementRef | ElementRef[] | undefined",
+          "wireType": "ElementReferences"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 22,
+      "name": "get_parent",
+      "declarationName": "__GetParent",
+      "declaration": "function __GetParent(current: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 23,
+      "name": "get_children",
+      "declarationName": "__GetChildren",
+      "declaration": "function __GetChildren(current: ElementRef): ElementRef[];",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef[]",
+      "resultKind": "element_ids",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 24,
+      "name": "first_element",
+      "declarationName": "__FirstElement",
+      "declaration": "function __FirstElement(current: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 25,
+      "name": "last_element",
+      "declarationName": "__LastElement",
+      "declaration": "function __LastElement(current: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 26,
+      "name": "next_element",
+      "declarationName": "__NextElement",
+      "declaration": "function __NextElement(node: ElementRef): ElementRef;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 27,
+      "name": "get_tag",
+      "declarationName": "__GetTag",
+      "declaration": "function __GetTag(node: ElementRef): string;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string",
+      "resultKind": "string",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 28,
+      "name": "set_attribute",
+      "declarationName": "__SetAttribute",
+      "declaration": "function __SetAttribute(current: ElementRef, attrName: string, value: any): void;",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "attrName",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "any",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 29,
+      "name": "add_class",
+      "declarationName": "__AddClass",
+      "declaration": "function __AddClass(current: ElementRef, className: string): void;",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "className",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 30,
+      "name": "set_classes",
+      "declarationName": "__SetClasses",
+      "declaration": "function __SetClasses(current: ElementRef, className: string | undefined): void;",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "className",
+          "optional": false,
+          "type": "string | undefined",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 31,
+      "name": "get_classes",
+      "declarationName": "__GetClasses",
+      "declaration": "function __GetClasses(current: ElementRef): string[];",
+      "parameters": [
+        {
+          "name": "current",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string[]",
+      "resultKind": "strings",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 32,
+      "name": "set_static_style",
+      "declarationName": "__SetStaticStyle",
+      "declaration": "function __SetStaticStyle(node: ElementRef, key: number, value: unknown): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "key",
+          "optional": false,
+          "type": "number",
+          "wireType": "double"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "unknown",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 33,
+      "name": "set_inline_styles",
+      "declarationName": "__SetInlineStyles",
+      "declaration": "function __SetInlineStyles(node: ElementRef, value: unknown): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "unknown",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 34,
+      "name": "get_inline_style",
+      "declarationName": "__GetInlineStyle",
+      "declaration": "function __GetInlineStyle(node: ElementRef, propertyId: number): string;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "propertyId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string",
+      "resultKind": "string",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 35,
+      "name": "get_inline_styles",
+      "declarationName": "__GetInlineStyles",
+      "declaration": "function __GetInlineStyles(node: ElementRef): string;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string",
+      "resultKind": "string",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 36,
+      "name": "set_id",
+      "declarationName": "__SetID",
+      "declaration": "function __SetID(node: ElementRef, id: string | null): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "id",
+          "optional": false,
+          "type": "string | null",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 37,
+      "name": "get_id",
+      "declarationName": "__GetID",
+      "declaration": "function __GetID(node: ElementRef): string;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string",
+      "resultKind": "string",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 38,
+      "name": "set_cssid",
+      "declarationName": "__SetCSSId",
+      "declaration": "function __SetCSSId(node: ElementRef | ElementRef[], cssId: number, entryName?: string): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef | ElementRef[]",
+          "wireType": "ElementReferences"
+        },
+        {
+          "name": "cssId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "entryName",
+          "optional": true,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 39,
+      "name": "add_event",
+      "declarationName": "__AddEvent",
+      "declaration": "function __AddEvent(node: ElementRef, type: string, name: string, func: string | Object | undefined): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "type",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "func",
+          "optional": false,
+          "type": "string | Object | undefined",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 40,
+      "name": "set_events",
+      "declarationName": "__SetEvents",
+      "declaration": "function __SetEvents(node: ElementRef, events: Record<string, unknown>[] | undefined): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "events",
+          "optional": false,
+          "type": "Record<string, unknown>[] | undefined",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 41,
+      "name": "get_event",
+      "declarationName": "__GetEvent",
+      "declaration": "function __GetEvent(node: ElementRef, name: string, type: string): Record<string, any>;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "type",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "Record<string, any>",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 42,
+      "name": "get_events",
+      "declarationName": "__GetEvents",
+      "declaration": "function __GetEvents(node: ElementRef): Record<string, Record<string, any>>;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "Record<string, Record<string, any>>",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 43,
+      "name": "add_event_listener",
+      "declarationName": "__AddEventListener",
+      "declaration": "function __AddEventListener( node: ElementRef, name: string, callback: ElementEventCallback | string, options: ElementEventListenerOptions, ): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "callback",
+          "optional": false,
+          "type": "ElementEventCallback | string",
+          "wireType": "uint"
+        },
+        {
+          "name": "options",
+          "optional": false,
+          "type": "ElementEventListenerOptions",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 44,
+      "name": "remove_event_listener",
+      "declarationName": "__RemoveEventListener",
+      "declaration": "function __RemoveEventListener( node: ElementRef, name: string, callback: ElementEventCallback | string, options: ElementEventListenerOptions, ): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "callback",
+          "optional": false,
+          "type": "ElementEventCallback | string",
+          "wireType": "uint"
+        },
+        {
+          "name": "options",
+          "optional": false,
+          "type": "ElementEventListenerOptions",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 45,
+      "name": "remove_event_listeners",
+      "declarationName": "__RemoveEventListeners",
+      "declaration": "function __RemoveEventListeners(node: ElementRef): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 46,
+      "name": "create_event",
+      "declarationName": "__CreateEvent",
+      "declaration": "function __CreateEvent( type: ElementEventType, name: string, options: ElementEventOptions, detail: Record<string, unknown>, ): ElementEventRef;",
+      "parameters": [
+        {
+          "name": "type",
+          "optional": false,
+          "type": "ElementEventType",
+          "wireType": "Payload"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "options",
+          "optional": false,
+          "type": "ElementEventOptions",
+          "wireType": "Payload"
+        },
+        {
+          "name": "detail",
+          "optional": false,
+          "type": "Record<string, unknown>",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementEventRef",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 47,
+      "name": "dispatch_event",
+      "declarationName": "__DispatchEvent",
+      "declaration": "function __DispatchEvent(node: ElementRef, event: ElementEventRef): boolean;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "event",
+          "optional": false,
+          "type": "ElementEventRef",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "boolean",
+      "resultKind": "boolean",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 48,
+      "name": "stop_propagation",
+      "declarationName": "__StopPropagation",
+      "declaration": "function __StopPropagation(event: ElementEventRef): void;",
+      "parameters": [
+        {
+          "name": "event",
+          "optional": false,
+          "type": "ElementEventRef",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 49,
+      "name": "stop_immediate_propagation",
+      "declarationName": "__StopImmediatePropagation",
+      "declaration": "function __StopImmediatePropagation(event: ElementEventRef): void;",
+      "parameters": [
+        {
+          "name": "event",
+          "optional": false,
+          "type": "ElementEventRef",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 50,
+      "name": "add_dataset",
+      "declarationName": "__AddDataset",
+      "declaration": "function __AddDataset(node: ElementRef, key: string, value: unknown): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "key",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "unknown",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 51,
+      "name": "set_dataset",
+      "declarationName": "__SetDataset",
+      "declaration": "function __SetDataset(node: ElementRef, value: Record<string, unknown> | undefined): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "Record<string, unknown> | undefined",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 52,
+      "name": "get_dataset",
+      "declarationName": "__GetDataset",
+      "declaration": "function __GetDataset(node: ElementRef): Record<string, unknown>;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "Record<string, unknown>",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 53,
+      "name": "get_data_by_key",
+      "declarationName": "__GetDataByKey",
+      "declaration": "function __GetDataByKey(node: ElementRef, key: string): any;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "key",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "any",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 54,
+      "name": "get_element_unique_id",
+      "declarationName": "__GetElementUniqueID",
+      "declaration": "function __GetElementUniqueID(node: ElementRef): number;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "number",
+      "resultKind": "number",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 55,
+      "name": "element_is_equal",
+      "declarationName": "__ElementIsEqual",
+      "declaration": "function __ElementIsEqual(left: ElementRef, right: ElementRef): boolean;",
+      "parameters": [
+        {
+          "name": "left",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "right",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "boolean",
+      "resultKind": "boolean",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 56,
+      "name": "update_component_id",
+      "declarationName": "__UpdateComponentID",
+      "declaration": "function __UpdateComponentID(node: ElementRef, id: string): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "id",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 57,
+      "name": "get_component_id",
+      "declarationName": "__GetComponentID",
+      "declaration": "function __GetComponentID(node: ElementRef): string;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string",
+      "resultKind": "string",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 58,
+      "name": "update_component_info",
+      "declarationName": "__UpdateComponentInfo",
+      "declaration": "function __UpdateComponentInfo( node: ElementRef, params: { componentID?: string; name?: string; path?: string; entry?: string; cssID?: number; config?: Record<string, unknown>; } ): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "params",
+          "optional": false,
+          "type": "{ componentID?: string; name?: string; path?: string; entry?: string; cssID?: number; config?: Record<string, unknown>; }",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 59,
+      "name": "flush_element_tree",
+      "declarationName": "__FlushElementTree",
+      "declaration": "function __FlushElementTree( element?: ElementRef, options?: { triggerLayout?: boolean; triggerDataUpdated?: boolean; operationID?: number; nativeUpdateDataOrder?: number; __lynx_timing_flag?: string; elementID?: number; reloadTemplate?: boolean; listID?: number; pipelineOptions?: Record<string, any>; elementIDs?: number[]; operationIDs?: number[]; asyncFlush?: boolean; onLayoutReady?: () => void; emptyPatch?: boolean; } ): void;",
+      "parameters": [
+        {
+          "name": "element",
+          "optional": true,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "options",
+          "optional": true,
+          "type": "{ triggerLayout?: boolean; triggerDataUpdated?: boolean; operationID?: number; nativeUpdateDataOrder?: number; __lynx_timing_flag?: string; elementID?: number; reloadTemplate?: boolean; listID?: number; pipelineOptions?: Record<string, any>; elementIDs?: number[]; operationIDs?: number[]; asyncFlush?: boolean; onLayoutReady?: () => void; emptyPatch?: boolean; }",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 60,
+      "name": "async_resolve_element",
+      "declarationName": "__AsyncResolveElement",
+      "declaration": "function __AsyncResolveElement(element: ElementRef): void;",
+      "parameters": [
+        {
+          "name": "element",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 61,
+      "name": "async_resolve_subtree",
+      "declarationName": "__AsyncResolveSubtree",
+      "declaration": "function __AsyncResolveSubtree(node: ElementRef): void",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 62,
+      "name": "on_lifecycle_event",
+      "declarationName": "__OnLifecycleEvent",
+      "declaration": "function __OnLifecycleEvent(args: any[]): void;",
+      "parameters": [
+        {
+          "name": "args",
+          "optional": false,
+          "type": "any[]",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 63,
+      "name": "report_error",
+      "declarationName": "_ReportError",
+      "declaration": "function _ReportError( err: Error, info: { errorCode: number; } ): void;",
+      "parameters": [
+        {
+          "name": "err",
+          "optional": false,
+          "type": "Error",
+          "wireType": "Payload"
+        },
+        {
+          "name": "info",
+          "optional": false,
+          "type": "{ errorCode: number; }",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 64,
+      "name": "element_from_binary",
+      "declarationName": "__ElementFromBinary",
+      "declaration": "function __ElementFromBinary(elementTemplateKey: string, parentComponentUniId: number): ElementRef[];",
+      "parameters": [
+        {
+          "name": "elementTemplateKey",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "parentComponentUniId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef[]",
+      "resultKind": "element_ids",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 65,
+      "name": "create_element_template",
+      "declarationName": "__CreateElementTemplate",
+      "declaration": "function __CreateElementTemplate( templateKey: string, bundleUrl: string | null | undefined, attributeSlots: any[] | null | undefined, elementSlots: ElementRef[][] | null | undefined, uid: number | string, options?: Record<string, any> | null | undefined, ): ElementRef;",
+      "parameters": [
+        {
+          "name": "templateKey",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "bundleUrl",
+          "optional": false,
+          "type": "string | null | undefined",
+          "wireType": "string"
+        },
+        {
+          "name": "attributeSlots",
+          "optional": false,
+          "type": "any[] | null | undefined",
+          "wireType": "Payload"
+        },
+        {
+          "name": "elementSlots",
+          "optional": false,
+          "type": "ElementRef[][] | null | undefined",
+          "wireType": "ElementReferences"
+        },
+        {
+          "name": "uid",
+          "optional": false,
+          "type": "number | string",
+          "wireType": "Payload"
+        },
+        {
+          "name": "options",
+          "optional": true,
+          "type": "Record<string, any> | null | undefined",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 66,
+      "name": "create_typed_element_template",
+      "declarationName": "__CreateTypedElementTemplate",
+      "declaration": "function __CreateTypedElementTemplate( tag: string, attributes: Record<string, SerializableValue> | null | undefined, elementSlots: ElementRef[][] | null | undefined, uid: number | string, options?: Record<string, any> | null | undefined, ): ElementRef;",
+      "parameters": [
+        {
+          "name": "tag",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "attributes",
+          "optional": false,
+          "type": "Record<string, SerializableValue> | null | undefined",
+          "wireType": "Payload"
+        },
+        {
+          "name": "elementSlots",
+          "optional": false,
+          "type": "ElementRef[][] | null | undefined",
+          "wireType": "ElementReferences"
+        },
+        {
+          "name": "uid",
+          "optional": false,
+          "type": "number | string",
+          "wireType": "Payload"
+        },
+        {
+          "name": "options",
+          "optional": true,
+          "type": "Record<string, any> | null | undefined",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 67,
+      "name": "set_attribute_of_element_template",
+      "declarationName": "__SetAttributeOfElementTemplate",
+      "declaration": "function __SetAttributeOfElementTemplate( templateInstance: ElementRef, attrSlotIndex: number, value: any, ): void;",
+      "parameters": [
+        {
+          "name": "templateInstance",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "attrSlotIndex",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "any",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 68,
+      "name": "insert_node_to_element_template",
+      "declarationName": "__InsertNodeToElementTemplate",
+      "declaration": "function __InsertNodeToElementTemplate( templateInstance: ElementRef, elementSlotIndex: number, child: ElementRef, referenceChild?: ElementRef | null, ): void;",
+      "parameters": [
+        {
+          "name": "templateInstance",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "elementSlotIndex",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "child",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "referenceChild",
+          "optional": true,
+          "type": "ElementRef | null",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 69,
+      "name": "remove_node_from_element_template",
+      "declarationName": "__RemoveNodeFromElementTemplate",
+      "declaration": "function __RemoveNodeFromElementTemplate( templateInstance: ElementRef, elementSlotIndex: number, child: ElementRef, ): void;",
+      "parameters": [
+        {
+          "name": "templateInstance",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "elementSlotIndex",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "child",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 70,
+      "name": "serialize_element_template",
+      "declarationName": "__SerializeElementTemplate",
+      "declaration": "function __SerializeElementTemplate( templateInstance: ElementRef, ): SerializedTemplateInstance;",
+      "parameters": [
+        {
+          "name": "templateInstance",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "SerializedTemplateInstance",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 71,
+      "name": "get_template_parts",
+      "declarationName": "__GetTemplateParts",
+      "declaration": "function __GetTemplateParts(ele: ElementRef): Record<string, ElementRef>;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "Record<string, ElementRef>",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 72,
+      "name": "clone_element",
+      "declarationName": "__CloneElement",
+      "declaration": "function __CloneElement(ele: ElementRef, options: Record<string, any>): ElementRef;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "options",
+          "optional": false,
+          "type": "Record<string, any>",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 73,
+      "name": "is_template_element",
+      "declarationName": "__IsTemplateElement",
+      "declaration": "function __IsTemplateElement(ele: ElementRef): boolean;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "boolean",
+      "resultKind": "boolean",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 74,
+      "name": "mark_template_element",
+      "declarationName": "__MarkTemplateElement",
+      "declaration": "function __MarkTemplateElement(ele: ElementRef): void;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 75,
+      "name": "mark_part_element",
+      "declarationName": "__MarkPartElement",
+      "declaration": "function __MarkPartElement(ele: ElementRef, key: string): void;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "key",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 76,
+      "name": "query_selector",
+      "declarationName": "__QuerySelector",
+      "declaration": "function __QuerySelector(root: ElementRef, cssSelector: string, params: SelectorParams): ElementRef;",
+      "parameters": [
+        {
+          "name": "root",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "cssSelector",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "params",
+          "optional": false,
+          "type": "SelectorParams",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 77,
+      "name": "query_selector_all",
+      "declarationName": "__QuerySelectorAll",
+      "declaration": "function __QuerySelectorAll(root: ElementRef, cssSelector: string, params: SelectorParams): ElementRef[];",
+      "parameters": [
+        {
+          "name": "root",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "cssSelector",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "params",
+          "optional": false,
+          "type": "SelectorParams",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef[]",
+      "resultKind": "element_ids",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 78,
+      "name": "add_config",
+      "declarationName": "__AddConfig",
+      "declaration": "function __AddConfig(ele: ElementRef, key: string, value: any): void;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "key",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "any",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 79,
+      "name": "set_config",
+      "declarationName": "__SetConfig",
+      "declaration": "function __SetConfig(ele: ElementRef, config: Record<string, any>): void;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "config",
+          "optional": false,
+          "type": "Record<string, any>",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 80,
+      "name": "get_config",
+      "declarationName": "__GetConfig",
+      "declaration": "function __GetConfig(ele: ElementRef): Record<string, unknown>;",
+      "parameters": [
+        {
+          "name": "ele",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "Record<string, unknown>",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 81,
+      "name": "query_component",
+      "declarationName": "__QueryComponent",
+      "declaration": "function __QueryComponent(source: string, callback?: (evalResult: DynamicComponentResult) => void): { evalResult: unknown };",
+      "parameters": [
+        {
+          "name": "source",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "callback",
+          "optional": true,
+          "type": "(evalResult: DynamicComponentResult) => void",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "{ evalResult: unknown }",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 82,
+      "name": "add_inline_style",
+      "declarationName": "__AddInlineStyle",
+      "declaration": "function __AddInlineStyle(e: ElementRef, key: number | string, value: unknown): void;",
+      "parameters": [
+        {
+          "name": "e",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "key",
+          "optional": false,
+          "type": "number | string",
+          "wireType": "Payload"
+        },
+        {
+          "name": "value",
+          "optional": false,
+          "type": "unknown",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 83,
+      "name": "get_attribute_by_name",
+      "declarationName": "__GetAttributeByName",
+      "declaration": "function __GetAttributeByName(e: ElementRef, name: string): any;",
+      "parameters": [
+        {
+          "name": "e",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "any",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 84,
+      "name": "get_attribute_names",
+      "declarationName": "__GetAttributeNames",
+      "declaration": "function __GetAttributeNames(e: ElementRef): string[];",
+      "parameters": [
+        {
+          "name": "e",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "string[]",
+      "resultKind": "strings",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 85,
+      "name": "get_attributes",
+      "declarationName": "__GetAttributes",
+      "declaration": "function __GetAttributes(e: ElementRef): Record<string, any>;",
+      "parameters": [
+        {
+          "name": "e",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "Record<string, any>",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 86,
+      "name": "get_page_element",
+      "declarationName": "__GetPageElement",
+      "declaration": "function __GetPageElement(): ElementRef;",
+      "parameters": [],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 87,
+      "name": "invoke_uimethod",
+      "declarationName": "__InvokeUIMethod",
+      "declaration": "function __InvokeUIMethod(e: ElementRef, method: string, params: Record<string, unknown>, callback: (res: { code: number; data: unknown }) => void): ElementRef[];",
+      "parameters": [
+        {
+          "name": "e",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "method",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "params",
+          "optional": false,
+          "type": "Record<string, unknown>",
+          "wireType": "Payload"
+        },
+        {
+          "name": "callback",
+          "optional": false,
+          "type": "(res: { code: number; data: unknown }) => void",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef[]",
+      "resultKind": "element_ids",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 88,
+      "name": "load_lepus_chunk",
+      "declarationName": "__LoadLepusChunk",
+      "declaration": "function __LoadLepusChunk(name: string, cfg: { chunkType: number }): void;",
+      "parameters": [
+        {
+          "name": "name",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "cfg",
+          "optional": false,
+          "type": "{ chunkType: number }",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 89,
+      "name": "create_gesture_detector",
+      "declarationName": "__CreateGestureDetector",
+      "declaration": "function __CreateGestureDetector( node: ElementRef, gestureID: number, gestureType: number, config: GestureConfig, relationMap: Record<string, number[]> ): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureType",
+          "optional": false,
+          "type": "number",
+          "wireType": "double"
+        },
+        {
+          "name": "config",
+          "optional": false,
+          "type": "GestureConfig",
+          "wireType": "Payload"
+        },
+        {
+          "name": "relationMap",
+          "optional": false,
+          "type": "Record<string, number[]>",
+          "wireType": "[double]"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 90,
+      "name": "set_gesture_detector",
+      "declarationName": "__SetGestureDetector",
+      "declaration": "function __SetGestureDetector( node: ElementRef, gestureID: number, gestureType: number, config: GestureConfig, relationMap: Record<string, number[]> ): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureType",
+          "optional": false,
+          "type": "number",
+          "wireType": "double"
+        },
+        {
+          "name": "config",
+          "optional": false,
+          "type": "GestureConfig",
+          "wireType": "Payload"
+        },
+        {
+          "name": "relationMap",
+          "optional": false,
+          "type": "Record<string, number[]>",
+          "wireType": "[double]"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 91,
+      "name": "remove_gesture_detector",
+      "declarationName": "__RemoveGestureDetector",
+      "declaration": "function __RemoveGestureDetector(node: ElementRef, gestureID: number): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 92,
+      "name": "set_gesture_state",
+      "declarationName": "__SetGestureState",
+      "declaration": "function __SetGestureState(node: ElementRef, gestureID: number, state: number): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "state",
+          "optional": false,
+          "type": "number",
+          "wireType": "double"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 93,
+      "name": "consume_gesture",
+      "declarationName": "__ConsumeGesture",
+      "declaration": "function __ConsumeGesture(node: ElementRef, gestureID: number, options: Record<string, boolean>): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "gestureID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "options",
+          "optional": false,
+          "type": "Record<string, boolean>",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 94,
+      "name": "generate_pipeline_options",
+      "declarationName": "__GeneratePipelineOptions",
+      "declaration": "function __GeneratePipelineOptions(): Record<string, any>;",
+      "parameters": [],
+      "returnType": "Record<string, any>",
+      "resultKind": "payload",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 95,
+      "name": "on_pipeline_start",
+      "declarationName": "__OnPipelineStart",
+      "declaration": "function __OnPipelineStart(pipeLineId: string, pipeLineOrigin: string): void;",
+      "parameters": [
+        {
+          "name": "pipeLineId",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "pipeLineOrigin",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 96,
+      "name": "bind_pipeline_idwith_timing_flag",
+      "declarationName": "__BindPipelineIDWithTimingFlag",
+      "declaration": "function __BindPipelineIDWithTimingFlag(pipeLineId: string, timingFlag: string): void;",
+      "parameters": [
+        {
+          "name": "pipeLineId",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "timingFlag",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 97,
+      "name": "mark_timing",
+      "declarationName": "__MarkTiming",
+      "declaration": "function __MarkTiming(pipeLineId: string, timingFlag: string): void;",
+      "parameters": [
+        {
+          "name": "pipeLineId",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        },
+        {
+          "name": "timingFlag",
+          "optional": false,
+          "type": "string",
+          "wireType": "string"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 98,
+      "name": "add_timing_listener",
+      "declarationName": "__AddTimingListener",
+      "declaration": "function __AddTimingListener(): void;",
+      "parameters": [],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": false,
+      "android": "unsupported"
+    },
+    {
+      "id": 99,
+      "name": "set_lepus_init_data",
+      "declarationName": "__SetLepusInitData",
+      "declaration": "function __SetLepusInitData(initData: Object): void;",
+      "parameters": [
+        {
+          "name": "initData",
+          "optional": false,
+          "type": "Object",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 100,
+      "name": "get_element_by_unique_id",
+      "declarationName": "__GetElementByUniqueID",
+      "declaration": "function __GetElementByUniqueID(elementId: number): ElementRef | undefined;",
+      "parameters": [
+        {
+          "name": "elementId",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "ElementRef | undefined",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 101,
+      "name": "update_if_node_index",
+      "declarationName": "__UpdateIfNodeIndex",
+      "declaration": "function __UpdateIfNodeIndex(node: IfElementRef, ifIndex: number): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "IfElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "ifIndex",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 102,
+      "name": "update_for_child_count",
+      "declarationName": "__UpdateForChildCount",
+      "declaration": "function __UpdateForChildCount(node: ForElementRef, childCount: number): void;",
+      "parameters": [
+        {
+          "name": "node",
+          "optional": false,
+          "type": "ForElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "childCount",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 103,
+      "name": "create_style_object",
+      "declarationName": "__CreateStyleObject",
+      "declaration": "function __CreateStyleObject(styleObject: Object): StyleObjectRef;",
+      "parameters": [
+        {
+          "name": "styleObject",
+          "optional": false,
+          "type": "Object",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "StyleObjectRef",
+      "resultKind": "payload",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 104,
+      "name": "set_style_object",
+      "declarationName": "__SetStyleObject",
+      "declaration": "function __SetStyleObject(elementRef: ElementRef, styleObjects: Array<Object>): void;",
+      "parameters": [
+        {
+          "name": "elementRef",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "styleObjects",
+          "optional": false,
+          "type": "Array<Object>",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 105,
+      "name": "update_style_object",
+      "declarationName": "__UpdateStyleObject",
+      "declaration": "function __UpdateStyleObject(styleObjectRef: StyleObjectRef, styleObject: Object): void;",
+      "parameters": [
+        {
+          "name": "styleObjectRef",
+          "optional": false,
+          "type": "StyleObjectRef",
+          "wireType": "Payload"
+        },
+        {
+          "name": "styleObject",
+          "optional": false,
+          "type": "Object",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 106,
+      "name": "element_animate",
+      "declarationName": "__ElementAnimate",
+      "declaration": "function __ElementAnimate( element: ElementRef, args: [ operation: AnimationOperation, // Animation operation type name: string, // Animation name keyframes: Keyframe[], // Array of keyframes options?: AnimationTimingOptions, // Timing and configuration options ] | [ operation: AnimationOperation.PAUSE | AnimationOperation.PLAY | AnimationOperation.CANCEL, name: string, // Animation name to pause/play ], ): void;",
+      "parameters": [
+        {
+          "name": "element",
+          "optional": false,
+          "type": "ElementRef",
+          "wireType": "uint"
+        },
+        {
+          "name": "args",
+          "optional": false,
+          "type": "[ operation: AnimationOperation, // Animation operation type name: string, // Animation name keyframes: Keyframe[], // Array of keyframes options?: AnimationTimingOptions, // Timing and configuration options ] | [ operation: AnimationOperation.PAUSE | AnimationOperation.PLAY | AnimationOperation.CANCEL, name: string, // Animation name to pause/play ]",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "void",
+      "resultKind": "void",
+      "fiberBinding": true,
+      "android": "available"
+    },
+    {
+      "id": 107,
+      "name": "create_frame",
+      "declarationName": "__CreateFrame",
+      "declaration": "function __CreateFrame(comParentUniID: number, options?: Record<string, unknown>): ElementRef;",
+      "parameters": [
+        {
+          "name": "comParentUniID",
+          "optional": false,
+          "type": "number",
+          "wireType": "uint"
+        },
+        {
+          "name": "options",
+          "optional": true,
+          "type": "Record<string, unknown>",
+          "wireType": "Payload"
+        }
+      ],
+      "returnType": "ElementRef",
+      "resultKind": "element_id",
+      "fiberBinding": true,
+      "android": "available"
+    }
+  ]
+}

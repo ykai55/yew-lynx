@@ -282,14 +282,15 @@ def main() -> int:
         screenshot(serial, evidence / "after-activity-recreation.png")
 
         launch(serial)
-        wait_for_page(serial, landscape=alternate_rotation in {1, 3})
+        # OEMs may reset the display rotation while force-stopping the process.
+        wait_for_page(serial)
         screenshot(serial, evidence / "after-force-stop-reopen.png")
 
         for cycle in range(1, args.cycles + 1):
             launch(serial)
             screen, button = wait_for_page(serial)
             tap_increment(serial, screen, button)
-            rotation = initial_rotation if cycle % 2 else alternate_rotation
+            rotation = 0 if screen[0] > screen[1] else 1
             set_rotation(serial, rotation)
             wait_for_page(serial, landscape=rotation in {1, 3})
 

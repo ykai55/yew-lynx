@@ -40,12 +40,34 @@ Copyright (c) 2024 TikTok Inc.
 All rights reserved.
 ```
 
-The exact Lynx source revision is included as the `third_party/lynx` submodule
-and built without source patches. Its six Android modules are published only to
-an ignored local Maven repository. `npm ci` also downloads the published
+The exact Lynx source revision is included as the `third_party/lynx` submodule.
+`patches/lynx/` contains the minimal read-only ByteArray exposure used by the
+binary MTS transport. Its six Android modules are published only to an ignored
+local Maven repository. `npm ci` also downloads the published
 `@lynx-js/tasm` package for development and verification. That package contains
 Apache-2.0 Lynx code and platform native binary modules used to encode and
 decode the generated template bundle.
+
+## Dioxus
+
+- Project: Dioxus
+- Upstream: <https://github.com/DioxusLabs/dioxus>
+- Runtime crate: `dioxus-core` 0.7.10
+- License: MIT OR Apache-2.0
+- License files: <https://github.com/DioxusLabs/dioxus/tree/v0.7.10/LICENSES>
+
+The Dioxus adapter and counter use the framework's renderer-neutral core API.
+
+## FlatBuffers
+
+- Project: FlatBuffers
+- Upstream: <https://github.com/google/flatbuffers>
+- Compiler and runtime version: 25.2.10
+- License: Apache-2.0
+- License file: <https://github.com/google/flatbuffers/blob/v25.2.10/LICENSE.txt>
+
+The locked compiler generates the committed Rust, TypeScript, and Java protocol
+bindings. Rust and npm consume the matching runtime version.
 
 ## PrimJS
 
