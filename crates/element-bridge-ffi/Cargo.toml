@@ -1,0 +1,12 @@
+[package]
+name = "lynx-element-bridge-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lynx-element-bridge-core.workspace = true
+lynx-element-bridge-wire.workspace = true

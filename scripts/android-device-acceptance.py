@@ -13,7 +13,7 @@ from pathlib import Path
 
 PACKAGE = "com.yew.lynx.example"
 COMPONENT = f"{PACKAGE}/.MainActivity"
-TAG = "YewLynxExample"
+TAG = "LynxElementBridge"
 
 
 def adb(serial: str, *arguments: str, binary: bool = False):
@@ -231,7 +231,8 @@ def set_rotation(serial: str, rotation: int) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Yew-Lynx Android physical-device acceptance")
+    parser = argparse.ArgumentParser(description="Run Lynx Element Bridge device acceptance")
+    parser.add_argument("--backend", choices=("yew", "dioxus"), default="yew")
     parser.add_argument("--serial", required=True, help="ADB serial; never written to evidence")
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -319,8 +320,12 @@ def main() -> int:
         crash_markers = ("FATAL EXCEPTION", "Fatal signal", "native_bridge_failure")
         if any(marker in relevant_logs for marker in crash_markers):
             raise RuntimeError("Crash or native bridge failure found in logcat evidence")
+        backend_marker = f"LynxElementBridge backend={args.backend}"
+        if backend_marker not in relevant_logs:
+            raise RuntimeError(f"Expected backend identity was not logged: {backend_marker}")
 
         summary = {
+            "backend": args.backend,
             "apk_sha256": hashlib.sha256(apk.read_bytes()).hexdigest(),
             "device_abi": abi,
             "device_api": api,

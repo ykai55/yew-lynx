@@ -43,28 +43,33 @@ contains the host-independent native renderer patch.
 | Element API | 107 typed command tables generated from the pinned declaration package |
 | Capabilities | 100 Android capabilities available; 7 gaps reported as `UNSUPPORTED` |
 | Core | Session negotiation, owner-thread enforcement, opaque 32-bit IDs, ordered batches, Result/Event channels, host fake, and deterministic destroy |
-| Yew | Real patched `NativeRenderer` adapter and Android counter staticlib |
-| Dioxus | Real `dioxus-core` `VirtualDom` counter through the `WriteMutations` adapter |
+| Yew | Real patched `NativeRenderer` adapter and selectable Android counter staticlib |
+| Dioxus | Real `VirtualDom`, exact live-event registry, public C ABI, and selectable Android staticlib |
 | MTS | ByteArray verifier/decoder, typed Element dispatcher, Fiber host, Result return path, and lifecycle broker |
-| Android | Numeric ID and `byte[]` Java/JNI boundary with Java, JNI, and real staticlib host checks |
+| Android | Framework-neutral module/JNI host with explicit `yew|dioxus` builds, isolated artifacts, and dual real-staticlib checks |
 | Lynx patch | Clean-apply gate plus focused upstream-style LepusNG ByteArray test |
 
-The earlier protocol-v1 JSON recorder has been removed. The v2 Yew counter has
-passed the repository's physical-device acceptance flow on an Android 15/API 35
-arm64 device, including mount, tap, recreation, force-stop/reopen, and repeated
-teardown. Dioxus device acceptance has not yet been run.
+The earlier protocol-v1 JSON recorder has been removed. Automated gates cover
+both backend static libraries and isolated arm64 APK assembly. Both v2 counters
+have passed the repository's Android 15/API 35 arm64 physical-device flow,
+including mount, tap, Activity recreation, force-stop/reopen, and repeated
+teardown. See [`COMPATIBILITY.md`](COMPATIBILITY.md) for the exact devices and
+APK hashes.
 
 ## Repository Layout
 
 - `crates/element-bridge-core/`: framework-neutral domain model, validation,
   capability negotiation, result/event types, and in-memory host fake.
 - `crates/element-bridge-wire/`: verified FlatBuffers v2 encoding and decoding.
+- `crates/element-bridge-ffi/`: backend-neutral owner-thread session, panic,
+  poisoning, completion, consumed-token, and returned-buffer shell.
 - `adapters/yew/`: patched Yew `NativeRendererBackend` adapter.
 - `adapters/dioxus/`: Dioxus 0.7.10 `WriteMutations` adapter.
 - `crates/adapter-conformance/`: identical Yew/Dioxus mount, event, query,
   capability-gap, and destroy scenarios.
-- `examples/counter/`: Yew counter staticlib and Android C ABI.
-- `examples/dioxus-counter/`: real Dioxus `VirtualDom` counter fixture.
+- `include/lynx_element_bridge.h`: public framework-neutral C ABI.
+- `examples/counter/`: Yew counter staticlib and thin legacy ABI aliases.
+- `examples/dioxus-counter/`: real Dioxus `VirtualDom` counter staticlib.
 - `adapters/mts/`: protocol reader/writer, typed dispatcher, Fiber host, shell,
   and mock-host tests.
 - `adapters/android/`: public `LynxModule`, JNI bridge, and integration checks.
@@ -125,14 +130,17 @@ The verification entry point checks:
 4. The shared Yew/Dioxus conformance scenario and real framework counters.
 5. MTS bundle builds, ByteArray/FlatBuffers decoding, typed dispatch, Result
    return, lifecycle, and mock Fiber behavior.
-6. Android Java lifecycle/schema checks, JNI binary round trips, a real host
-   staticlib smoke test, and Android arm64 Rust compilation.
+6. Android Java lifecycle/schema checks, JNI binary round trips, real staticlib
+   smoke tests for both backends, and both Android arm64 Rust builds.
 7. Focused patched-Yew renderer and macro tests.
 
-For the complete Android build, use `./scripts/build-android.sh`. It temporarily
-applies the pinned Lynx patch to a verified clean submodule, builds the required
-AARs, and removes the patch on exit. JDK 11, Android SDK 33, build-tools 33.0.1,
-NDKs 21.1.6352462 and 25.2.9519653, and CMake 3.22.1 are required.
+For the complete Android build, use `./scripts/build-android.sh` for the default
+Yew backend or `./scripts/build-android.sh --backend dioxus`. Backend-specific
+Rust staging, CMake output, APK names, and build evidence prevent cache reuse
+across frameworks. The script temporarily applies the pinned Lynx patch to a
+verified clean submodule, builds the required AARs, and removes the patch on
+exit. JDK 11, Android SDK 33, build-tools 33.0.1, NDKs 21.1.6352462 and
+25.2.9519653, and CMake 3.22.1 are required.
 
 ## Compatibility
 

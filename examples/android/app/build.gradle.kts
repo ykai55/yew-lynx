@@ -6,13 +6,32 @@ plugins {
 val repositoryRoot = rootProject.projectDir.parentFile.parentFile
 val androidAdapterDir = repositoryRoot.resolve("adapters/android")
 val mtsAdapterDir = repositoryRoot.resolve("adapters/mts")
+val elementBridgeBackend = providers.gradleProperty("lynxElementBridgeBackend")
+    .orElse("yew")
+    .get()
+require(elementBridgeBackend == "yew" || elementBridgeBackend == "dioxus") {
+    "lynxElementBridgeBackend must be yew or dioxus"
+}
+val rustPackage = if (elementBridgeBackend == "yew") {
+    "yew-lynx-counter"
+} else {
+    "lynx-element-bridge-dioxus-counter"
+}
+val rustArchiveName = if (elementBridgeBackend == "yew") {
+    "libyew_lynx_counter.a"
+} else {
+    "liblynx_element_bridge_dioxus_counter.a"
+}
 val rustArchive = repositoryRoot.resolve(
-    "target/aarch64-linux-android/release/libyew_lynx_counter.a"
+    "target/aarch64-linux-android/release/$rustArchiveName"
 )
-val stagedRustDirectory = repositoryRoot.resolve("target/android-libs")
-val generatedAssetsDirectory = buildDir.resolve("generated/yewLynxAssets")
-val templateBundle = mtsAdapterDir.resolve("dist/yew-lynx-counter.lynx.bundle")
-val offlineBuild = providers.gradleProperty("yewLynxOffline").map(String::toBoolean).orElse(false)
+val stagedRustDirectory = repositoryRoot.resolve("target/android-libs/$elementBridgeBackend")
+buildDir = repositoryRoot.resolve("target/android-build/$elementBridgeBackend/app")
+val generatedAssetsDirectory = buildDir.resolve("generated/lynxElementBridgeAssets")
+val templateBundle = mtsAdapterDir.resolve("dist/lynx-element-bridge-counter.lynx.bundle")
+val offlineBuild = providers.gradleProperty("lynxElementBridgeOffline")
+    .map(String::toBoolean)
+    .orElse(false)
 
 android {
     namespace = "com.yew.lynx.example"
@@ -32,9 +51,10 @@ android {
         }
         externalNativeBuild {
             cmake {
-                arguments.add(
-                    "-DYEW_LYNX_RUST_LIB_DIR=${stagedRustDirectory.absolutePath}"
-                )
+                arguments.addAll(listOf(
+                    "-DLYNX_ELEMENT_BRIDGE_RUST_LIB_DIR=${stagedRustDirectory.absolutePath}",
+                    "-DLYNX_ELEMENT_BRIDGE_BACKEND=$elementBridgeBackend"
+                ))
             }
         }
     }
@@ -57,6 +77,9 @@ android {
         cmake {
             path = androidAdapterDir.resolve("CMakeLists.txt")
             version = "3.22.1"
+            buildStagingDirectory = repositoryRoot.resolve(
+                "target/android-cxx/$elementBridgeBackend"
+            )
         }
     }
 
@@ -77,7 +100,7 @@ val installMtsDependencies by tasks.registering(Exec::class) {
     outputs.upToDateWhen { !offlineBuild.get() }
 }
 
-val buildYewLynxTemplate by tasks.registering(Exec::class) {
+val buildLynxElementBridgeTemplate by tasks.registering(Exec::class) {
     dependsOn(installMtsDependencies)
     workingDir(mtsAdapterDir)
     commandLine("npm", "run", "build")
@@ -87,13 +110,13 @@ val buildYewLynxTemplate by tasks.registering(Exec::class) {
     outputs.file(templateBundle)
 }
 
-val stageYewLynxTemplate by tasks.registering(Copy::class) {
-    dependsOn(buildYewLynxTemplate)
+val stageLynxElementBridgeTemplate by tasks.registering(Copy::class) {
+    dependsOn(buildLynxElementBridgeTemplate)
     from(templateBundle)
     into(generatedAssetsDirectory)
 }
 
-val buildYewLynxRustArm64 by tasks.registering(Exec::class) {
+val buildLynxElementBridgeRustArm64 by tasks.registering(Exec::class) {
     workingDir(repositoryRoot)
     val command = mutableListOf(
         "cargo",
@@ -109,23 +132,24 @@ val buildYewLynxRustArm64 by tasks.registering(Exec::class) {
             "--target",
             "aarch64-linux-android",
             "--package",
-            "yew-lynx-counter"
+            rustPackage
         )
     )
     commandLine(command)
 }
 
-val stageYewLynxRustArm64 by tasks.registering(Copy::class) {
-    dependsOn(buildYewLynxRustArm64)
+val stageLynxElementBridgeRustArm64 by tasks.registering(Copy::class) {
+    dependsOn(buildLynxElementBridgeRustArm64)
     from(rustArchive)
     into(stagedRustDirectory.resolve("arm64-v8a"))
+    rename { "liblynx_element_bridge_backend.a" }
 }
 
 tasks.named("preBuild") {
-    dependsOn(stageYewLynxTemplate, stageYewLynxRustArm64)
+    dependsOn(stageLynxElementBridgeTemplate, stageLynxElementBridgeRustArm64)
 }
 tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
-    dependsOn(stageYewLynxRustArm64)
+    dependsOn(stageLynxElementBridgeRustArm64)
 }
 
 dependencies {

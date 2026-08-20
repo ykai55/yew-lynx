@@ -1,4 +1,4 @@
-package com.yew.lynx;
+package com.lynx.elementbridge;
 
 import android.content.Context;
 import com.lynx.jsbridge.LynxMethod;
@@ -8,10 +8,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-public final class YewLynxModuleTest {
+public final class LynxElementBridgeModuleTest {
   private static final byte[] SUCCESS = {20, 0, 0, 0, 76, 69, 66, 50};
 
-  private static final class FakeNativeCalls implements YewLynxModule.NativeCalls {
+  private static final class FakeNativeCalls implements LynxElementBridgeModule.NativeCalls {
     final List<String> calls = new ArrayList<>();
     boolean available = true;
     boolean consumeOnDestroy = true;
@@ -38,7 +38,7 @@ public final class YewLynxModuleTest {
     }
 
     @Override
-    public byte[] complete(long session, byte[] response) {
+    public byte[] completeBatch(long session, byte[] response) {
       calls.add("complete:" + session + ":" + response.length);
       return response;
     }
@@ -64,11 +64,11 @@ public final class YewLynxModuleTest {
   }
 
   private static void methodSchemaUsesByteArraysAndNumericIds() throws Exception {
-    Method mount = YewLynxModule.class.getMethod("mount", long.class);
-    Method dispatchEvent = YewLynxModule.class.getMethod("dispatchEvent", byte[].class);
-    Method completeBatch = YewLynxModule.class.getMethod("completeBatch", byte[].class);
-    Method destroySession = YewLynxModule.class.getMethod("destroySession");
-    Method destroy = YewLynxModule.class.getMethod("destroy");
+    Method mount = LynxElementBridgeModule.class.getMethod("mount", long.class);
+    Method dispatchEvent = LynxElementBridgeModule.class.getMethod("dispatchEvent", byte[].class);
+    Method completeBatch = LynxElementBridgeModule.class.getMethod("completeBatch", byte[].class);
+    Method destroySession = LynxElementBridgeModule.class.getMethod("destroySession");
+    Method destroy = LynxElementBridgeModule.class.getMethod("destroy");
 
     assertEquals(byte[].class, mount.getReturnType());
     assertEquals(byte[].class, dispatchEvent.getReturnType());
@@ -84,7 +84,7 @@ public final class YewLynxModuleTest {
 
   private static void numericIdsCrossJavaUnchanged() {
     FakeNativeCalls nativeCalls = new FakeNativeCalls();
-    YewLynxModule module = new YewLynxModule(new Context(), nativeCalls);
+    LynxElementBridgeModule module = new LynxElementBridgeModule(new Context(), nativeCalls);
 
     assertArrayEquals(SUCCESS, module.mount(0xffff_ffffL));
     assertArrayEquals(SUCCESS, module.dispatchEvent(SUCCESS));
@@ -97,7 +97,7 @@ public final class YewLynxModuleTest {
 
   private static void destroySessionPermitsRemountOnlyWhenConsumed() {
     FakeNativeCalls consumed = new FakeNativeCalls();
-    YewLynxModule remountable = new YewLynxModule(new Context(), consumed);
+    LynxElementBridgeModule remountable = new LynxElementBridgeModule(new Context(), consumed);
     assertArrayEquals(SUCCESS, remountable.mount(1));
     assertArrayEquals(SUCCESS, remountable.destroySession());
     assertArrayEquals(SUCCESS, remountable.mount(1));
@@ -105,7 +105,7 @@ public final class YewLynxModuleTest {
     FakeNativeCalls retained = new FakeNativeCalls();
     retained.consumeOnDestroy = false;
     retained.destroyResponse = failure(3, "wrong_thread");
-    YewLynxModule stillMounted = new YewLynxModule(new Context(), retained);
+    LynxElementBridgeModule stillMounted = new LynxElementBridgeModule(new Context(), retained);
     assertArrayEquals(SUCCESS, stillMounted.mount(1));
     assertArrayEquals(retained.destroyResponse, stillMounted.destroySession());
     assertFailure(stillMounted.mount(1), 1, "already_mounted");
@@ -115,7 +115,7 @@ public final class YewLynxModuleTest {
     FakeNativeCalls nativeCalls = new FakeNativeCalls();
     nativeCalls.throwOnDestroy = true;
     nativeCalls.consumeOnDestroy = true;
-    YewLynxModule module = new YewLynxModule(new Context(), nativeCalls);
+    LynxElementBridgeModule module = new LynxElementBridgeModule(new Context(), nativeCalls);
 
     assertArrayEquals(SUCCESS, module.mount(1));
     assertFailure(module.destroySession(), 8, "native_bridge_failure");
@@ -124,7 +124,7 @@ public final class YewLynxModuleTest {
 
   private static void inheritedDestroyPermanentlyDestroysTheModule() {
     FakeNativeCalls nativeCalls = new FakeNativeCalls();
-    YewLynxModule module = new YewLynxModule(new Context(), nativeCalls);
+    LynxElementBridgeModule module = new LynxElementBridgeModule(new Context(), nativeCalls);
     assertArrayEquals(SUCCESS, module.mount(1));
     module.destroy();
 
@@ -139,10 +139,11 @@ public final class YewLynxModuleTest {
   private static void fallbacksAreFlatBuffersV2ResultEnvelopes() {
     FakeNativeCalls unavailable = new FakeNativeCalls();
     unavailable.available = false;
-    assertFailure(new YewLynxModule(new Context(), unavailable).mount(1),
+    assertFailure(new LynxElementBridgeModule(new Context(), unavailable).mount(1),
         10, "native_bridge_unavailable");
 
-    YewLynxModule module = new YewLynxModule(new Context(), new FakeNativeCalls());
+    LynxElementBridgeModule module =
+        new LynxElementBridgeModule(new Context(), new FakeNativeCalls());
     assertFailure(module.mount(0), 1, "invalid_argument");
     assertFailure(module.mount(0x1_0000_0000L), 1, "invalid_argument");
     assertFailure(module.dispatchEvent(SUCCESS), 2, "not_mounted");
@@ -166,7 +167,7 @@ public final class YewLynxModuleTest {
   private static byte[] failure(int status, String message) {
     FakeNativeCalls nativeCalls = new FakeNativeCalls();
     nativeCalls.available = false;
-    byte[] response = new YewLynxModule(new Context(), nativeCalls).mount(1);
+    byte[] response = new LynxElementBridgeModule(new Context(), nativeCalls).mount(1);
     response[54] = (byte) status;
     byte[] utf8 = message.getBytes(StandardCharsets.UTF_8);
     response = Arrays.copyOf(response, 60 + ((utf8.length + 4) & ~3));

@@ -1,35 +1,40 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-project(yew_lynx_android LANGUAGES C CXX)
+project(lynx_element_bridge_android LANGUAGES C CXX)
 
-set(YEW_LYNX_RUST_LIB_DIR "" CACHE PATH
-    "Directory containing ABI subdirectories with libyew_lynx_counter.a")
-if(NOT YEW_LYNX_RUST_LIB_DIR)
-  message(FATAL_ERROR "YEW_LYNX_RUST_LIB_DIR must point to the Rust archive directory")
+set(LYNX_ELEMENT_BRIDGE_RUST_LIB_DIR "" CACHE PATH
+    "Backend-specific directory containing ABI subdirectories")
+set(LYNX_ELEMENT_BRIDGE_BACKEND "" CACHE STRING "Selected Rust backend")
+if(NOT LYNX_ELEMENT_BRIDGE_RUST_LIB_DIR)
+  message(FATAL_ERROR
+      "LYNX_ELEMENT_BRIDGE_RUST_LIB_DIR must point to the Rust archive directory")
 endif()
 if(NOT ANDROID_ABI)
-  message(FATAL_ERROR "The yew-lynx JNI bridge must be built with the Android NDK")
+  message(FATAL_ERROR "The Lynx Element Bridge JNI must be built with the Android NDK")
+endif()
+if(NOT LYNX_ELEMENT_BRIDGE_BACKEND MATCHES "^(yew|dioxus)$")
+  message(FATAL_ERROR "LYNX_ELEMENT_BRIDGE_BACKEND must be yew or dioxus")
 endif()
 
-add_library(yew_lynx_counter STATIC IMPORTED)
-set_target_properties(yew_lynx_counter PROPERTIES
+add_library(lynx_element_bridge_backend STATIC IMPORTED)
+set_target_properties(lynx_element_bridge_backend PROPERTIES
   IMPORTED_LOCATION
-      "${YEW_LYNX_RUST_LIB_DIR}/${ANDROID_ABI}/libyew_lynx_counter.a")
+      "${LYNX_ELEMENT_BRIDGE_RUST_LIB_DIR}/${ANDROID_ABI}/liblynx_element_bridge_backend.a")
 
-add_library(yew_lynx_bridge SHARED
-  src/main/cpp/yew_lynx_jni.cc)
+add_library(lynx_element_bridge SHARED
+  src/main/cpp/lynx_element_bridge_jni.cc)
 
-target_include_directories(yew_lynx_bridge PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/counter/include")
-target_compile_features(yew_lynx_bridge PRIVATE cxx_std_17)
-target_compile_options(yew_lynx_bridge PRIVATE
+target_include_directories(lynx_element_bridge PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
+target_compile_features(lynx_element_bridge PRIVATE cxx_std_17)
+target_compile_options(lynx_element_bridge PRIVATE
   -Wall
   -Wextra
   -Werror)
 # Rust 1.85 reports these for aarch64-linux-android via
 # `cargo rustc -- --print native-static-libs`; keep their link order.
-target_link_libraries(yew_lynx_bridge PRIVATE
-  yew_lynx_counter
+target_link_libraries(lynx_element_bridge PRIVATE
+  lynx_element_bridge_backend
   dl
   log
   unwind

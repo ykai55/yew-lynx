@@ -10,7 +10,7 @@ import com.lynx.tasm.LynxView
 import com.lynx.tasm.LynxViewBuilder
 import com.lynx.tasm.LynxViewClient
 import com.lynx.tasm.ThreadStrategyForRendering
-import com.yew.lynx.YewLynxModule
+import com.lynx.elementbridge.LynxElementBridgeModule
 
 class MainActivity : Activity() {
     private var lynxView: LynxView? = null
@@ -18,13 +18,17 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "MainActivity onCreate")
+        Log.i(TAG, "LynxElementBridge backend=${LynxElementBridgeModule.backendName()}")
 
         val template = assets.open(TEMPLATE_ASSET).use { it.readBytes() }
         val builder = LynxViewBuilder().apply {
             setEnableJSRuntime(false)
             setEnableMTSModule(true)
             setThreadStrategyForRendering(ThreadStrategyForRendering.ALL_ON_UI)
-            registerModule(YewLynxModule.NAME, YewLynxModule::class.java)
+            registerModule(
+                LynxElementBridgeModule.NAME,
+                LynxElementBridgeModule::class.java,
+            )
         }
         val view = builder.build(this).apply {
             setBackgroundColor(Color.rgb(245, 242, 234))
@@ -64,7 +68,7 @@ class MainActivity : Activity() {
     }
 
     private companion object {
-        const val TAG = "YewLynxExample"
-        const val TEMPLATE_ASSET = "yew-lynx-counter.lynx.bundle"
+        const val TAG = "LynxElementBridge"
+        const val TEMPLATE_ASSET = "lynx-element-bridge-counter.lynx.bundle"
     }
 }

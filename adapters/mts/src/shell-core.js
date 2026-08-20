@@ -25,7 +25,7 @@ function hasNonEmptyCache(cacheData) {
   return true;
 }
 
-export function installYewLynxShell({
+export function installLynxElementBridgeShell({
   lynxApi,
   createPage,
   getElementUniqueId,
@@ -53,26 +53,26 @@ export function installYewLynxShell({
 
   function mount(renderOptions, suppressMountFlush) {
     if (activeBroker !== null) {
-      throw new Error("YewLynx broker is already mounted");
+      throw new Error("LynxElementBridge broker is already mounted");
     }
     if (renderOptions.initPage !== null && renderOptions.initPage !== undefined) {
-      throw new Error("YewLynx does not support cached or SSR initPage roots");
+      throw new Error("LynxElementBridge does not support cached or SSR initPage roots");
     }
     if (hasNonEmptyCache(renderOptions.cacheData)) {
-      throw new Error("YewLynx does not support cached render data");
+      throw new Error("LynxElementBridge does not support cached render data");
     }
     if (hasNonEmptyCache(renderOptions.hydrateMap)) {
-      throw new Error("YewLynx does not support SSR hydration");
+      throw new Error("LynxElementBridge does not support SSR hydration");
     }
 
     const page = createPage("0", 0);
     const parentComponentId = getElementUniqueId(page);
     if (!Number.isSafeInteger(parentComponentId) || parentComponentId <= 0) {
-      throw new Error("YewLynx page has an unsafe parent component ID");
+      throw new Error("LynxElementBridge page has an unsafe parent component ID");
     }
     const candidate = brokerFactory({
       host: createHost(parentComponentId),
-      nativeModule: lynxApi.module("YewLynx"),
+      nativeModule: lynxApi.module("LynxElementBridge"),
       root: page,
       rootId: ROOT_ID,
       suppressMountFlush,
@@ -107,7 +107,7 @@ export function installYewLynxShell({
   });
   engine.addEventListener("__RemoveComponents", destroyActiveBrokerForLifecycle);
   engine.addEventListener("__SSRHydrate", () => {
-    throw new Error("YewLynx does not support SSR hydration");
+    throw new Error("LynxElementBridge does not support SSR hydration");
   });
   lynxApi.getNative().addEventListener("__DestroyLifetime", destroyActiveBrokerForLifecycle);
 }

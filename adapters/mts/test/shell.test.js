@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { installYewLynxShell } from "../src/shell-core.js";
+import { installLynxElementBridgeShell } from "../src/shell-core.js";
 
 function createEmitter() {
   const listeners = new Map();
@@ -33,7 +33,7 @@ function createShellHarness(brokers) {
       calls.push(["reportError", error]);
     },
   };
-  installYewLynxShell({
+  installLynxElementBridgeShell({
     lynxApi,
     createPage(componentId, cssId) {
       calls.push(["createPage", componentId, cssId]);
@@ -91,7 +91,10 @@ test("shell mounts with a fresh page ID and publishes only the mounted broker", 
   assert.equal(options.host.parentId, 73);
   assert.equal(options.rootId, 1);
   assert.equal(options.suppressMountFlush, true);
-  assert.deepEqual(harness.calls.filter(([name]) => name === "module"), [["module", "YewLynx"]]);
+  assert.deepEqual(
+    harness.calls.filter(([name]) => name === "module"),
+    [["module", "LynxElementBridge"]],
+  );
   assert.throws(
     () => harness.engine.emit("__RenderPage", [{}, {}]),
     /already mounted/,
@@ -183,7 +186,7 @@ test("shell rejects an unsafe page component ID before creating a broker", () =>
   const engine = createEmitter();
   const native = createEmitter();
   let brokerCreated = false;
-  installYewLynxShell({
+  installLynxElementBridgeShell({
     lynxApi: {
       getEngine: () => engine,
       getNative: () => native,

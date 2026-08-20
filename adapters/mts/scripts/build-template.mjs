@@ -75,8 +75,13 @@ const decoded = useNapi
 if (decoded["context-type"] !== 1 || decoded["is-lepusng-binary"] !== true) {
   throw new Error("encoded template is not an ordinary LepusNG bundle");
 }
-await writeFile(path.join(outputDirectory, "yew-lynx-counter.lynx.bundle"), encoded.buffer);
+await writeFile(
+  path.join(outputDirectory, "lynx-element-bridge-counter.lynx.bundle"),
+  encoded.buffer,
+);
 
 console.log(`Wrote ${path.relative(adapterDirectory, outputDirectory)}/shell.js`);
 console.log(`Wrote ${path.relative(adapterDirectory, outputDirectory)}/template-input.json`);
-console.log(`Wrote ${path.relative(adapterDirectory, outputDirectory)}/yew-lynx-counter.lynx.bundle`);
+console.log(
+  `Wrote ${path.relative(adapterDirectory, outputDirectory)}/lynx-element-bridge-counter.lynx.bundle`,
+);

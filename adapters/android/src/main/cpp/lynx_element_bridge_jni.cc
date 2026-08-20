@@ -1,15 +1,16 @@
 #include <jni.h>
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <new>
 #include <vector>
 
-#include "yew_lynx.h"
+#include "lynx_element_bridge.h"
 
 namespace {
 
-static_assert(sizeof(YewLynxSession) <= sizeof(jlong),
+static_assert(sizeof(LynxElementBridgeSession) <= sizeof(jlong),
               "A JNI long must be able to hold a session token");
 
 void Throw(JNIEnv* env, const char* class_name, const char* message) {
@@ -26,7 +27,7 @@ void Throw(JNIEnv* env, const char* class_name, const char* message) {
 
 bool ReadBytes(JNIEnv* env, jbyteArray input, std::vector<uint8_t>* output) {
   if (input == nullptr) {
-    Throw(env, "java/lang/NullPointerException", "UTF-8 input must not be null");
+    Throw(env, "java/lang/NullPointerException", "input buffer must not be null");
     return false;
   }
 
@@ -47,9 +48,9 @@ const uint8_t* BytesData(const std::vector<uint8_t>& bytes) {
   return bytes.empty() ? &kEmptyInput : bytes.data();
 }
 
-jbyteArray CopyAndFreeBuffer(JNIEnv* env, YewLynxBuffer buffer) {
+jbyteArray CopyAndFreeBuffer(JNIEnv* env, LynxElementBridgeBuffer buffer) {
   if (buffer.len > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
-    yew_lynx_buffer_free(buffer);
+    lynx_element_bridge_buffer_free(buffer);
     Throw(env, "java/lang/IllegalStateException", "Rust response exceeds JNI array limits");
     return nullptr;
   }
@@ -64,7 +65,7 @@ jbyteArray CopyAndFreeBuffer(JNIEnv* env, YewLynxBuffer buffer) {
     env->SetByteArrayRegion(result, 0, length,
                             reinterpret_cast<const jbyte*>(buffer.data));
   }
-  yew_lynx_buffer_free(buffer);
+  lynx_element_bridge_buffer_free(buffer);
 
   if (env->ExceptionCheck()) {
     if (result != nullptr) {
@@ -75,12 +76,13 @@ jbyteArray CopyAndFreeBuffer(JNIEnv* env, YewLynxBuffer buffer) {
   return result;
 }
 
-void DestroyAfterMountFailure(YewLynxSession session) {
+void DestroyAfterMountFailure(LynxElementBridgeSession session) {
   if (session == 0) {
     return;
   }
-  YewLynxDestroyResult cleanup = yew_lynx_destroy(session);
-  yew_lynx_buffer_free(cleanup.response);
+  LynxElementBridgeDestroyResult cleanup =
+      lynx_element_bridge_destroy_session(session);
+  lynx_element_bridge_buffer_free(cleanup.response);
 }
 
 bool IdFromJLong(JNIEnv* env, jlong value, const char* name, uint32_t* output) {
@@ -92,16 +94,15 @@ bool IdFromJLong(JNIEnv* env, jlong value, const char* name, uint32_t* output) {
   return true;
 }
 
-jlong SessionToJLong(YewLynxSession session) {
+jlong SessionToJLong(LynxElementBridgeSession session) {
   return static_cast<jlong>(session);
 }
 
 }  // namespace
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_yew_lynx_YewLynxModule_nativeMount(JNIEnv* env, jclass,
-                                             jlong root_id,
-                                             jlongArray session_out) {
+Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeMount(
+    JNIEnv* env, jclass, jlong root_id, jlongArray session_out) {
   try {
     if (session_out == nullptr || env->GetArrayLength(session_out) < 1) {
       Throw(env, "java/lang/IllegalArgumentException",
@@ -118,7 +119,8 @@ Java_com_yew_lynx_YewLynxModule_nativeMount(JNIEnv* env, jclass,
       return nullptr;
     }
 
-    YewLynxMountResult mounted = yew_lynx_mount(native_root_id);
+    LynxElementBridgeMountResult mounted =
+        lynx_element_bridge_mount(native_root_id);
     jbyteArray batch = CopyAndFreeBuffer(env, mounted.response);
     if (batch == nullptr) {
       DestroyAfterMountFailure(mounted.session);
@@ -142,9 +144,8 @@ Java_com_yew_lynx_YewLynxModule_nativeMount(JNIEnv* env, jclass,
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_yew_lynx_YewLynxModule_nativeDispatchEvent(JNIEnv* env, jclass,
-                                                     jlong session,
-                                                     jbyteArray event) {
+Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeDispatchEvent(
+    JNIEnv* env, jclass, jlong session, jbyteArray event) {
   try {
     if (session == 0) {
       Throw(env, "java/lang/IllegalStateException", "Session is not mounted");
@@ -160,8 +161,8 @@ Java_com_yew_lynx_YewLynxModule_nativeDispatchEvent(JNIEnv* env, jclass,
     }
 
     return CopyAndFreeBuffer(
-        env, yew_lynx_dispatch(native_session, BytesData(event_bytes),
-                               event_bytes.size()));
+        env, lynx_element_bridge_dispatch_event(
+                 native_session, BytesData(event_bytes), event_bytes.size()));
   } catch (const std::bad_alloc&) {
     Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
   } catch (...) {
@@ -171,9 +172,8 @@ Java_com_yew_lynx_YewLynxModule_nativeDispatchEvent(JNIEnv* env, jclass,
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_yew_lynx_YewLynxModule_nativeComplete(JNIEnv* env, jclass,
-                                                jlong session,
-                                                jbyteArray response) {
+Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeCompleteBatch(
+    JNIEnv* env, jclass, jlong session, jbyteArray response) {
   try {
     uint32_t native_session = 0;
     std::vector<uint8_t> response_bytes;
@@ -183,8 +183,8 @@ Java_com_yew_lynx_YewLynxModule_nativeComplete(JNIEnv* env, jclass,
       return nullptr;
     }
     return CopyAndFreeBuffer(
-        env, yew_lynx_complete(native_session, BytesData(response_bytes),
-                               response_bytes.size()));
+        env, lynx_element_bridge_complete_batch(
+                 native_session, BytesData(response_bytes), response_bytes.size()));
   } catch (const std::bad_alloc&) {
     Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
   } catch (...) {
@@ -194,9 +194,8 @@ Java_com_yew_lynx_YewLynxModule_nativeComplete(JNIEnv* env, jclass,
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_yew_lynx_YewLynxModule_nativeDestroy(JNIEnv* env, jclass,
-                                               jlong session,
-                                               jbooleanArray consumed_out) {
+Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeDestroySession(
+    JNIEnv* env, jclass, jlong session, jbooleanArray consumed_out) {
   try {
     if (session == 0) {
       Throw(env, "java/lang/IllegalStateException", "Session is not mounted");
@@ -216,11 +215,12 @@ Java_com_yew_lynx_YewLynxModule_nativeDestroy(JNIEnv* env, jclass,
                      &native_session)) {
       return nullptr;
     }
-    YewLynxDestroyResult destroyed = yew_lynx_destroy(native_session);
+    LynxElementBridgeDestroyResult destroyed =
+        lynx_element_bridge_destroy_session(native_session);
     const jboolean consumed = destroyed.consumed != 0 ? JNI_TRUE : JNI_FALSE;
     env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
     if (env->ExceptionCheck()) {
-      yew_lynx_buffer_free(destroyed.response);
+      lynx_element_bridge_buffer_free(destroyed.response);
       return nullptr;
     }
     return CopyAndFreeBuffer(env, destroyed.response);
@@ -228,4 +228,20 @@ Java_com_yew_lynx_YewLynxModule_nativeDestroy(JNIEnv* env, jclass,
     Throw(env, "java/lang/RuntimeException", "Unexpected native bridge failure");
   }
   return nullptr;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeBackend(JNIEnv* env,
+                                                                  jclass) {
+  const char* backend = lynx_element_bridge_backend();
+  const char* marker = lynx_element_bridge_backend_marker();
+  static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:";
+  if (backend == nullptr || marker == nullptr ||
+      std::strncmp(marker, kMarkerPrefix, sizeof(kMarkerPrefix) - 1) != 0 ||
+      std::strcmp(marker + sizeof(kMarkerPrefix) - 1, backend) != 0) {
+    Throw(env, "java/lang/IllegalStateException",
+          "Rust backend identity is invalid");
+    return nullptr;
+  }
+  return env->NewStringUTF(backend);
 }

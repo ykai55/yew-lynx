@@ -160,15 +160,29 @@ cargo clippy --manifest-path "$ROOT_DIR/Cargo.toml" \
 printf '==> Building and testing ordinary LepusNG/MTS template\n'
 npm --prefix "$MTS_ADAPTER_DIR" ci
 npm --prefix "$MTS_ADAPTER_DIR" run build
+native_template_hashes="$(sha256sum \
+  "$MTS_ADAPTER_DIR/dist/shell.js" \
+  "$MTS_ADAPTER_DIR/dist/template-input.json" \
+  "$MTS_ADAPTER_DIR/dist/lynx-element-bridge-counter.lynx.bundle")"
 npm --prefix "$MTS_ADAPTER_DIR" run build:wasm
+wasm_template_hashes="$(sha256sum \
+  "$MTS_ADAPTER_DIR/dist/shell.js" \
+  "$MTS_ADAPTER_DIR/dist/template-input.json" \
+  "$MTS_ADAPTER_DIR/dist/lynx-element-bridge-counter.lynx.bundle")"
+if [[ "$native_template_hashes" != "$wasm_template_hashes" ]]; then
+  printf 'verify: native and WASM template outputs are not reproducible\n' >&2
+  exit 1
+fi
 npm --prefix "$MTS_ADAPTER_DIR" test
 
 printf '==> Testing Android Java/JNI adapter\n'
 bash "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
 
-printf '==> Building Android arm64 Rust static library\n'
+printf '==> Building Yew and Dioxus Android arm64 Rust static libraries\n'
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --locked --release \
-  --target aarch64-linux-android --package yew-lynx-counter
+  --target aarch64-linux-android \
+  --package yew-lynx-counter \
+  --package lynx-element-bridge-dioxus-counter
 
 printf '==> Preparing isolated patched Yew test checkout\n'
 temp_dir="$(mktemp -d "$ROOT_DIR/.deps/.yew-verify.XXXXXX")"

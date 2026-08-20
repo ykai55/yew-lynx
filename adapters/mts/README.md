@@ -1,14 +1,15 @@
 # Stock Lynx MTS/Fiber broker
 
 This directory contains the ordinary LepusNG adapter between the synchronous
-`YewLynx` native module and Lynx's public Fiber Element API.
+`LynxElementBridge` native module and Lynx's public Fiber Element API. The shell
+is backend-neutral and uses the public module name shared by both backends.
 
 - `src/wire.mts` verifies and encodes FlatBuffers v2 `LEB2` envelopes.
 - `src/broker-core.js` validates batches and owns every `ElementRef`, node
   relation, and event callback.
 - `src/lynx-fiber-host.mts` maps typed commands to public Fiber globals.
 - `src/shell-core.js` owns render, reload, removal, SSR rejection, and lifetime
-  teardown.
+  teardown and binds the fixed `LynxElementBridge` module name.
 - `PROTOCOL.md` defines the exact native wire and lifecycle contract.
 
 ## Build And Test
@@ -56,5 +57,5 @@ buffers without Base64 or string conversion.
   explicitly tear down listeners, tree ownership, and native session state.
 
 Tests use mock Fiber globals and a mock native module. They verify the binary
-wire, typed dispatch, result completion, event envelopes, and lifecycle, but do
-not establish device behavior.
+wire, typed dispatch, result completion, event envelopes, lifecycle, and public
+module name, but do not establish device behavior.

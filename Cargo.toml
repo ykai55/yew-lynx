@@ -2,6 +2,7 @@
 members = [
   "crates/element-bridge-core",
   "crates/element-bridge-wire",
+  "crates/element-bridge-ffi",
   "adapters/yew",
   "adapters/dioxus",
   "crates/adapter-conformance",
@@ -26,5 +27,6 @@ flatbuffers = "=25.2.10"
 dioxus-core = "=0.7.10"
 lynx-element-bridge-core = { path = "crates/element-bridge-core" }
 lynx-element-bridge-wire = { path = "crates/element-bridge-wire" }
+lynx-element-bridge-ffi = { path = "crates/element-bridge-ffi" }
 yew = { path = ".deps/yew/packages/yew", features = ["native_renderer"] }
 lynx-element-bridge-yew = { path = "adapters/yew" }

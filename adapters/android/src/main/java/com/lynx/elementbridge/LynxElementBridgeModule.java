@@ -1,4 +1,4 @@
-package com.yew.lynx;
+package com.lynx.elementbridge;
 
 import android.content.Context;
 import com.lynx.jsbridge.LynxMethod;
@@ -6,8 +6,8 @@ import com.lynx.jsbridge.LynxModule;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
-public final class YewLynxModule extends LynxModule {
-  public static final String NAME = "YewLynx";
+public final class LynxElementBridgeModule extends LynxModule {
+  public static final String NAME = "LynxElementBridge";
 
   private static final long MAX_PROTOCOL_ID = 0xffff_ffffL;
   private static final byte[] FAILURE_PREFIX = {
@@ -24,7 +24,7 @@ public final class YewLynxModule extends LynxModule {
 
     byte[] dispatchEvent(long session, byte[] event);
 
-    byte[] complete(long session, byte[] response);
+    byte[] completeBatch(long session, byte[] response);
 
     byte[] destroy(long session, boolean[] consumedOut);
   }
@@ -48,13 +48,13 @@ public final class YewLynxModule extends LynxModule {
     }
 
     @Override
-    public byte[] complete(long session, byte[] response) {
-      return nativeComplete(session, response);
+    public byte[] completeBatch(long session, byte[] response) {
+      return nativeCompleteBatch(session, response);
     }
 
     @Override
     public byte[] destroy(long session, boolean[] consumedOut) {
-      return nativeDestroy(session, consumedOut);
+      return nativeDestroySession(session, consumedOut);
     }
   };
 
@@ -62,11 +62,11 @@ public final class YewLynxModule extends LynxModule {
   private long nativeSession;
   private boolean destroyed;
 
-  public YewLynxModule(Context context) {
+  public LynxElementBridgeModule(Context context) {
     this(context, JNI_NATIVE_CALLS);
   }
 
-  YewLynxModule(Context context, NativeCalls nativeCalls) {
+  LynxElementBridgeModule(Context context, NativeCalls nativeCalls) {
     super(context);
     if (nativeCalls == null) {
       throw new NullPointerException("nativeCalls");
@@ -131,7 +131,7 @@ public final class YewLynxModule extends LynxModule {
       return failure(1, "invalid_argument");
     }
     try {
-      return nativeResponse(nativeCalls.complete(nativeSession, response));
+      return nativeResponse(nativeCalls.completeBatch(nativeSession, response));
     } catch (RuntimeException | LinkageError error) {
       return failure(8, "native_bridge_failure");
     }
@@ -204,7 +204,7 @@ public final class YewLynxModule extends LynxModule {
 
   private static boolean loadNativeLibrary() {
     try {
-      System.loadLibrary("yew_lynx_bridge");
+      System.loadLibrary("lynx_element_bridge");
       return true;
     } catch (LinkageError error) {
       return false;
@@ -215,7 +215,13 @@ public final class YewLynxModule extends LynxModule {
 
   private static native byte[] nativeDispatchEvent(long session, byte[] event);
 
-  private static native byte[] nativeComplete(long session, byte[] response);
+  public static String backendName() {
+    return JNI_NATIVE_CALLS.isAvailable() ? nativeBackend() : "unavailable";
+  }
 
-  private static native byte[] nativeDestroy(long session, boolean[] consumedOut);
+  private static native byte[] nativeCompleteBatch(long session, byte[] response);
+
+  private static native byte[] nativeDestroySession(long session, boolean[] consumedOut);
+
+  private static native String nativeBackend();
 }

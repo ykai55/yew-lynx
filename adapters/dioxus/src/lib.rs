@@ -27,6 +27,12 @@ const REQUIRED_CAPABILITIES: &[&str] = &[
 pub enum DioxusAdapterError {
     Bridge(BridgeError),
     InvalidElement(usize),
+    InvalidListener(u32),
+    EventMismatch {
+        listener: ListenerId,
+        expected: CallbackId,
+        actual: CallbackId,
+    },
     InvalidStack(usize),
     InvalidTemplatePath(Vec<u8>),
     UnsupportedAttribute,
@@ -38,6 +44,20 @@ impl fmt::Display for DioxusAdapterError {
         match self {
             Self::Bridge(error) => error.fmt(formatter),
             Self::InvalidElement(element) => write!(formatter, "invalid Dioxus element {element}"),
+            Self::InvalidListener(listener) => {
+                write!(formatter, "invalid Dioxus listener {listener}")
+            }
+            Self::EventMismatch {
+                listener,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "listener {} expects callback {}, not {}",
+                listener.get(),
+                expected.get(),
+                actual.get()
+            ),
             Self::InvalidStack(count) => {
                 write!(formatter, "Dioxus stack has fewer than {count} nodes")
             }
@@ -71,6 +91,13 @@ enum Kind {
     Placeholder,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ListenerState {
+    element: ElementId,
+    name: &'static str,
+    callback: CallbackId,
+}
+
 pub struct DioxusAdapter {
     session: Session,
     root: NodeId,
@@ -80,7 +107,7 @@ pub struct DioxusAdapter {
     children: HashMap<NodeId, Vec<NodeId>>,
     stack: Vec<StackEntry>,
     listeners: HashMap<(ElementId, &'static str), ListenerId>,
-    callback_targets: HashMap<CallbackId, ElementId>,
+    live_listeners: HashMap<ListenerId, ListenerState>,
     next_callback: u32,
     error: Option<DioxusAdapterError>,
 }
@@ -123,7 +150,7 @@ impl DioxusAdapter {
             children: HashMap::from([(root, Vec::new())]),
             stack: Vec::new(),
             listeners: HashMap::new(),
-            callback_targets: HashMap::new(),
+            live_listeners: HashMap::new(),
             next_callback: 1,
             error: None,
         })
@@ -132,6 +159,10 @@ impl DioxusAdapter {
     pub fn take_batch(&mut self) -> Result<CommandBatch, DioxusAdapterError> {
         self.check_error()?;
         self.session.take_batch().map_err(Into::into)
+    }
+
+    pub fn discard_pending(&mut self) {
+        let _ = self.session.discard_pending();
     }
 
     pub fn event(
@@ -160,31 +191,43 @@ impl DioxusAdapter {
         payload: Vec<u8>,
     ) -> Result<EventMessage, DioxusAdapterError> {
         self.check_error()?;
-        let ((element, registered_name), _) = self
-            .listeners
-            .iter()
-            .find(|(_, registered)| **registered == listener)
-            .ok_or(DioxusAdapterError::InvalidElement(listener.get() as usize))?;
-        if *registered_name != name {
+        let state = self
+            .live_listeners
+            .get(&listener)
+            .ok_or(DioxusAdapterError::InvalidListener(listener.get()))?;
+        if state.name != name {
             return Err(DioxusAdapterError::Bridge(BridgeError::new(
                 Status::InvalidListener,
-                format!("listener expects `{registered_name}`, not `{name}`"),
+                format!("listener expects `{}`, not `{name}`", state.name),
             )));
         }
-        self.event(*element, registered_name, content_type, payload)
+        self.event(state.element, state.name, content_type, payload)
     }
 
-    pub fn event_target(&self, event: &EventMessage) -> Result<ElementId, DioxusAdapterError> {
-        self.callback_targets.get(&event.callback).copied().ok_or(
-            DioxusAdapterError::InvalidElement(event.callback.get() as usize),
-        )
+    pub fn resolve_event(
+        &self,
+        event: &EventMessage,
+    ) -> Result<(ElementId, &'static str), DioxusAdapterError> {
+        self.check_error()?;
+        let state = self
+            .live_listeners
+            .get(&event.listener)
+            .ok_or(DioxusAdapterError::InvalidListener(event.listener.get()))?;
+        if state.callback != event.callback {
+            return Err(DioxusAdapterError::EventMismatch {
+                listener: event.listener,
+                expected: state.callback,
+                actual: event.callback,
+            });
+        }
+        Ok((state.element, state.name))
     }
 
     pub fn destroy(&mut self) -> Result<CommandBatch, DioxusAdapterError> {
         self.check_error()?;
         self.nodes.retain(|element, _| *element == ElementId(0));
         self.listeners.clear();
-        self.callback_targets.clear();
+        self.live_listeners.clear();
         self.parents.clear();
         self.children.retain(|node, _| *node == self.root);
         self.kinds.retain(|node, _| *node == self.root);
@@ -330,27 +373,28 @@ impl DioxusAdapter {
             .ok_or(DioxusAdapterError::InvalidElement(element.0))
     }
 
-    fn allocate_callback(&mut self, target: ElementId) -> Result<CallbackId, DioxusAdapterError> {
+    fn allocate_callback(&mut self) -> Result<CallbackId, DioxusAdapterError> {
         let callback = CallbackId::new(self.next_callback)?;
         self.next_callback = self
             .next_callback
             .checked_add(1)
             .ok_or(DioxusAdapterError::CallbackExhausted)?;
-        self.callback_targets.insert(callback, target);
         Ok(callback)
     }
 
     fn destroy_bridge_node(&mut self, node: NodeId) -> Result<(), DioxusAdapterError> {
         let listeners = self
-            .listeners
+            .live_listeners
             .iter()
-            .filter_map(|(key, listener)| {
-                (self.nodes.get(&key.0) == Some(&node)).then_some((*key, *listener))
+            .filter_map(|(listener, state)| {
+                (self.nodes.get(&state.element) == Some(&node)).then_some(*listener)
             })
             .collect::<Vec<_>>();
-        for (key, listener) in listeners {
+        for listener in listeners {
             self.session.remove_event_listener(node, listener)?;
-            self.listeners.remove(&key);
+            if let Some(state) = self.live_listeners.remove(&listener) {
+                self.listeners.remove(&(state.element, state.name));
+            }
         }
         let children = self.children.get(&node).cloned().unwrap_or_default();
         for child in children {
@@ -613,9 +657,17 @@ impl WriteMutations for DioxusAdapter {
     fn create_event_listener(&mut self, name: &'static str, id: ElementId) {
         self.run(|this| {
             let node = this.node(id)?;
-            let callback = this.allocate_callback(id)?;
+            let callback = this.allocate_callback()?;
             let listener = this.session.add_event_listener(node, name, callback)?;
             this.listeners.insert((id, name), listener);
+            this.live_listeners.insert(
+                listener,
+                ListenerState {
+                    element: id,
+                    name,
+                    callback,
+                },
+            );
             Ok(())
         });
     }
@@ -627,9 +679,9 @@ impl WriteMutations for DioxusAdapter {
                 .listeners
                 .remove(&(id, name))
                 .ok_or(DioxusAdapterError::InvalidElement(id.0))?;
-            this.session
-                .remove_event_listener(node, listener)
-                .map_err(Into::into)
+            this.session.remove_event_listener(node, listener)?;
+            this.live_listeners.remove(&listener);
+            Ok(())
         });
     }
 
@@ -651,7 +703,7 @@ impl WriteMutations for DioxusAdapter {
 
 #[cfg(test)]
 mod tests {
-    use lynx_element_bridge_core::{HostFake, ResultSlot};
+    use lynx_element_bridge_core::{Command, HostFake, ResultSlot};
 
     use super::*;
 
@@ -730,7 +782,10 @@ mod tests {
                 vec![0, 255],
             )
             .unwrap();
-        assert_eq!(adapter.event_target(&event).unwrap(), ElementId(1));
+        assert_eq!(
+            adapter.resolve_event(&event).unwrap(),
+            (ElementId(1), "tap")
+        );
         assert_eq!(event.payload, vec![0, 255]);
 
         let mut host = HostFake::new(session, root);
@@ -739,5 +794,118 @@ mod tests {
         host.apply(&adapter.destroy().unwrap());
         assert_eq!(host.listener_count(), 0);
         assert!(host.snapshot().children.is_empty());
+    }
+
+    #[test]
+    fn event_resolution_requires_the_exact_live_listener_and_callback() {
+        let session = SessionId::new(3).unwrap();
+        let root = NodeId::new(1).unwrap();
+        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        adapter.load_template(TEMPLATE, 0, ElementId(1));
+        adapter.append_children(ElementId(0), 1);
+        adapter.create_event_listener("tap", ElementId(1));
+        adapter.create_event_listener("longpress", ElementId(1));
+        let batch = adapter.take_batch().unwrap();
+        let registrations = batch
+            .commands
+            .iter()
+            .filter_map(|item| match &item.command {
+                Command::AddEventListener {
+                    listener,
+                    callback,
+                    name,
+                    ..
+                } => Some((*listener, *callback, name.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let (tap_listener, tap_callback, _) = registrations
+            .iter()
+            .find(|(_, _, name)| *name == "tap")
+            .copied()
+            .unwrap();
+        let (longpress_listener, longpress_callback, _) = registrations
+            .iter()
+            .find(|(_, _, name)| *name == "longpress")
+            .copied()
+            .unwrap();
+        let valid = EventMessage {
+            session,
+            listener: tap_listener,
+            callback: tap_callback,
+            content_type: "application/vnd.lynx.tap".into(),
+            payload: vec![1, 2, 3],
+        };
+        assert_eq!(
+            adapter.resolve_event(&valid).unwrap(),
+            (ElementId(1), "tap")
+        );
+
+        let wrong_listener = EventMessage {
+            listener: ListenerId::new(999).unwrap(),
+            ..valid.clone()
+        };
+        assert!(matches!(
+            adapter.resolve_event(&wrong_listener),
+            Err(DioxusAdapterError::InvalidListener(_))
+        ));
+        let swapped_callback = EventMessage {
+            callback: longpress_callback,
+            ..valid.clone()
+        };
+        assert!(matches!(
+            adapter.resolve_event(&swapped_callback),
+            Err(DioxusAdapterError::EventMismatch { .. })
+        ));
+        let swapped_listener = EventMessage {
+            listener: longpress_listener,
+            callback: tap_callback,
+            ..valid.clone()
+        };
+        assert!(matches!(
+            adapter.resolve_event(&swapped_listener),
+            Err(DioxusAdapterError::EventMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn removed_subtrees_and_destroyed_adapters_reject_stale_events() {
+        let session = SessionId::new(4).unwrap();
+        let root = NodeId::new(1).unwrap();
+        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        adapter.load_template(TEMPLATE, 0, ElementId(1));
+        adapter.append_children(ElementId(0), 1);
+        adapter.create_event_listener("tap", ElementId(1));
+        let event = adapter
+            .event(ElementId(1), "tap", "application/vnd.lynx.tap", Vec::new())
+            .unwrap();
+        adapter.remove_event_listener("tap", ElementId(1));
+        assert!(matches!(
+            adapter.resolve_event(&event),
+            Err(DioxusAdapterError::InvalidListener(_))
+        ));
+
+        adapter.create_event_listener("tap", ElementId(1));
+        let subtree_event = adapter
+            .event(ElementId(1), "tap", "application/vnd.lynx.tap", Vec::new())
+            .unwrap();
+        adapter.remove_node(ElementId(1));
+        assert!(matches!(
+            adapter.resolve_event(&subtree_event),
+            Err(DioxusAdapterError::InvalidListener(_))
+        ));
+
+        let mut destroyed = DioxusAdapter::new(SessionId::new(5).unwrap(), root).unwrap();
+        destroyed.load_template(TEMPLATE, 0, ElementId(1));
+        destroyed.append_children(ElementId(0), 1);
+        destroyed.create_event_listener("tap", ElementId(1));
+        let destroyed_event = destroyed
+            .event(ElementId(1), "tap", "application/vnd.lynx.tap", Vec::new())
+            .unwrap();
+        destroyed.destroy().unwrap();
+        assert!(matches!(
+            destroyed.resolve_event(&destroyed_event),
+            Err(DioxusAdapterError::InvalidListener(_))
+        ));
     }
 }

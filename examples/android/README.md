@@ -1,15 +1,16 @@
 # Standalone Android example
 
-This Kotlin application is the public stock OSS Lynx host for the Yew counter.
-It consumes locally published AARs built from the pinned `third_party/lynx`
-submodule, enables synchronous MTS modules, registers one `YewLynxModule` per
-`LynxView`, links the real arm64 Rust archive through JNI, and loads the ordinary
-LepusNG bundle from application assets.
+This Kotlin application is the public stock OSS Lynx host for either counter
+backend. It consumes locally published AARs built from the pinned
+`third_party/lynx` submodule, registers one framework-neutral
+`LynxElementBridgeModule` per `LynxView`, links exactly one real arm64 Rust
+archive through the shared JNI library, and loads the ordinary LepusNG bundle.
 
-From the repository root, use the single orchestration command:
+From the repository root, use the orchestration command for the desired backend:
 
 ```bash
 ./scripts/build-android.sh
+./scripts/build-android.sh --backend dioxus
 ```
 
 Use `--clean` to discard generated integration outputs before rebuilding. The
@@ -28,24 +29,31 @@ Requirements:
 - Rust 1.85.0 with `aarch64-linux-android`
 - Node.js 22.18.0 and npm
 
-The only supported application ABI is `arm64-v8a`. Generated Maven artifacts,
-native libraries, bundles, and APKs remain ignored. The final APK is written to
-`app/build/outputs/apk/debug/app-debug.apk`.
+The default backend is Yew. Backend-specific Rust staging, AGP/CMake staging,
+APKs, and evidence prevent one framework from reusing the other's native cache.
+The only supported application ABI is `arm64-v8a`. Final APKs are written to
+`.deps/android/apks/lynx-element-bridge-yew.apk` and
+`.deps/android/apks/lynx-element-bridge-dioxus.apk`; matching build evidence is
+written under `.deps/android/`.
 
 After connecting an ARM64 physical device through ADB, run the lifecycle
 acceptance flow from the repository root:
 
 ```bash
 python3 scripts/android-device-acceptance.py \
+  --backend dioxus \
   --serial "$ANDROID_SERIAL" \
-  --apk examples/android/app/build/outputs/apk/debug/app-debug.apk \
-  --evidence-dir .deps/android/device-evidence
+  --apk .deps/android/apks/lynx-element-bridge-dioxus.apk \
+  --evidence-dir .deps/android/device-evidence-dioxus
 ```
 
 The script locates and taps the rendered Increment control from raw screenshots,
 checks that the visible counter region changes, recreates the Activity through
 rotation, force-stops and reopens the process, and repeats mount/tap/destroy
 cycles. It saves PNGs for visual review of the exact `Count: 0` and `Count: 1`
-states, restores the original rotation settings, and does not write the ADB
-serial into evidence. Physical-device access and credentials are intentionally
+states, requires the expected backend identity from the linked Rust archive in
+logcat, restores the original rotation settings, and does not write the ADB
+serial into evidence. On 2026-08-20, both Yew and Dioxus independently passed
+this flow on Android 15/API 35 arm64 physical devices; exact device and APK
+identities are recorded in `COMPATIBILITY.md`. Physical-device access remains
 outside public CI.

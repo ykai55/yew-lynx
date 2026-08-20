@@ -1,4 +1,4 @@
-#include "yew_lynx.h"
+#include "lynx_element_bridge.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -9,11 +9,11 @@ constexpr uint8_t kSuccess[] = {20, 0, 0, 0, 'L', 'E', 'B', '2', 0, 255};
 constexpr uint8_t kInvalidArgument[] = {20, 0, 0, 0, 'L', 'E', 'B', '2', 1};
 constexpr uint8_t kInvalidSession[] = {20, 0, 0, 0, 'L', 'E', 'B', '2', 2};
 
-constexpr YewLynxSession kSession = 41;
+constexpr LynxElementBridgeSession kSession = 41;
 bool g_mounted = false;
 
 template <size_t Size>
-YewLynxBuffer Copy(const uint8_t (&bytes)[Size]) {
+LynxElementBridgeBuffer Copy(const uint8_t (&bytes)[Size]) {
   auto* data = static_cast<uint8_t*>(std::malloc(Size));
   if (data == nullptr) {
     return {nullptr, 0};
@@ -22,7 +22,7 @@ YewLynxBuffer Copy(const uint8_t (&bytes)[Size]) {
   return {data, Size};
 }
 
-YewLynxBuffer Copy(const uint8_t* bytes, size_t size) {
+LynxElementBridgeBuffer Copy(const uint8_t* bytes, size_t size) {
   auto* data = static_cast<uint8_t*>(std::malloc(size));
   if (data == nullptr) {
     return {nullptr, 0};
@@ -33,7 +33,7 @@ YewLynxBuffer Copy(const uint8_t* bytes, size_t size) {
 
 }  // namespace
 
-extern "C" YewLynxMountResult yew_lynx_mount(uint32_t root_id) {
+extern "C" LynxElementBridgeMountResult lynx_element_bridge_mount(uint32_t root_id) {
   if (g_mounted || root_id != UINT32_MAX) {
     return {0, Copy(kInvalidArgument)};
   }
@@ -41,8 +41,8 @@ extern "C" YewLynxMountResult yew_lynx_mount(uint32_t root_id) {
   return {kSession, Copy(kSuccess)};
 }
 
-extern "C" YewLynxBuffer yew_lynx_dispatch(
-    YewLynxSession session, const uint8_t* event, size_t event_len) {
+extern "C" LynxElementBridgeBuffer lynx_element_bridge_dispatch_event(
+    LynxElementBridgeSession session, const uint8_t* event, size_t event_len) {
   if (!g_mounted || session != kSession) {
     return Copy(kInvalidSession);
   }
@@ -52,8 +52,8 @@ extern "C" YewLynxBuffer yew_lynx_dispatch(
   return Copy(kSuccess);
 }
 
-extern "C" YewLynxBuffer yew_lynx_complete(
-    YewLynxSession session, const uint8_t* response, size_t response_len) {
+extern "C" LynxElementBridgeBuffer lynx_element_bridge_complete_batch(
+    LynxElementBridgeSession session, const uint8_t* response, size_t response_len) {
   if (!g_mounted || session != kSession || response == nullptr || response_len < 8
       || std::memcmp(response + 4, "LEB2", 4) != 0) {
     return Copy(kInvalidArgument);
@@ -61,8 +61,8 @@ extern "C" YewLynxBuffer yew_lynx_complete(
   return Copy(response, response_len);
 }
 
-extern "C" YewLynxDestroyResult yew_lynx_destroy(
-    YewLynxSession session) {
+extern "C" LynxElementBridgeDestroyResult lynx_element_bridge_destroy_session(
+    LynxElementBridgeSession session) {
   if (!g_mounted || session != kSession) {
     return {0, Copy(kInvalidSession)};
   }
@@ -70,6 +70,14 @@ extern "C" YewLynxDestroyResult yew_lynx_destroy(
   return {1, Copy(kSuccess)};
 }
 
-extern "C" void yew_lynx_buffer_free(YewLynxBuffer buffer) {
+extern "C" void lynx_element_bridge_buffer_free(LynxElementBridgeBuffer buffer) {
   std::free(buffer.data);
+}
+
+extern "C" const char* lynx_element_bridge_backend(void) {
+  return "mock";
+}
+
+extern "C" const char* lynx_element_bridge_backend_marker(void) {
+  return "lynx-element-bridge-backend:mock";
 }

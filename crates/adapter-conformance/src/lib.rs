@@ -145,7 +145,10 @@ mod tests {
                 vec![0, 255, 7],
             )
             .unwrap();
-        assert_eq!(adapter.event_target(&event).unwrap(), ElementId(1));
+        assert_eq!(
+            adapter.resolve_event(&event).unwrap(),
+            (ElementId(1), "tap")
+        );
         adapter.set_attribute(
             "data-count",
             None,

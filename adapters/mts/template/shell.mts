@@ -1,7 +1,7 @@
 import { createLynxFiberHost } from "../src/lynx-fiber-host.mts";
-import { installYewLynxShell } from "../src/shell-core.js";
+import { installLynxElementBridgeShell } from "../src/shell-core.js";
 
-installYewLynxShell({
+installLynxElementBridgeShell({
   lynxApi: lynx,
   createPage: __CreatePage,
   getElementUniqueId: __GetElementUniqueID,

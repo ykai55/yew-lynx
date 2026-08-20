@@ -1,8 +1,8 @@
 # Android LynxModule adapter
 
-This directory contains the JNI adapter between Lynx's synchronous MTS module
-path and the Rust counter C ABI. It uses the public `LynxModule` surface and does
-not bind hidden Lynx C++ symbols.
+This directory contains the framework-neutral JNI adapter between Lynx's
+synchronous MTS module path and one selected Rust counter backend. It uses the
+public `LynxModule` surface and does not bind hidden Lynx C++ symbols.
 
 The adapter targets Lynx commit
 `0df14207cebb060f1bed8de12b64a1119dee8f06`. At that revision:
@@ -28,20 +28,23 @@ Register one non-shared module per runtime before building the `LynxView`:
 ```java
 LynxViewBuilder builder = new LynxViewBuilder();
 builder.setEnableMTSModule(true);
-builder.registerModule(YewLynxModule.NAME, YewLynxModule.class);
+builder.registerModule(
+    LynxElementBridgeModule.NAME, LynxElementBridgeModule.class);
 LynxView view = builder.build(context);
 ```
 
-The module name is `YewLynx`. One Java module instance owns at most one live
-Rust session. Methods are synchronized to prevent concurrent access to that
-session.
+The module name is `LynxElementBridge`. One Java module instance owns at most
+one live Rust session. Methods are synchronized to prevent concurrent access to
+that session. `backendName()` obtains `yew` or `dioxus` from the linked Rust
+archive rather than from a Java build constant. JNI validates the stable
+`lynx-element-bridge-backend:<backend>` marker before returning the short name.
 
 ## MTS Surface
 
 All payloads are FlatBuffers v2 buffers with file identifier `LEB2`:
 
 ```js
-const module = lynx.module('YewLynx');
+const module = lynx.module('LynxElementBridge');
 const mountCommands = module.invoke('mount', rootId);
 const eventCommands = module.invoke('dispatchEvent', eventBytes);
 const completionResult = module.invoke('completeBatch', resultBytes);
@@ -59,38 +62,43 @@ inherited `destroy()` permanently closes the module.
 
 ## Rust C ABI
 
-The JNI source includes `examples/counter/include/yew_lynx.h`. The linked
-`libyew_lynx_counter.a` exports:
+The JNI source includes the shared `include/lynx_element_bridge.h`. Yew and
+Dioxus static libraries each export the same ABI, and one is linked per build:
 
 ```c
-typedef uint32_t YewLynxSession;
+typedef uint32_t LynxElementBridgeSession;
 
-YewLynxMountResult yew_lynx_mount(uint32_t root_id);
-YewLynxBuffer yew_lynx_dispatch(YewLynxSession session,
-                                const uint8_t* event,
-                                size_t event_len);
-YewLynxBuffer yew_lynx_complete(YewLynxSession session,
-                                const uint8_t* response,
-                                size_t response_len);
-YewLynxDestroyResult yew_lynx_destroy(YewLynxSession session);
-void yew_lynx_buffer_free(YewLynxBuffer buffer);
+LynxElementBridgeMountResult lynx_element_bridge_mount(uint32_t root_id);
+LynxElementBridgeBuffer lynx_element_bridge_dispatch_event(
+    LynxElementBridgeSession session, const uint8_t* event, size_t event_len);
+LynxElementBridgeBuffer lynx_element_bridge_complete_batch(
+    LynxElementBridgeSession session,
+    const uint8_t* response,
+    size_t response_len);
+LynxElementBridgeDestroyResult lynx_element_bridge_destroy_session(
+    LynxElementBridgeSession session);
+void lynx_element_bridge_buffer_free(LynxElementBridgeBuffer buffer);
+const char* lynx_element_bridge_backend(void);
+const char* lynx_element_bridge_backend_marker(void);
 ```
 
 Input buffers are borrowed only for the call. Rust owns every returned buffer
-until JNI calls `yew_lynx_buffer_free` exactly once. JNI copies responses into
-Java byte arrays and frees Rust allocations on both success and Java allocation
-failure. No Rust panic or C++ exception may cross the ABI.
+until JNI calls `lynx_element_bridge_buffer_free` exactly once. JNI copies
+responses into Java byte arrays and frees Rust allocations on both success and
+Java allocation failure. No Rust panic or C++ exception may cross the ABI.
 
-`yew_lynx_destroy` returns `consumed=0` when a token remains live, including a
-wrong-thread call. Once it returns `consumed=1`, Java clears the token even if
-response copying fails.
+`lynx_element_bridge_destroy_session` returns `consumed=0` when a token remains
+live, including a wrong-thread call. Once it returns `consumed=1`, Java clears
+the token even if response copying fails. The Yew archive retains the original
+`yew_lynx_*` names only as thin source-compatibility aliases.
 
 ## Build Integration
 
-Build one Rust archive per packaged Android ABI and stage it under
-`target/android-libs/<abi>/libyew_lynx_counter.a`. `CMakeLists.txt` imports the
-archive and links `libyew_lynx_bridge.so`; the consuming APK packages the shared
-library.
+Build one Rust archive per packaged Android ABI and stage the selected backend
+under `target/android-libs/<backend>/<abi>/liblynx_element_bridge_backend.a`.
+`CMakeLists.txt` imports that archive and links `liblynx_element_bridge.so`.
+Backend-specific Gradle and `buildStagingDirectory` paths prevent AGP/CMake
+cache reuse.
 
 `gradle-integration.gradle.kts` demonstrates the arm64 staging and CMake setup.
 No Lynx Maven coordinate is prescribed because this adapter targets the pinned
@@ -100,6 +108,7 @@ For the repository's full Android pipeline, run:
 
 ```bash
 ./scripts/build-android.sh
+./scripts/build-android.sh --backend dioxus
 ```
 
 That script temporarily applies the pinned Lynx ByteArray patch, builds the
@@ -107,12 +116,14 @@ required AARs and APK, and reverses the patch on exit.
 
 ## Mock Checks
 
-Run the stock-API Java checks, JNI binary round trip, C header checks, and real
-host staticlib smoke test with:
+Run the stock-API Java checks, JNI binary round trip, C header checks, and both
+real host staticlib smoke tests with:
 
 ```bash
 bash adapters/android/test/run-mock-checks.sh
 ```
 
-These checks do not load a complete Lynx runtime or prove device support. See
-`COMPATIBILITY.md` for the current evidence boundary.
+The repository also assembles isolated arm64 APKs for both backends. On
+2026-08-20, both backends independently passed the Android 15/API 35 arm64
+physical-device acceptance flow. See `COMPATIBILITY.md` for the exact devices,
+APK hashes, and evidence boundary.

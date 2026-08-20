@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -7,8 +7,18 @@ use dioxus_core::{
     Attribute, AttributeValue, DynamicNode, Element, Event, Template, TemplateAttribute,
     TemplateNode, VNode, VText, VirtualDom, schedule_update, use_hook,
 };
-use lynx_element_bridge_core::{CommandBatch, ListenerId, NodeId, SessionId};
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId};
 use lynx_element_bridge_dioxus::{DioxusAdapter, DioxusAdapterError};
+
+#[allow(unsafe_code)]
+mod ffi;
+
+pub use ffi::{
+    lynx_element_bridge_backend, lynx_element_bridge_backend_marker,
+    lynx_element_bridge_buffer_free, lynx_element_bridge_complete_batch,
+    lynx_element_bridge_destroy_session, lynx_element_bridge_dispatch_event,
+    lynx_element_bridge_mount,
+};
 
 static VALUE_CHILDREN: &[TemplateNode] = &[TemplateNode::Dynamic { id: 0 }];
 static VALUE_ATTRIBUTES: &[TemplateAttribute] = &[
@@ -118,22 +128,17 @@ impl DioxusCounter {
         Ok((Self { dom, adapter }, batch))
     }
 
-    pub fn dispatch(
-        &mut self,
-        listener: ListenerId,
-        name: &'static str,
-        content_type: &str,
-        payload: Vec<u8>,
-    ) -> Result<CommandBatch, DioxusAdapterError> {
-        let event =
-            self.adapter
-                .event_for_listener(listener, name, content_type, payload.clone())?;
-        let target = self.adapter.event_target(&event)?;
+    pub fn dispatch(&mut self, event: EventMessage) -> Result<CommandBatch, DioxusAdapterError> {
+        let (target, name) = self.adapter.resolve_event(&event)?;
         self.dom
             .runtime()
-            .handle_event(name, Event::new(Rc::new(payload), true), target);
+            .handle_event(name, Event::new(Rc::new(event.payload), true), target);
         self.dom.render_immediate(&mut self.adapter);
         self.adapter.take_batch()
+    }
+
+    pub fn discard_pending(&mut self) {
+        self.adapter.discard_pending();
     }
 
     pub fn destroy(mut self) -> Result<CommandBatch, DioxusAdapterError> {
@@ -144,7 +149,7 @@ impl DioxusCounter {
 
 #[cfg(test)]
 mod tests {
-    use lynx_element_bridge_core::{Command, HostFake, Status};
+    use lynx_element_bridge_core::{CallbackId, Command, HostFake, ListenerId, Status};
 
     use super::*;
 
@@ -153,11 +158,13 @@ mod tests {
         let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
         let (mut counter, mounted) = DioxusCounter::mount(session, root).unwrap();
-        let listener = mounted
+        let (listener, callback) = mounted
             .commands
             .iter()
             .find_map(|item| match item.command {
-                Command::AddEventListener { listener, .. } => Some(listener),
+                Command::AddEventListener {
+                    listener, callback, ..
+                } => Some((listener, callback)),
                 _ => None,
             })
             .unwrap();
@@ -171,7 +178,13 @@ mod tests {
         );
 
         let updated = counter
-            .dispatch(listener, "tap", "application/vnd.lynx.tap", vec![0, 255])
+            .dispatch(EventMessage {
+                session,
+                listener,
+                callback,
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: vec![0, 255],
+            })
             .unwrap();
         assert_eq!(host.apply(&updated).status, Status::Ok);
         assert_eq!(
@@ -181,9 +194,67 @@ mod tests {
             Some("Count: 1")
         );
 
+        let mismatch = counter.dispatch(EventMessage {
+            session,
+            listener,
+            callback: CallbackId::new(callback.get() + 1).unwrap(),
+            content_type: "application/vnd.lynx.tap".into(),
+            payload: Vec::new(),
+        });
+        assert!(matches!(
+            mismatch,
+            Err(DioxusAdapterError::EventMismatch { .. })
+        ));
+        let updated = counter
+            .dispatch(EventMessage {
+                session,
+                listener,
+                callback,
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(host.apply(&updated).status, Status::Ok);
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 2")
+        );
+
         let destroyed = counter.destroy().unwrap();
         assert_eq!(host.apply(&destroyed).status, Status::Ok);
         assert!(host.snapshot().children.is_empty());
         assert_eq!(host.listener_count(), 0);
     }
+
+    #[test]
+    fn fixture_rejects_unknown_listener_without_updating() {
+        let session = SessionId::new(2).unwrap();
+        let root = NodeId::new(1).unwrap();
+        let (mut counter, mounted) = DioxusCounter::mount(session, root).unwrap();
+        let callback = mounted
+            .commands
+            .iter()
+            .find_map(|item| match item.command {
+                Command::AddEventListener { callback, .. } => Some(callback),
+                _ => None,
+            })
+            .unwrap();
+        assert!(matches!(
+            counter.dispatch(EventMessage {
+                session,
+                listener: ListenerId::new(999).unwrap(),
+                callback,
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: Vec::new(),
+            }),
+            Err(DioxusAdapterError::InvalidListener(999))
+        ));
+        counter.destroy().unwrap();
+    }
 }
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests_v2;

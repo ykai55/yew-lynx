@@ -14,9 +14,7 @@ readonly HAB_EXECUTABLE="$ROOT_DIR/.deps/android/hab/hab.pex"
 readonly PRIMJS_REPOSITORY="$ROOT_DIR/.deps/android/primjs-maven"
 readonly LYNX_REPOSITORY="$LYNX_SOURCE_DIR/platform/android/build/release/$LYNX_VERSION"
 readonly ANDROID_PROJECT="$ROOT_DIR/examples/android"
-readonly APK="$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk"
-readonly EVIDENCE="$ROOT_DIR/.deps/android/build-evidence.txt"
-readonly CACHE_KEY_FILE="$ROOT_DIR/.deps/android/build-inputs.sha256"
+backend=yew
 readonly LYNX_GRADLE_TASKS=(
   :ServiceAPI:assembleNoasanRelease
   :LynxBase:assembleNoasanRelease
@@ -46,7 +44,7 @@ restore_lynx_source() {
 trap restore_lynx_source EXIT
 
 usage() {
-  printf 'Usage: %s [--clean] [--offline]\n' "${0##*/}"
+  printf 'Usage: %s [--backend yew|dioxus] [--clean] [--offline]\n' "${0##*/}"
 }
 
 remove_generated_android_outputs() {
@@ -54,6 +52,8 @@ remove_generated_android_outputs() {
     "$ROOT_DIR/.deps/android" \
     "$ROOT_DIR/adapters/mts/dist" \
     "$ROOT_DIR/target/android-libs" \
+    "$ROOT_DIR/target/android-build" \
+    "$ROOT_DIR/target/android-cxx" \
     "$ROOT_DIR/target/aarch64-linux-android/release" \
     "$ANDROID_PROJECT/.gradle" \
     "$ANDROID_PROJECT/build" \
@@ -70,9 +70,10 @@ remove_generated_android_outputs() {
 
 calculate_cache_key() {
   {
+    printf 'backend=%s\n' "$backend"
     printf 'lynx_sha=%s\n' "$LYNX_SHA"
     git -C "$ROOT_DIR" ls-files -co --exclude-standard -- \
-      .gitmodules Cargo.lock Cargo.toml rust-toolchain.toml \
+      .gitmodules Cargo.lock Cargo.toml rust-toolchain.toml include \
       adapters/android adapters/mts/package.json adapters/mts/package-lock.json \
       adapters/mts/scripts adapters/mts/src adapters/mts/template android \
       crates examples/android examples/counter examples/dioxus-counter \
@@ -90,6 +91,17 @@ calculate_cache_key() {
 
 while (($#)); do
   case "$1" in
+    --backend)
+      shift
+      if (($# == 0)); then
+        printf -- '--backend requires yew or dioxus\n' >&2
+        exit 2
+      fi
+      backend="$1"
+      ;;
+    --backend=*)
+      backend="${1#*=}"
+      ;;
     --clean)
       clean=1
       ;;
@@ -108,6 +120,33 @@ while (($#)); do
   esac
   shift
 done
+
+case "$backend" in
+  yew|dioxus) ;;
+  *)
+    printf 'Unsupported backend: %s\n' "$backend" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+readonly backend
+readonly GRADLE_APK="$ROOT_DIR/target/android-build/$backend/app/outputs/apk/debug/app-debug.apk"
+readonly APK="$ROOT_DIR/.deps/android/apks/lynx-element-bridge-$backend.apk"
+readonly EVIDENCE="$ROOT_DIR/.deps/android/build-evidence-$backend.txt"
+readonly CACHE_KEY_FILE="$ROOT_DIR/.deps/android/build-inputs-$backend.sha256"
+readonly STAGED_RUST_ARCHIVE="$ROOT_DIR/target/android-libs/$backend/arm64-v8a/liblynx_element_bridge_backend.a"
+if [[ "$backend" == yew ]]; then
+  RUST_PACKAGE=yew-lynx-counter
+  EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:yew
+  OTHER_BACKEND_MARKER=lynx-element-bridge-backend:dioxus
+else
+  RUST_PACKAGE=lynx-element-bridge-dioxus-counter
+  EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:dioxus
+  OTHER_BACKEND_MARKER=lynx-element-bridge-backend:yew
+fi
+readonly RUST_PACKAGE
+readonly EXPECTED_BACKEND_MARKER
+readonly OTHER_BACKEND_MARKER
 
 [[ -f "$LYNX_PATCH_SERIES" ]] || {
   printf 'Missing Lynx patch series: %s\n' "$LYNX_PATCH_SERIES" >&2
@@ -152,7 +191,7 @@ require_command() {
   fi
 }
 
-for command in awk cargo curl cut git grep head java node npm python3 rustc sha256sum sort unzip; do
+for command in awk cargo curl cut git grep head java node npm python3 rustc sha256sum sort strings unzip; do
   require_command "$command"
 done
 
@@ -308,24 +347,28 @@ gradle_arguments=(
   :app:assembleDebug
   --no-daemon
   --dependency-verification strict
+  "-PlynxElementBridgeBackend=$backend"
 )
 if ((offline)); then
-  gradle_arguments+=(--offline -PyewLynxOffline=true)
+  gradle_arguments+=(--offline -PlynxElementBridgeOffline=true)
 fi
 "$ANDROID_PROJECT/gradlew" "${gradle_arguments[@]}"
 
 if ((!offline)); then
   printf '==> Reassembling application offline\n'
-  "$ANDROID_PROJECT/gradlew" "${gradle_arguments[@]}" --offline -PyewLynxOffline=true
+  "$ANDROID_PROJECT/gradlew" "${gradle_arguments[@]}" --offline \
+    -PlynxElementBridgeOffline=true
 fi
 
-if [[ ! -f "$APK" ]]; then
-  printf 'Expected APK was not produced: %s\n' "$APK" >&2
+if [[ ! -f "$GRADLE_APK" ]]; then
+  printf 'Expected APK was not produced: %s\n' "$GRADLE_APK" >&2
   exit 1
 fi
+mkdir -p -- "$(dirname -- "$APK")"
+cp -- "$GRADLE_APK" "$APK"
 apk_entries="$(unzip -Z1 "$APK")"
 for library in \
-  libyew_lynx_bridge.so \
+  liblynx_element_bridge.so \
   liblynx.so \
   liblynxbase.so \
   liblynxgfx.so \
@@ -340,9 +383,28 @@ if grep -Eq '^lib/(armeabi|armeabi-v7a|x86|x86_64)/' <<<"$apk_entries"; then
   printf 'APK contains an unsupported ABI\n' >&2
   exit 1
 fi
+if ! grep -q '^assets/lynx-element-bridge-counter\.lynx\.bundle$' <<<"$apk_entries"; then
+  printf 'APK is missing the Lynx Element Bridge template bundle\n' >&2
+  exit 1
+fi
+backend_strings="$(unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge.so | strings)"
+if ! grep -Fqx "$EXPECTED_BACKEND_MARKER" <<<"$backend_strings"; then
+  printf 'APK native library does not contain marker %s\n' \
+    "$EXPECTED_BACKEND_MARKER" >&2
+  exit 1
+fi
+if grep -Fqx "$OTHER_BACKEND_MARKER" <<<"$backend_strings"; then
+  printf 'APK native library contains marker for the unselected backend: %s\n' \
+    "$OTHER_BACKEND_MARKER" >&2
+  exit 1
+fi
 
 mkdir -p -- "$(dirname -- "$EVIDENCE")"
 cat >"$EVIDENCE" <<EOF
+backend=$backend
+linked_backend=$backend
+backend_marker=$EXPECTED_BACKEND_MARKER
+rust_package=$RUST_PACKAGE
 lynx_sha=$LYNX_SHA
 lynx_version=$LYNX_VERSION
 lynx_patches_sha256=$(sha256sum "${LYNX_PATCH_FILES[@]}" | cut -d ' ' -f 1 | sha256sum | cut -d ' ' -f 1)
@@ -359,6 +421,7 @@ app_gradle=7.6.4
 lynx_android_ndk=21.1.6352462
 app_android_ndk=25.2.9519653
 android_platform=33
+rust_archive_sha256=$(sha256sum "$STAGED_RUST_ARCHIVE" | cut -d ' ' -f 1)
 apk_sha256=$(sha256sum "$APK" | cut -d ' ' -f 1)
 apk=$APK
 android_input_cache_key=$cache_key

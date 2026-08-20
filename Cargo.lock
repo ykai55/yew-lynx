@@ -578,6 +578,16 @@ dependencies = [
  "dioxus-core",
  "lynx-element-bridge-core",
  "lynx-element-bridge-dioxus",
+ "lynx-element-bridge-ffi",
+ "lynx-element-bridge-wire",
+]
+
+[[package]]
+name = "lynx-element-bridge-ffi"
+version = "0.1.0"
+dependencies = [
+ "lynx-element-bridge-core",
+ "lynx-element-bridge-wire",
 ]
 
 [[package]]
@@ -1249,6 +1259,7 @@ name = "yew-lynx-counter"
 version = "0.1.0"
 dependencies = [
  "lynx-element-bridge-core",
+ "lynx-element-bridge-ffi",
  "lynx-element-bridge-wire",
  "lynx-element-bridge-yew",
  "yew",

@@ -80,17 +80,19 @@ Rust tests validate the FlatBuffers v2 command, result, and event channels plus
 the counter C ABI. MTS tests validate typed Element API dispatch, result
 completion, event envelopes, and ownership against mock Fiber globals. Android
 tests compile the public-module adapter and real JNI source against stock-API
-stubs and a mock Rust ABI. A C smoke test links the real host Rust archive, and
-CI builds the Android arm64 archive. Patched Yew tests validate the focused
-native renderer and macro behavior; a real Dioxus `VirtualDom` fixture covers
-the second framework adapter.
+stubs and a mock Rust ABI. A shared C smoke test links each real host Rust
+archive, and CI builds both Android arm64 archives. Patched Yew tests validate
+the focused native renderer and macro behavior; real Dioxus `VirtualDom` tests
+cover full wire events, listener/callback validation, consecutive updates,
+completion, and teardown.
 
-`examples/android` closes the audited integration gap: it enables MTS,
-registers one non-shared `YewLynxModule` per `LynxView`, packages the Rust
-archive through the real JNI shared library, and loads the ordinary bundle via
-the stock template API. The build publishes six AARs from the pinned submodule,
-assembles online and offline, and rejects non-arm64 APK contents. On 2026-08-20,
-the v2 Yew counter passed the repository's mount, tap, recreation,
-force-stop/reopen, and repeated-teardown flow on an Android 15/API 35 arm64
-device. This establishes end-to-end evidence for the Yew fixture and exact
-pins; the Dioxus fixture still requires a device host and acceptance run.
+`examples/android` closes the audited host gap for both framework fixtures: it
+enables MTS, registers one non-shared `LynxElementBridge` module per `LynxView`,
+links exactly one selected Rust backend through the shared JNI library, and
+loads the ordinary bundle via the stock template API. The build publishes six
+AARs from the pinned submodule, isolates Yew and Dioxus Rust/CMake/APK outputs,
+assembles both arm64 variants, and rejects non-arm64 APK contents. On 2026-08-20,
+both backends independently passed the mount, tap, recreation,
+force-stop/reopen, and repeated-teardown flow on Android 15/API 35 arm64 Samsung
+devices. The Dioxus run additionally verified the linked backend identity in
+logcat and visually confirmed exact `Count: 0` and `Count: 1` screenshots.
