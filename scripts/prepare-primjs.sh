@@ -8,7 +8,7 @@ readonly LOCK_FILE="$ROOT_DIR/android/primjs.lock"
 readonly REPOSITORY_DIR="${1:-$ROOT_DIR/.deps/android/primjs-maven}"
 readonly REMOTE_BASE="https://central.sonatype.com/repository/maven-snapshots/org/lynxsdk/lynx"
 
-# shellcheck source=../android/primjs.lock
+# shellcheck source=android/primjs.lock
 source "$LOCK_FILE"
 
 download_locked() {

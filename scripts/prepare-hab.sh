@@ -7,7 +7,7 @@ readonly ROOT_DIR
 readonly LOCK_FILE="$ROOT_DIR/android/hab.lock"
 readonly OUTPUT="${1:-$ROOT_DIR/.deps/android/hab/hab.pex}"
 
-# shellcheck source=../android/hab.lock
+# shellcheck source=android/hab.lock
 source "$LOCK_FILE"
 readonly URL="https://github.com/lynx-family/habitat/releases/download/$HABITAT_VERSION/hab.pex"
 
