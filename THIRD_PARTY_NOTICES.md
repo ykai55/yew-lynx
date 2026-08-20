@@ -89,5 +89,16 @@ and is not packaged in the APK.
 They are development dependencies used to bundle the MTS shell before template
 encoding and are not vendored as tracked repository files.
 
-The names Yew, Lynx, and esbuild identify their respective upstream projects.
-No endorsement, official support, or affiliation is implied.
+## qrcode-terminal
+
+- Project: qrcode-terminal
+- Upstream: <https://github.com/gtanner/qrcode-terminal>
+- Development package: [`qrcode-terminal` 0.12.0](https://www.npmjs.com/package/qrcode-terminal/v/0.12.0)
+- License: Apache-2.0
+
+`npm ci` downloads qrcode-terminal for local development convenience. It prints
+the served Lynx template URL as a terminal QR code and is not vendored as a
+tracked repository file.
+
+The names Yew, Lynx, esbuild, and qrcode-terminal identify their respective
+upstream projects. No endorsement, official support, or affiliation is implied.

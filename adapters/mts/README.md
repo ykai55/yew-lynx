@@ -24,7 +24,7 @@ npm run build:wasm
 npm test
 ```
 
-The exact development dependencies are `esbuild` 0.25.9 and
+The exact template-build dependencies are `esbuild` 0.25.9 and
 `@lynx-js/tasm` 0.0.51. The build emits ignored artifacts:
 
 ```text
@@ -38,6 +38,38 @@ falls back to WebAssembly. `build:wasm` forces that fallback in CI. After
 encoding, each build decodes the bundle and fails unless
 `context-type === 1` and `is-lepusng-binary === true`. This verifies an
 ordinary LepusNG template artifact, not a native-runtime descriptor.
+
+## Serve the bundle locally
+
+To expose the generated template bundle from a local HTTP service, run:
+
+```bash
+npm run serve
+```
+
+`serve` rebuilds the template with the pinned Lynx template encoder and serves
+`dist/yew-lynx-counter.lynx.bundle` at:
+
+```text
+http://127.0.0.1:4173/yew-lynx-counter.lynx.bundle
+```
+
+It also prints a terminal QR code for the served template URL. To suppress QR
+output, use `npm run serve -- --no-qr` or set `NO_QR=1`.
+
+If the bundle has already been built and only needs to be hosted, use:
+
+```bash
+npm run serve:bundle
+```
+
+For a physical device on the same network, bind the service to all interfaces:
+
+```bash
+npm run serve -- --host 0.0.0.0
+```
+
+This prints QR codes for both the loopback URL and each detected IPv4 LAN URL.
 
 ## Stock API boundary
 

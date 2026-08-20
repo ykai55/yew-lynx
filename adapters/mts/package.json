@@ -6,11 +6,14 @@
   "scripts": {
     "build": "node scripts/build-template.mjs",
     "build:wasm": "node scripts/build-template.mjs --wasm",
+    "serve": "npm run build && node scripts/serve-bundle.mjs",
+    "serve:bundle": "node scripts/serve-bundle.mjs",
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "@lynx-js/tasm": "0.0.51",
-    "esbuild": "0.25.9"
+    "esbuild": "0.25.9",
+    "qrcode-terminal": "0.12.0"
   },
   "engines": {
     "node": ">=18"

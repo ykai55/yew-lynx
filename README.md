@@ -166,6 +166,25 @@ npm --prefix adapters/mts ci
 npm --prefix adapters/mts run build
 ```
 
+To serve the generated bundle through a local HTTP service for a Lynx host or
+Explorer, run:
+
+```bash
+npm --prefix adapters/mts run serve
+```
+
+The served bundle URL is:
+
+```text
+http://127.0.0.1:4173/yew-lynx-counter.lynx.bundle
+```
+
+The command prints a terminal QR code for the served template URL. Use
+`-- --no-qr` or `NO_QR=1` to suppress QR output.
+
+Use `npm --prefix adapters/mts run serve -- --host 0.0.0.0` when a physical
+device needs to fetch the bundle from the development machine.
+
 For the complete Android integration, initialize the toolchains listed above
 and run the single orchestration entry point:
 
@@ -181,7 +200,8 @@ Android outputs; `--offline` requires a matching cache prepared by a successful
 online build. See [`examples/android/README.md`](examples/android/README.md).
 
 The template build uses exact development dependencies `esbuild` 0.25.9 and
-`@lynx-js/tasm` 0.0.51. It emits these ignored files:
+`@lynx-js/tasm` 0.0.51. Local QR output uses `qrcode-terminal` 0.12.0. The
+build emits these ignored files:
 
 ```text
 adapters/mts/dist/shell.js
@@ -213,5 +233,5 @@ Verification performs:
 
 This repository is licensed under the [Apache License 2.0](LICENSE). Yew is
 available under MIT or Apache-2.0. Lynx, PrimJS, Habitat, and the downloaded
-`@lynx-js/tasm` development package are Apache-2.0; esbuild is MIT. See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+`@lynx-js/tasm` and `qrcode-terminal` development packages are Apache-2.0;
+esbuild is MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
