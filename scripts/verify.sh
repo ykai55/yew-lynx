@@ -5,14 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
-readonly MTS_ADAPTER_DIR="$ROOT_DIR/adapters/mts"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
 readonly SCRIPTS=(
   "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
   "$ROOT_DIR/scripts/build-android.sh"
-  "$ROOT_DIR/scripts/prepare-flatc.sh"
   "$ROOT_DIR/scripts/prepare-hab.sh"
   "$ROOT_DIR/scripts/prepare-primjs.sh"
   "$ROOT_DIR/scripts/publish-lynx-maven.sh"
@@ -89,8 +87,12 @@ verify_android_metadata() {
 }
 
 verify_lynx_patches() {
+  local apply_status=0
+  local verification_status=0
+  local i
   local patch_file
   local patch_name
+  local -a applied_patch_files=()
   local -a patch_files=()
 
   [[ -s "$LYNX_PATCH_DIR/series" ]] || {
@@ -112,7 +114,79 @@ verify_lynx_patches() {
     patch_files+=("$patch_file")
   done < "$LYNX_PATCH_DIR/series"
   ((${#patch_files[@]} > 0)) || return 1
-  git -C "$ROOT_DIR/third_party/lynx" apply --check "${patch_files[@]}"
+  for patch_file in "${patch_files[@]}"; do
+    if ! git -C "$ROOT_DIR/third_party/lynx" apply --check "$patch_file" \
+        || ! git -C "$ROOT_DIR/third_party/lynx" apply "$patch_file"; then
+      apply_status=1
+      break
+    fi
+    applied_patch_files+=("$patch_file")
+  done
+  if ((apply_status == 0)) &&
+      ! cmp -s \
+        "$ROOT_DIR/third_party/lynx/core/public/lynx_native_renderer.h" \
+        "$ROOT_DIR/include/lynx_native_renderer.h"; then
+    printf 'verify: patched Lynx public C header differs from include/lynx_native_renderer.h\n' \
+      >&2
+    verification_status=1
+  fi
+  for ((i = ${#applied_patch_files[@]} - 1; i >= 0; --i)); do
+    if ! git -C "$ROOT_DIR/third_party/lynx" apply --reverse \
+        "${applied_patch_files[$i]}"; then
+      printf 'verify: failed to remove temporary Lynx patch %s\n' \
+        "${applied_patch_files[$i]}" >&2
+      return 1
+    fi
+  done
+  if ((apply_status != 0 || verification_status != 0)); then
+    return 1
+  fi
+}
+
+verify_removed_transport() {
+  local path
+  local references
+
+  for path in \
+    adapters/mts \
+    crates/element-bridge-wire \
+    protocol \
+    docs/oss-lynx-gap.md \
+    include/lynx_element_bridge.h \
+    scripts/generate-protocol.mjs \
+    scripts/prepare-flatc.sh; do
+    [[ ! -e "$ROOT_DIR/$path" ]] || {
+      printf 'verify: removed transport path still exists: %s\n' "$path" >&2
+      return 1
+    }
+  done
+
+  references="$(
+    git -C "$ROOT_DIR" grep --untracked -n -E \
+      'LynxElementBridgeModule|LEB2|element-bridge-wire|prepare-flatc|generate-protocol|adapters/mts|ResultSlot|ResponseBatch|CapabilityRequest|InvokeCapability|yew_lynx_(mount|dispatch|complete|destroy|buffer_free)' \
+      -- . \
+      ':(exclude)third_party/lynx' \
+      ':(exclude)adapters/android/test/run-mock-checks.sh' \
+      ':(exclude)scripts/verify.sh' || true
+  )"
+  [[ -z "$references" ]] || {
+    printf 'verify: removed transport references remain:\n%s\n' "$references" >&2
+    return 1
+  }
+
+  references="$(
+    git -C "$ROOT_DIR" grep --untracked -ni -E \
+      'flatbuffers|flatc|protocol[- ]v2|wire buffer|wire transport|byte[- ]array' \
+      -- . \
+      ':(exclude)third_party/lynx' \
+      ':(exclude)examples/android/gradle/verification-metadata.xml' \
+      ':(exclude)adapters/android/test/run-mock-checks.sh' \
+      ':(exclude)scripts/verify.sh' || true
+  )"
+  [[ -z "$references" ]] || {
+    printf 'verify: removed serialization references remain:\n%s\n' "$references" >&2
+    return 1
+  }
 }
 
 trap cleanup EXIT
@@ -124,21 +198,21 @@ if command -v shellcheck >/dev/null 2>&1; then
 else
   printf 'shellcheck not found; skipping optional lint\n'
 fi
+if command -v actionlint >/dev/null 2>&1; then
+  actionlint "$ROOT_DIR"/.github/workflows/*.yml
+else
+  printf 'actionlint not found; skipping optional workflow lint\n'
+fi
+git -C "$ROOT_DIR" diff --check
 
 printf '==> Checking Android pins and lock metadata\n'
 verify_android_metadata
+printf '==> Checking removed transport gates\n'
+verify_removed_transport
 printf '==> Checking pinned Lynx patch series\n'
 verify_lynx_patches
 python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], "exec")' \
   "$ROOT_DIR/scripts/android-device-acceptance.py"
-
-printf '==> Regenerating protocol with locked flatc\n'
-flatc="$("$ROOT_DIR/scripts/prepare-flatc.sh")"
-FLATC="$flatc" node "$ROOT_DIR/scripts/generate-protocol.mjs"
-git -C "$ROOT_DIR" diff --exit-code -- \
-  protocol/schema \
-  protocol/capabilities \
-  protocol/generated
 
 printf '==> Bootstrapping pinned Yew checkout\n'
 "$ROOT_DIR/scripts/bootstrap-yew.sh"
@@ -156,24 +230,6 @@ cargo test --manifest-path "$ROOT_DIR/Cargo.toml" --workspace --all-targets --lo
 printf '==> Linting project workspace\n'
 cargo clippy --manifest-path "$ROOT_DIR/Cargo.toml" \
   --workspace --all-targets --locked -- -D warnings
-
-printf '==> Building and testing ordinary LepusNG/MTS template\n'
-npm --prefix "$MTS_ADAPTER_DIR" ci
-npm --prefix "$MTS_ADAPTER_DIR" run build
-native_template_hashes="$(sha256sum \
-  "$MTS_ADAPTER_DIR/dist/shell.js" \
-  "$MTS_ADAPTER_DIR/dist/template-input.json" \
-  "$MTS_ADAPTER_DIR/dist/lynx-element-bridge-counter.lynx.bundle")"
-npm --prefix "$MTS_ADAPTER_DIR" run build:wasm
-wasm_template_hashes="$(sha256sum \
-  "$MTS_ADAPTER_DIR/dist/shell.js" \
-  "$MTS_ADAPTER_DIR/dist/template-input.json" \
-  "$MTS_ADAPTER_DIR/dist/lynx-element-bridge-counter.lynx.bundle")"
-if [[ "$native_template_hashes" != "$wasm_template_hashes" ]]; then
-  printf 'verify: native and WASM template outputs are not reproducible\n' >&2
-  exit 1
-fi
-npm --prefix "$MTS_ADAPTER_DIR" test
 
 printf '==> Testing Android Java/JNI adapter\n'
 bash "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"

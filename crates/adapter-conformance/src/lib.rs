@@ -8,10 +8,7 @@ mod tests {
     use dioxus_core::{
         AttributeValue, ElementId, Template, TemplateAttribute, TemplateNode, WriteMutations,
     };
-    use lynx_element_bridge_core::{
-        CapabilityRequest, CommandResult, HostFake, NodeId, ResultSlot, ResultValue, SessionId,
-        Status, TreeSnapshot,
-    };
+    use lynx_element_bridge_core::{HostFake, NodeId, SessionId, TreeSnapshot};
     use lynx_element_bridge_dioxus::DioxusAdapter;
     use lynx_element_bridge_yew::YewAdapter;
     use yew::{NativeListener, NativeNode, NativeRendererBackend};
@@ -43,8 +40,6 @@ mod tests {
     struct ScenarioResult {
         mounted: TreeSnapshot,
         updated: TreeSnapshot,
-        query: CommandResult,
-        unsupported: CommandResult,
         event_payload: Vec<u8>,
         destroyed: TreeSnapshot,
     }
@@ -56,24 +51,15 @@ mod tests {
 
         assert_eq!(yew.mounted, dioxus.mounted);
         assert_eq!(yew.updated, dioxus.updated);
-        assert_eq!(yew.query, dioxus.query);
-        assert_eq!(yew.unsupported, dioxus.unsupported);
         assert_eq!(yew.event_payload, dioxus.event_payload);
         assert_eq!(yew.destroyed, dioxus.destroyed);
-        assert_eq!(yew.query.value, Some(ResultValue::String("view".into())));
-        assert_eq!(yew.unsupported.status, Status::Unsupported);
         assert!(yew.destroyed.children.is_empty());
     }
 
     fn run_yew() -> ScenarioResult {
         let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let adapter = YewAdapter::new_with_capabilities(
-            session,
-            root,
-            &[CapabilityRequest::optional("set_static_style")],
-        )
-        .unwrap();
+        let adapter = YewAdapter::new(session, root).unwrap();
         let button = adapter.create_element("view");
         adapter.set_attribute(button, "id", Some("counter"));
         let text = adapter.create_element("text");
@@ -88,8 +74,7 @@ mod tests {
         });
         adapter.flush(NativeNode(1));
         let mut host = HostFake::new(session, root);
-        let mounted_response = host.apply(&adapter.take_batch().unwrap());
-        assert_eq!(mounted_response.status, Status::Ok);
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         let mounted = host.snapshot();
 
         let event = adapter
@@ -98,23 +83,14 @@ mod tests {
         adapter.dispatch_event(&event).unwrap();
         assert!(tapped.get());
         adapter.set_attribute(button, "data-count", Some("1"));
-        adapter.query_tag(button, ResultSlot::new(0)).unwrap();
-        adapter
-            .invoke_optional("set_static_style", ResultSlot::new(1))
-            .unwrap();
-        let response = host.apply(&adapter.take_batch().unwrap());
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         let updated = host.snapshot();
-        let query = result(&response.results, 0);
-        let unsupported = result(&response.results, 1);
 
-        let destroy_response = host.apply(&adapter.destroy().unwrap());
-        assert_eq!(destroy_response.status, Status::Ok);
+        host.apply(&adapter.destroy().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 0);
         ScenarioResult {
             mounted,
             updated,
-            query,
-            unsupported,
             event_payload: event.payload,
             destroyed: host.snapshot(),
         }
@@ -123,18 +99,12 @@ mod tests {
     fn run_dioxus() -> ScenarioResult {
         let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new_with_capabilities(
-            session,
-            root,
-            &[CapabilityRequest::optional("set_static_style")],
-        )
-        .unwrap();
+        let mut adapter = DioxusAdapter::new(session, root).unwrap();
         adapter.load_template(COUNTER_TEMPLATE, 0, ElementId(1));
         adapter.append_children(ElementId(0), 1);
         adapter.create_event_listener("tap", ElementId(1));
         let mut host = HostFake::new(session, root);
-        let mounted_response = host.apply(&adapter.take_batch().unwrap());
-        assert_eq!(mounted_response.status, Status::Ok);
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         let mounted = host.snapshot();
 
         let event = adapter
@@ -155,34 +125,17 @@ mod tests {
             &AttributeValue::Text("1".into()),
             ElementId(1),
         );
-        adapter.query_tag(ElementId(1), ResultSlot::new(0)).unwrap();
-        adapter
-            .invoke_optional("set_static_style", ResultSlot::new(1))
-            .unwrap();
-        let response = host.apply(&adapter.take_batch().unwrap());
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         let updated = host.snapshot();
-        let query = result(&response.results, 0);
-        let unsupported = result(&response.results, 1);
 
-        let destroy_response = host.apply(&adapter.destroy().unwrap());
-        assert_eq!(destroy_response.status, Status::Ok);
+        host.apply(&adapter.destroy().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 0);
         ScenarioResult {
             mounted,
             updated,
-            query,
-            unsupported,
             event_payload: event.payload,
             destroyed: host.snapshot(),
         }
-    }
-
-    fn result(results: &[CommandResult], slot: u32) -> CommandResult {
-        results
-            .iter()
-            .find(|result| result.slot == Some(ResultSlot::new(slot)))
-            .cloned()
-            .unwrap()
     }
 
     #[allow(dead_code)]

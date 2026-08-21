@@ -5,7 +5,6 @@ plugins {
 
 val repositoryRoot = rootProject.projectDir.parentFile.parentFile
 val androidAdapterDir = repositoryRoot.resolve("adapters/android")
-val mtsAdapterDir = repositoryRoot.resolve("adapters/mts")
 val elementBridgeBackend = providers.gradleProperty("lynxElementBridgeBackend")
     .orElse("yew")
     .get()
@@ -27,8 +26,6 @@ val rustArchive = repositoryRoot.resolve(
 )
 val stagedRustDirectory = repositoryRoot.resolve("target/android-libs/$elementBridgeBackend")
 buildDir = repositoryRoot.resolve("target/android-build/$elementBridgeBackend/app")
-val generatedAssetsDirectory = buildDir.resolve("generated/lynxElementBridgeAssets")
-val templateBundle = mtsAdapterDir.resolve("dist/lynx-element-bridge-counter.lynx.bundle")
 val offlineBuild = providers.gradleProperty("lynxElementBridgeOffline")
     .map(String::toBoolean)
     .orElse(false)
@@ -85,35 +82,7 @@ android {
 
     sourceSets.getByName("main") {
         java.srcDir(androidAdapterDir.resolve("src/main/java"))
-        assets.srcDir(generatedAssetsDirectory)
     }
-}
-
-val installMtsDependencies by tasks.registering(Exec::class) {
-    workingDir(mtsAdapterDir)
-    commandLine(if (offlineBuild.get()) listOf("npm", "ci", "--offline") else listOf("npm", "ci"))
-    inputs.files(
-        mtsAdapterDir.resolve("package.json"),
-        mtsAdapterDir.resolve("package-lock.json")
-    )
-    outputs.dir(mtsAdapterDir.resolve("node_modules"))
-    outputs.upToDateWhen { !offlineBuild.get() }
-}
-
-val buildLynxElementBridgeTemplate by tasks.registering(Exec::class) {
-    dependsOn(installMtsDependencies)
-    workingDir(mtsAdapterDir)
-    commandLine("npm", "run", "build")
-    inputs.file(mtsAdapterDir.resolve("scripts/build-template.mjs"))
-    inputs.dir(mtsAdapterDir.resolve("src"))
-    inputs.dir(mtsAdapterDir.resolve("template"))
-    outputs.file(templateBundle)
-}
-
-val stageLynxElementBridgeTemplate by tasks.registering(Copy::class) {
-    dependsOn(buildLynxElementBridgeTemplate)
-    from(templateBundle)
-    into(generatedAssetsDirectory)
 }
 
 val buildLynxElementBridgeRustArm64 by tasks.registering(Exec::class) {
@@ -146,7 +115,7 @@ val stageLynxElementBridgeRustArm64 by tasks.registering(Copy::class) {
 }
 
 tasks.named("preBuild") {
-    dependsOn(stageLynxElementBridgeTemplate, stageLynxElementBridgeRustArm64)
+    dependsOn(stageLynxElementBridgeRustArm64)
 }
 tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
     dependsOn(stageLynxElementBridgeRustArm64)

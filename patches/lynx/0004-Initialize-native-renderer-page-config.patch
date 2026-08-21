@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 18:00:00 +0800
+Subject: [PATCH 4/4] Initialize native renderer page config
+
+Native renderer hosts do not decode a template, so initialize the Fiber and
+event-refactor page settings that template decoding would normally provide.
+
+---
+diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
+--- a/core/renderer/native_renderer.cc
++++ b/core/renderer/native_renderer.cc
+@@ -32,6 +32,7 @@
+ #include "core/renderer/page_proxy.h"
+ #include "core/renderer/pipeline/pipeline_scope.h"
+ #include "core/renderer/template_assembler.h"
+ #include "core/runtime/lepus/json_parser.h"
++#include "core/template_bundle/template_codec/binary_decoder/page_config.h"
+ 
+ namespace lynx {
+@@ -55,7 +56,9 @@ constexpr Status kInvalidListener =
+ constexpr Status kResourceExhausted =
+     LYNX_NATIVE_RENDERER_STATUS_RESOURCE_EXHAUSTED;
+ constexpr Status kHostError = LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR;
++#if defined(__cpp_exceptions)
+ constexpr Status kPanic = LYNX_NATIVE_RENDERER_STATUS_PANIC;
++#endif
+ 
+ template <typename F>
+ Status Protect(F&& function) {
+@@ -427,6 +430,11 @@ class Session final : public std::enable_shared_from_this<Session> {
+     if (tasm_ == nullptr || tasm_->page_proxy() == nullptr) {
+       return kHostError;
+     }
++    auto config = std::make_shared<PageConfig>();
++    config->SetEnableFiberArch(true);
++    config->SetEnableEventHandleRefactor(true);
++    tasm_->SetPageConfig(config);
++    tasm_->SetPageConfigClient();
+     manager_ = tasm_->page_proxy()->element_manager().get();
+     if (manager_ == nullptr || manager_->root() != nullptr ||
+         manager_->GetPageElement() != nullptr) {

@@ -7,21 +7,9 @@ use dioxus_core::{
     AttributeValue, ElementId, Template, TemplateAttribute, TemplateNode, WriteMutations,
 };
 use lynx_element_bridge_core::{
-    BridgeError, CallbackId, CapabilityRequest, CommandBatch, EventMessage, ListenerId, NodeId,
-    Session, SessionId, Status,
+    BridgeError, CallbackId, CommandBatch, EventMessage, ListenerId, NodeId, Session, SessionId,
+    Status,
 };
-
-const REQUIRED_CAPABILITIES: &[&str] = &[
-    "create_element",
-    "create_raw_text",
-    "append_element",
-    "insert_element_before",
-    "remove_element",
-    "set_attribute",
-    "add_event_listener",
-    "remove_event_listener",
-    "get_tag",
-];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DioxusAdapterError {
@@ -126,21 +114,7 @@ impl fmt::Debug for DioxusAdapter {
 
 impl DioxusAdapter {
     pub fn new(session_id: SessionId, root: NodeId) -> Result<Self, DioxusAdapterError> {
-        Self::new_with_capabilities(session_id, root, &[])
-    }
-
-    pub fn new_with_capabilities(
-        session_id: SessionId,
-        root: NodeId,
-        additional: &[CapabilityRequest],
-    ) -> Result<Self, DioxusAdapterError> {
-        let mut requests = REQUIRED_CAPABILITIES
-            .iter()
-            .copied()
-            .map(CapabilityRequest::required)
-            .collect::<Vec<_>>();
-        requests.extend_from_slice(additional);
-        let (session, _) = Session::create(session_id, root, &requests)?;
+        let session = Session::create(session_id, root)?;
         Ok(Self {
             session,
             root,
@@ -233,27 +207,6 @@ impl DioxusAdapter {
         self.kinds.retain(|node, _| *node == self.root);
         self.stack.clear();
         self.session.destroy().map_err(Into::into)
-    }
-
-    pub fn query_tag(
-        &mut self,
-        element: ElementId,
-        slot: lynx_element_bridge_core::ResultSlot,
-    ) -> Result<(), DioxusAdapterError> {
-        self.check_error()?;
-        let node = self.node(element)?;
-        self.session.query_tag(node, slot).map_err(Into::into)
-    }
-
-    pub fn invoke_optional(
-        &mut self,
-        capability: &str,
-        slot: lynx_element_bridge_core::ResultSlot,
-    ) -> Result<(), DioxusAdapterError> {
-        self.check_error()?;
-        self.session
-            .invoke_optional(capability, slot)
-            .map_err(Into::into)
     }
 
     fn lower_template_node(
@@ -703,7 +656,7 @@ impl WriteMutations for DioxusAdapter {
 
 #[cfg(test)]
 mod tests {
-    use lynx_element_bridge_core::{Command, HostFake, ResultSlot};
+    use lynx_element_bridge_core::{Command, HostFake};
 
     use super::*;
 
@@ -745,14 +698,8 @@ mod tests {
             &AttributeValue::Text("active".into()),
             ElementId(2),
         );
-        adapter
-            .session
-            .query_tag(adapter.node(ElementId(2)).unwrap(), ResultSlot::new(0))
-            .unwrap();
-
         let mut host = HostFake::new(session, root);
-        let response = host.apply(&adapter.take_batch().unwrap());
-        assert_eq!(response.status, Status::Ok);
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         let snapshot = host.snapshot();
         assert_eq!(snapshot.children[0].tag, "view");
         assert_eq!(snapshot.children[0].children[0].tag, "text");
@@ -789,9 +736,9 @@ mod tests {
         assert_eq!(event.payload, vec![0, 255]);
 
         let mut host = HostFake::new(session, root);
-        host.apply(&adapter.take_batch().unwrap());
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 1);
-        host.apply(&adapter.destroy().unwrap());
+        host.apply(&adapter.destroy().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 0);
         assert!(host.snapshot().children.is_empty());
     }
@@ -809,7 +756,7 @@ mod tests {
         let registrations = batch
             .commands
             .iter()
-            .filter_map(|item| match &item.command {
+            .filter_map(|command| match command {
                 Command::AddEventListener {
                     listener,
                     callback,

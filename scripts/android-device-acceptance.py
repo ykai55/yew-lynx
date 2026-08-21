@@ -14,6 +14,10 @@ from pathlib import Path
 PACKAGE = "com.yew.lynx.example"
 COMPONENT = f"{PACKAGE}/.MainActivity"
 TAG = "LynxElementBridge"
+NATIVE_DIAGNOSTICS = (
+    "Native renderer diagnostics mode=native "
+    "bts_runtime=false mts_context=false template=false"
+)
 
 
 def adb(serial: str, *arguments: str, binary: bool = False):
@@ -107,7 +111,8 @@ def decode_png(data: bytes):
 
 
 def capture_screen(serial: str):
-    return decode_png(adb(serial, "exec-out", "screencap", "-p", binary=True))
+    png = adb(serial, "exec-out", "screencap", "-p", binary=True)
+    return decode_png(png), png
 
 
 def is_increment_color(pixels: bytes, offset: int) -> bool:
@@ -175,29 +180,26 @@ def wait_for_page(serial: str, landscape: bool | None = None, timeout: float = 3
     last_error = "no screenshot captured"
     while time.monotonic() < deadline:
         try:
-            screen = capture_screen(serial)
+            screen, png = capture_screen(serial)
             if landscape is not None and (screen[0] > screen[1]) != landscape:
                 last_error = "screen rotation has not completed"
                 time.sleep(0.25)
                 continue
             bounds = find_increment_button(screen)
-            return screen, bounds
+            return screen, bounds, png
         except (subprocess.CalledProcessError, RuntimeError) as error:
             last_error = str(error)
             time.sleep(0.5)
     raise RuntimeError(f"Timed out waiting for the counter page: {last_error}")
 
 
-def changed_counter_pixels(before, after, button_bounds) -> int:
+def changed_pixels(before, after, left, top, right, bottom) -> int:
     if before[:2] != after[:2]:
         return 0
     width, _, before_pixels = before
     _, _, after_pixels = after
-    left, top, right, bottom = button_bounds
-    button_height = bottom - top
-    region_top = max(0, top - button_height)
     changed = 0
-    for y in range(region_top, top, 2):
+    for y in range(top, bottom, 2):
         for x in range(left, right, 2):
             offset = (y * width + x) * 4
             if any(
@@ -208,15 +210,41 @@ def changed_counter_pixels(before, after, button_bounds) -> int:
     return changed
 
 
+def changed_timer_pixels(before, after, button_bounds) -> int:
+    left, top, right, bottom = button_bounds
+    button_height = bottom - top
+    return changed_pixels(before, after, left, max(0, top - button_height), right, top)
+
+
+def changed_counter_pixels(before, after, button_bounds) -> int:
+    left, top, right, bottom = button_bounds
+    button_height = bottom - top
+    return changed_pixels(
+        before, after, left, max(0, top - 2 * button_height), right, top
+    )
+
+
+def wait_for_timer_change(serial: str, screen, bounds, timeout: float = 10.0):
+    left, top, right, bottom = bounds
+    required_change = max(50, (right - left) * (bottom - top) // 5000)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        updated, updated_bounds, png = wait_for_page(serial, timeout=2.0)
+        if changed_timer_pixels(screen, updated, bounds) >= required_change:
+            return updated, updated_bounds, png
+        time.sleep(0.1)
+    raise RuntimeError("Timer region did not change before tapping Increment")
+
+
 def tap_increment(serial: str, screen, bounds):
     left, top, right, bottom = bounds
     shell(serial, "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
     deadline = time.monotonic() + 30.0
     required_change = max(100, (right - left) * (bottom - top) // 5000)
     while time.monotonic() < deadline:
-        updated, updated_bounds = wait_for_page(serial, timeout=2.0)
+        updated, updated_bounds, png = wait_for_page(serial, timeout=2.0)
         if changed_counter_pixels(screen, updated, bounds) >= required_change:
-            return updated, updated_bounds
+            return updated, updated_bounds, png
         time.sleep(0.25)
     raise RuntimeError("Counter region did not change after tapping Increment")
 
@@ -248,6 +276,7 @@ def main() -> int:
     evidence.mkdir(parents=True, exist_ok=True)
     for name in (
         "fresh-count-0.png",
+        "after-timer-fired.png",
         "after-tap-count-1.png",
         "after-activity-recreation.png",
         "after-force-stop-reopen.png",
@@ -272,11 +301,14 @@ def main() -> int:
     adb(serial, "install", "-r", str(apk))
     try:
         launch(serial)
-        screen, button = wait_for_page(serial)
-        screenshot(serial, evidence / "fresh-count-0.png")
+        screen, button, png = wait_for_page(serial)
+        (evidence / "fresh-count-0.png").write_bytes(png)
 
-        tap_increment(serial, screen, button)
-        screenshot(serial, evidence / "after-tap-count-1.png")
+        screen, button, png = wait_for_timer_change(serial, screen, button)
+        (evidence / "after-timer-fired.png").write_bytes(png)
+
+        _, _, png = tap_increment(serial, screen, button)
+        (evidence / "after-tap-count-1.png").write_bytes(png)
 
         set_rotation(serial, alternate_rotation)
         wait_for_page(serial, landscape=alternate_rotation in {1, 3})
@@ -289,7 +321,7 @@ def main() -> int:
 
         for cycle in range(1, args.cycles + 1):
             launch(serial)
-            screen, button = wait_for_page(serial)
+            screen, button, _ = wait_for_page(serial)
             tap_increment(serial, screen, button)
             rotation = 0 if screen[0] > screen[1] else 1
             set_rotation(serial, rotation)
@@ -304,6 +336,12 @@ def main() -> int:
             raise RuntimeError(
                 f"Lifecycle evidence incomplete: onCreate={on_create_count}, "
                 f"onDestroy={on_destroy_count}"
+            )
+        diagnostics_count = sum(NATIVE_DIAGNOSTICS in line for line in tag_lines)
+        if diagnostics_count != on_create_count:
+            raise RuntimeError(
+                "Runtime-native diagnostics incomplete: "
+                f"diagnostics={diagnostics_count}, onCreate={on_create_count}"
             )
         app_pids = {
             match.group(1)
@@ -320,12 +358,17 @@ def main() -> int:
         crash_markers = ("FATAL EXCEPTION", "Fatal signal", "native_bridge_failure")
         if any(marker in relevant_logs for marker in crash_markers):
             raise RuntimeError("Crash or native bridge failure found in logcat evidence")
-        backend_marker = f"LynxElementBridge backend={args.backend}"
+        backend_marker = f"Native renderer backend={args.backend}"
         if backend_marker not in relevant_logs:
             raise RuntimeError(f"Expected backend identity was not logged: {backend_marker}")
 
         summary = {
             "backend": args.backend,
+            "renderer_mode": "native",
+            "bts_runtime": False,
+            "mts_context": False,
+            "template": False,
+            "native_renderer_diagnostics_count": diagnostics_count,
             "apk_sha256": hashlib.sha256(apk.read_bytes()).hexdigest(),
             "device_abi": abi,
             "device_api": api,
@@ -333,6 +376,7 @@ def main() -> int:
             "activity_on_create_count": on_create_count,
             "activity_on_destroy_count": on_destroy_count,
             "fresh_page_detected": True,
+            "timer_visual_change_detected": True,
             "tap_visual_change_detected": True,
             "activity_recreation_page_detected": True,
             "force_stop_reopen_page_detected": True,

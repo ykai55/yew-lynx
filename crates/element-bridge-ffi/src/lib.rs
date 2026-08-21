@@ -1,62 +1,39 @@
 #![deny(unsafe_code)]
 
+pub mod native_host;
+
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::{self, ThreadId};
 
 use lynx_element_bridge_core::{
-    BridgeError, CommandBatch, EventMessage, NodeId, ResponseBatch, SessionId, Status,
+    BridgeError, CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status,
 };
-use lynx_element_bridge_wire::{
-    decode_event, decode_response, encode_command_batch, encode_failure,
+
+use native_host::{
+    NATIVE_STATUS_OK, NATIVE_STATUS_PANIC, NativeBytes, NativeCallbackHandle, NativeHost,
+    NativeHostHandle, NativeListenerHandle, NativeRendererCallbacksV1, NativeRendererGetApiFn,
+    NativeRendererHandle, NativeStatus, NativeTimerHandle, NativeUtf8, status_to_native,
 };
 
 pub type LynxElementBridgeSession = u32;
+pub const NATIVE_BRIDGE_ROOT_ID: u32 = 1;
 
 #[repr(C)]
-#[derive(Debug)]
-pub struct LynxElementBridgeBuffer {
-    pub data: *mut u8,
-    pub len: usize,
-}
-
-#[repr(C)]
-pub struct LynxElementBridgeMountResult {
+pub struct LynxElementBridgeNativeMountResult {
+    pub status: NativeStatus,
     pub session: LynxElementBridgeSession,
-    pub response: LynxElementBridgeBuffer,
 }
 
 #[repr(C)]
-pub struct LynxElementBridgeDestroyResult {
+pub struct LynxElementBridgeNativeDestroyResult {
+    pub status: NativeStatus,
     pub consumed: u32,
-    pub response: LynxElementBridgeBuffer,
-}
-
-impl LynxElementBridgeBuffer {
-    fn empty() -> Self {
-        Self {
-            data: ptr::null_mut(),
-            len: 0,
-        }
-    }
-
-    fn from_vec(bytes: Vec<u8>) -> Self {
-        if bytes.is_empty() {
-            return Self::empty();
-        }
-        let mut bytes = bytes.into_boxed_slice();
-        let buffer = Self {
-            data: bytes.as_mut_ptr(),
-            len: bytes.len(),
-        };
-        std::mem::forget(bytes);
-        buffer
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -90,8 +67,26 @@ impl From<BridgeError> for BackendError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeTimerRequest {
+    pub delay_millis: u64,
+    pub repeating: bool,
+    pub callback: CallbackId,
+}
+
 pub trait BridgeBackend {
+    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
+        Vec::new()
+    }
+
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError>;
+
+    fn dispatch_timer(&mut self, _: CallbackId) -> Result<CommandBatch, BackendError> {
+        Err(BackendError::recoverable(
+            Status::Unsupported,
+            "native timer dispatch is not supported by this backend",
+        ))
+    }
 
     fn destroy(self: Box<Self>, poisoned: bool) -> Result<CommandBatch, BackendError>;
 
@@ -102,8 +97,22 @@ pub trait BridgeBackend {
 
 struct Session {
     backend: Option<Box<dyn BridgeBackend>>,
+    native_host: NativeHost,
     poisoned: bool,
-    last_response: Option<ResponseBatch>,
+}
+
+enum SessionState {
+    Ready(Box<Session>),
+    Busy,
+}
+
+impl Session {
+    fn poison(&mut self) {
+        self.poisoned = true;
+        if let Some(backend) = self.backend.as_mut() {
+            backend.discard_pending();
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -112,7 +121,7 @@ struct SessionOwner {
 }
 
 struct ThreadSessions {
-    sessions: RefCell<HashMap<LynxElementBridgeSession, Session>>,
+    sessions: RefCell<HashMap<LynxElementBridgeSession, SessionState>>,
 }
 
 impl ThreadSessions {
@@ -134,9 +143,11 @@ impl Drop for ThreadSessions {
             owners.remove(session_id);
         }
         drop(owners);
-        for session in sessions.values_mut() {
-            if let Some(backend) = session.backend.as_mut() {
-                backend.abandon();
+        for state in sessions.values_mut() {
+            if let SessionState::Ready(session) = state {
+                if let Some(backend) = session.backend.as_mut() {
+                    backend.abandon();
+                }
             }
         }
     }
@@ -229,6 +240,79 @@ fn invalid_session(session_id: LynxElementBridgeSession) -> BackendError {
     )
 }
 
+fn busy_session(session_id: LynxElementBridgeSession) -> BackendError {
+    BackendError::recoverable(
+        Status::HostError,
+        format!("session {session_id} is already executing a callback"),
+    )
+}
+
+fn take_ready_session(session_id: LynxElementBridgeSession) -> Result<Box<Session>, BackendError> {
+    SESSIONS.with(|sessions| {
+        let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
+            BackendError::fatal(
+                Status::InternalError,
+                "session registry is already borrowed",
+            )
+        })?;
+        let state = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| invalid_session(session_id))?;
+        if matches!(state, SessionState::Busy) {
+            return Err(busy_session(session_id));
+        }
+        let SessionState::Ready(session) = std::mem::replace(state, SessionState::Busy) else {
+            unreachable!("the busy state returned above")
+        };
+        Ok(session)
+    })
+}
+
+fn restore_session(
+    session_id: LynxElementBridgeSession,
+    session: Box<Session>,
+) -> Result<(), BackendError> {
+    SESSIONS.with(|sessions| {
+        let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
+            BackendError::fatal(
+                Status::InternalError,
+                "session registry is already borrowed",
+            )
+        })?;
+        let state = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| invalid_session(session_id))?;
+        if !matches!(state, SessionState::Busy) {
+            return Err(BackendError::fatal(
+                Status::InternalError,
+                format!("session {session_id} lost its busy state"),
+            ));
+        }
+        *state = SessionState::Ready(session);
+        Ok(())
+    })
+}
+
+fn with_ready_session<T>(
+    session_id: LynxElementBridgeSession,
+    operation: impl FnOnce(&mut Session) -> Result<T, BackendError>,
+) -> Result<T, BackendError> {
+    validate_session_owner(session_id)?;
+    let mut session = take_ready_session(session_id)?;
+    let result = match catch_unwind(AssertUnwindSafe(|| operation(&mut session))) {
+        Ok(result) => result,
+        Err(payload) => {
+            session.poison();
+            Err(BackendError::recoverable(
+                Status::Panic,
+                panic_message(payload.as_ref()),
+            ))
+        }
+    };
+    restore_session(session_id, session)?;
+    result
+}
+
 fn panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).into()
@@ -239,26 +323,60 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-fn mount_internal(
-    root_id: u32,
+#[allow(unsafe_code)]
+unsafe fn native_mount_internal(
+    get_api: Option<NativeRendererGetApiFn>,
+    host: NativeHostHandle,
     create_backend: impl FnOnce(
         SessionId,
         NodeId,
     ) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError>,
-) -> Result<(LynxElementBridgeSession, CommandBatch), BackendError> {
-    if root_id == 0 {
+) -> Result<LynxElementBridgeSession, BackendError> {
+    let get_api = get_api.ok_or_else(|| {
+        BackendError::recoverable(
+            Status::InvalidArgument,
+            "native renderer API resolver must not be null",
+        )
+    })?;
+    if host == 0 {
         return Err(BackendError::recoverable(
             Status::InvalidArgument,
-            "root ID must not be zero",
+            "native host handle must not be zero",
         ));
     }
 
     let session_id = next_session_id()?;
     let reservation = SessionReservation::new(session_id);
-    let (backend, response) = create_backend(
-        SessionId::new(session_id).map_err(BackendError::from)?,
-        NodeId::new(root_id).map_err(BackendError::from)?,
-    )?;
+    let session = SessionId::new(session_id).map_err(BackendError::from)?;
+    let root = NodeId::new(NATIVE_BRIDGE_ROOT_ID).map_err(BackendError::from)?;
+    let (mut backend, initial_batch) = create_backend(session, root)?;
+    let callbacks = NativeRendererCallbacksV1 {
+        context: session_id as usize as *mut c_void,
+        on_event: Some(native_on_event),
+        on_timer: Some(native_on_timer),
+    };
+    // SAFETY: The caller guarantees that the resolver and host follow the native renderer ABI.
+    let mut native_host =
+        match unsafe { NativeHost::acquire(get_api, host, session, root, callbacks) } {
+            Ok(host) => host,
+            Err(error) => {
+                backend.abandon();
+                return Err(BackendError::from(error));
+            }
+        };
+    if let Err(error) = native_host.apply(&initial_batch) {
+        backend.abandon();
+        return Err(BackendError::from(error));
+    }
+    for timer in backend.initial_native_timers() {
+        if let Err(error) =
+            native_host.create_timer(timer.delay_millis, timer.repeating, timer.callback)
+        {
+            backend.abandon();
+            return Err(BackendError::from(error));
+        }
+    }
+
     SESSIONS.with(|sessions| {
         let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
             BackendError::fatal(
@@ -274,574 +392,400 @@ fn mount_internal(
         }
         sessions.insert(
             session_id,
-            Session {
+            SessionState::Ready(Box::new(Session {
                 backend: Some(backend),
+                native_host,
                 poisoned: false,
-                last_response: None,
-            },
+            })),
         );
         Ok(())
     })?;
     reservation.commit();
-    Ok((session_id, response))
+    Ok(session_id)
 }
 
-pub fn mount(
-    root_id: u32,
+/// Mounts a backend directly into a native renderer using bridge root `NodeId(1)`.
+///
+/// # Safety
+///
+/// A non-null `get_api` resolver and `host` must obey the contract declared by the native
+/// renderer C ABI for the lifetime of the mounted session.
+#[allow(unsafe_code)]
+pub unsafe fn native_mount(
+    get_api: Option<NativeRendererGetApiFn>,
+    host: NativeHostHandle,
     create_backend: impl FnOnce(
         SessionId,
         NodeId,
     ) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError>,
-) -> LynxElementBridgeMountResult {
-    let mounted = catch_unwind(AssertUnwindSafe(|| mount_internal(root_id, create_backend)));
+) -> LynxElementBridgeNativeMountResult {
+    let mounted = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: This forwards the caller obligations documented on this function.
+        unsafe { native_mount_internal(get_api, host, create_backend) }
+    }));
     match mounted {
-        Ok(Ok((session, response))) => LynxElementBridgeMountResult {
+        Ok(Ok(session)) => LynxElementBridgeNativeMountResult {
+            status: NATIVE_STATUS_OK,
             session,
-            response: LynxElementBridgeBuffer::from_vec(response_wire(Ok(response), session)),
         },
-        Ok(Err(error)) => LynxElementBridgeMountResult {
+        Ok(Err(error)) => LynxElementBridgeNativeMountResult {
+            status: status_to_native(error.status),
             session: 0,
-            response: LynxElementBridgeBuffer::from_vec(response_wire(Err(error), 0)),
         },
-        Err(payload) => LynxElementBridgeMountResult {
+        Err(_) => LynxElementBridgeNativeMountResult {
+            status: NATIVE_STATUS_PANIC,
             session: 0,
-            response: LynxElementBridgeBuffer::from_vec(response_wire(
-                Err(BackendError::recoverable(
-                    Status::Panic,
-                    panic_message(payload.as_ref()),
-                )),
-                0,
-            )),
         },
     }
 }
 
-fn dispatch_internal(
-    session_id: LynxElementBridgeSession,
-    event: EventMessage,
-) -> Result<CommandBatch, BackendError> {
-    validate_session_owner(session_id)?;
-    if event.session != SessionId::new(session_id).map_err(BackendError::from)? {
+fn callback_session(context: *mut c_void) -> Result<LynxElementBridgeSession, BackendError> {
+    let session = context as usize;
+    if session == 0 || session > u32::MAX as usize {
         return Err(BackendError::recoverable(
             Status::InvalidSession,
-            "Event channel session does not match the active session",
+            "native callback context does not identify a session",
         ));
     }
-    SESSIONS.with(|sessions| {
-        let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
-            BackendError::fatal(
-                Status::InternalError,
-                "session registry is already borrowed",
-            )
-        })?;
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| invalid_session(session_id))?;
-        if session.poisoned {
-            return Err(BackendError::recoverable(
-                Status::HostError,
-                format!("session {session_id} is permanently poisoned"),
-            ));
-        }
-        let backend = session.backend.as_mut().ok_or_else(|| {
-            BackendError::fatal(
-                Status::InternalError,
-                format!("session {session_id} has no backend"),
-            )
-        })?;
-        match backend.dispatch_event(event) {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                if error.poison_session {
-                    session.poisoned = true;
-                    backend.discard_pending();
-                }
-                Err(error)
-            }
-        }
-    })
-}
-
-fn poison_session_after_boundary_panic(session_id: LynxElementBridgeSession) {
-    if validate_session_owner(session_id).is_err() {
-        return;
-    }
-    SESSIONS.with(|sessions| {
-        if let Ok(mut sessions) = sessions.sessions.try_borrow_mut() {
-            if let Some(session) = sessions.get_mut(&session_id) {
-                session.poisoned = true;
-                if let Some(backend) = session.backend.as_mut() {
-                    backend.discard_pending();
-                }
-            }
-        }
-    });
-}
-
-/// Dispatches a borrowed protocol v2 Event channel envelope.
-///
-/// # Safety
-///
-/// When `event_len` is nonzero, `event` must point to that many readable bytes.
-#[allow(unsafe_code)]
-pub unsafe fn dispatch_event(
-    session: LynxElementBridgeSession,
-    event: *const u8,
-    event_len: usize,
-) -> LynxElementBridgeBuffer {
-    let dispatched = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: This forwards the caller obligations documented on this function.
-        let event = unsafe { copy_bytes(event, event_len) }?;
-        let event = decode_event(&event).map_err(|error| {
-            BackendError::recoverable(
-                Status::InvalidArgument,
-                format!("invalid Event channel envelope: {error}"),
-            )
-        })?;
-        dispatch_internal(session, event)
-    }));
-    let result = match dispatched {
-        Ok(result) => result,
-        Err(payload) => {
-            let _ = catch_unwind(AssertUnwindSafe(|| {
-                poison_session_after_boundary_panic(session)
-            }));
-            Err(BackendError::recoverable(
-                Status::Panic,
-                panic_message(payload.as_ref()),
-            ))
-        }
-    };
-    LynxElementBridgeBuffer::from_vec(response_wire(result, session))
-}
-
-fn complete_internal(
-    session_id: LynxElementBridgeSession,
-    bytes: Vec<u8>,
-) -> Result<Vec<u8>, BackendError> {
-    validate_session_owner(session_id)?;
-    SESSIONS.with(|sessions| {
-        let sessions = sessions.sessions.try_borrow().map_err(|_| {
-            BackendError::fatal(
-                Status::InternalError,
-                "session registry is already borrowed",
-            )
-        })?;
-        let session = sessions
-            .get(&session_id)
-            .ok_or_else(|| invalid_session(session_id))?;
-        if session.poisoned {
-            return Err(BackendError::recoverable(
-                Status::HostError,
-                format!("session {session_id} is permanently poisoned"),
-            ));
-        }
-        Ok(())
-    })?;
-    let response = decode_response(&bytes).map_err(|error| {
-        BackendError::recoverable(
-            Status::InvalidArgument,
-            format!("invalid Result channel envelope: {error}"),
-        )
-    })?;
-    if response.session != Some(SessionId::new(session_id).map_err(BackendError::from)?) {
-        return Err(BackendError::recoverable(
-            Status::InvalidSession,
-            "Result channel session does not match the active session",
-        ));
-    }
-    if !response.committed {
-        return Err(BackendError::recoverable(
-            Status::InvalidArgument,
-            "Result channel response is not committed",
-        ));
-    }
-    SESSIONS.with(|sessions| {
-        let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
-            BackendError::fatal(
-                Status::InternalError,
-                "session registry is already borrowed",
-            )
-        })?;
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| invalid_session(session_id))?;
-        if session.poisoned {
-            return Err(BackendError::recoverable(
-                Status::HostError,
-                format!("session {session_id} is permanently poisoned"),
-            ));
-        }
-        session.last_response = Some(response);
-        Ok(bytes)
-    })
-}
-
-/// Accepts a borrowed synchronous Result channel response.
-///
-/// # Safety
-///
-/// When `response_len` is nonzero, `response` must point to that many readable bytes.
-#[allow(unsafe_code)]
-pub unsafe fn complete_batch(
-    session: LynxElementBridgeSession,
-    response: *const u8,
-    response_len: usize,
-) -> LynxElementBridgeBuffer {
-    let completed = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: This forwards the caller obligations documented on this function.
-        let response = unsafe { copy_bytes(response, response_len) }?;
-        complete_internal(session, response)
-    }));
-    let result = match completed {
-        Ok(result) => result,
-        Err(payload) => Err(BackendError::recoverable(
-            Status::Panic,
-            panic_message(payload.as_ref()),
-        )),
-    };
-    LynxElementBridgeBuffer::from_vec(match result {
-        Ok(response) => response,
-        Err(error) => encode_failure(session, 0, error.status, &error.message),
-    })
-}
-
-fn destroy_internal(
-    session_id: LynxElementBridgeSession,
-    consumed: &mut bool,
-) -> Result<CommandBatch, BackendError> {
-    validate_session_owner(session_id)?;
-    let mut session = SESSIONS.with(|sessions| {
-        sessions
-            .sessions
-            .try_borrow_mut()
-            .map_err(|_| {
-                BackendError::fatal(
-                    Status::InternalError,
-                    "session registry is already borrowed",
-                )
-            })?
-            .remove(&session_id)
-            .ok_or_else(|| invalid_session(session_id))
-    })?;
-    lock_owners().remove(&session_id);
-    *consumed = true;
-
-    let was_poisoned = session.poisoned;
-    let backend = session.backend.take().ok_or_else(|| {
-        BackendError::fatal(
-            Status::InternalError,
-            format!("session {session_id} has no backend"),
-        )
-    })?;
-    let destroyed = catch_unwind(AssertUnwindSafe(|| backend.destroy(was_poisoned)));
-    if was_poisoned {
-        return Err(BackendError::recoverable(
-            Status::HostError,
-            format!("session {session_id} was destroyed after becoming permanently poisoned"),
-        ));
-    }
-    match destroyed {
-        Ok(result) => result,
-        Err(payload) => Err(BackendError::recoverable(
-            Status::Panic,
-            panic_message(payload.as_ref()),
-        )),
-    }
-}
-
-pub fn destroy_session(session: LynxElementBridgeSession) -> LynxElementBridgeDestroyResult {
-    let mut consumed = false;
-    let destroyed = catch_unwind(AssertUnwindSafe(|| {
-        destroy_internal(session, &mut consumed)
-    }));
-    let result = match destroyed {
-        Ok(result) => result,
-        Err(payload) => Err(BackendError::recoverable(
-            Status::Panic,
-            panic_message(payload.as_ref()),
-        )),
-    };
-    LynxElementBridgeDestroyResult {
-        consumed: u32::from(consumed),
-        response: LynxElementBridgeBuffer::from_vec(response_wire(result, session)),
-    }
+    Ok(session as u32)
 }
 
 #[allow(unsafe_code)]
-unsafe fn copy_bytes(data: *const u8, len: usize) -> Result<Vec<u8>, BackendError> {
+unsafe fn copy_native_span(data: *const u8, len: usize) -> Result<Vec<u8>, BackendError> {
     if len == 0 {
         return Ok(Vec::new());
     }
     if data.is_null() || len > isize::MAX as usize {
         return Err(BackendError::recoverable(
             Status::InvalidArgument,
-            "input byte span is invalid",
+            "native callback span is invalid",
         ));
     }
-    // SAFETY: The C contract requires `data` to reference `len` readable bytes for this call.
+    // SAFETY: The callback contract requires a readable borrowed span for this call.
     Ok(unsafe { std::slice::from_raw_parts(data, len) }.to_vec())
 }
 
-fn fallback_internal_error() -> Vec<u8> {
-    encode_failure(0, 0, Status::InternalError, "serialization failure")
+#[allow(unsafe_code)]
+unsafe fn copy_native_utf8(span: NativeUtf8) -> Result<String, BackendError> {
+    // SAFETY: This forwards the callback span contract.
+    let bytes = unsafe { copy_native_span(span.data, span.len) }?;
+    String::from_utf8(bytes).map_err(|_| {
+        BackendError::recoverable(Status::InvalidArgument, "native callback UTF-8 is invalid")
+    })
 }
 
-fn response_wire(
-    result: Result<CommandBatch, BackendError>,
-    session: LynxElementBridgeSession,
-) -> Vec<u8> {
+fn dispatch_native_event(
+    session_id: LynxElementBridgeSession,
+    renderer: NativeRendererHandle,
+    listener: NativeListenerHandle,
+    callback: NativeCallbackHandle,
+    name: String,
+    content_type: String,
+    payload: Vec<u8>,
+) -> Result<(), BackendError> {
+    with_ready_session(session_id, |session| {
+        if session.poisoned {
+            return Err(BackendError::recoverable(
+                Status::HostError,
+                format!("session {session_id} is permanently poisoned"),
+            ));
+        }
+        let event = session
+            .native_host
+            .event_message(renderer, listener, callback, &name, content_type, payload)
+            .map_err(|error| BackendError::recoverable(error.status, error.message))?;
+        let dispatched = session
+            .backend
+            .as_mut()
+            .ok_or_else(|| {
+                BackendError::fatal(
+                    Status::InternalError,
+                    format!("session {session_id} has no backend"),
+                )
+            })?
+            .dispatch_event(event);
+        let batch = match dispatched {
+            Ok(batch) => batch,
+            Err(error) => {
+                if error.poison_session {
+                    session.poison();
+                }
+                return Err(error);
+            }
+        };
+        match session.native_host.apply(&batch) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                session.poison();
+                Err(BackendError::from(error))
+            }
+        }
+    })
+}
+
+#[allow(unsafe_code)]
+unsafe extern "C" fn native_on_event(
+    context: *mut c_void,
+    renderer: NativeRendererHandle,
+    listener: NativeListenerHandle,
+    callback: NativeCallbackHandle,
+    name: NativeUtf8,
+    content_type: NativeUtf8,
+    payload: NativeBytes,
+) -> NativeStatus {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let session = callback_session(context)?;
+        validate_session_owner(session)?;
+        // SAFETY: These forward the borrowed callback span contracts.
+        let name = unsafe { copy_native_utf8(name) }?;
+        // SAFETY: This forwards the borrowed callback span contract.
+        let content_type = unsafe { copy_native_utf8(content_type) }?;
+        // SAFETY: This forwards the borrowed callback span contract.
+        let payload = unsafe { copy_native_span(payload.data, payload.len) }?;
+        dispatch_native_event(
+            session,
+            renderer,
+            listener,
+            callback,
+            name,
+            content_type,
+            payload,
+        )
+    }));
     match result {
-        Ok(response) => {
-            encode_command_batch(&response).unwrap_or_else(|_| fallback_internal_error())
-        }
-        Err(error) => encode_failure(session, 0, error.status, &error.message),
+        Ok(Ok(())) => NATIVE_STATUS_OK,
+        Ok(Err(error)) => status_to_native(error.status),
+        Err(_) => NATIVE_STATUS_PANIC,
     }
 }
 
-/// Frees one buffer returned by this crate.
-///
-/// # Safety
-///
-/// `buffer` must be empty or an unmodified, not-yet-freed buffer returned by this crate.
-#[allow(unsafe_code)]
-pub unsafe fn buffer_free(buffer: LynxElementBridgeBuffer) {
-    if buffer.data.is_null() {
-        return;
-    }
-    if buffer.len == 0 || buffer.len > isize::MAX as usize {
-        return;
-    }
-    let slice = ptr::slice_from_raw_parts_mut(buffer.data, buffer.len);
-    // SAFETY: The C contract transfers back the exact boxed slice returned by this crate.
-    drop(unsafe { Box::from_raw(slice) });
+fn dispatch_native_timer(
+    session_id: LynxElementBridgeSession,
+    renderer: NativeRendererHandle,
+    timer: NativeTimerHandle,
+    callback: NativeCallbackHandle,
+) -> Result<(), BackendError> {
+    with_ready_session(session_id, |session| {
+        if session.poisoned {
+            return Err(BackendError::recoverable(
+                Status::HostError,
+                format!("session {session_id} is permanently poisoned"),
+            ));
+        }
+        let callback = session
+            .native_host
+            .timer_callback(renderer, timer, callback)
+            .map_err(|error| BackendError::recoverable(error.status, error.message))?;
+        let dispatched = session
+            .backend
+            .as_mut()
+            .ok_or_else(|| {
+                BackendError::fatal(
+                    Status::InternalError,
+                    format!("session {session_id} has no backend"),
+                )
+            })?
+            .dispatch_timer(callback);
+        let batch = match dispatched {
+            Ok(batch) => batch,
+            Err(error) => {
+                if error.poison_session {
+                    session.poison();
+                }
+                return Err(error);
+            }
+        };
+        if !batch.final_commit {
+            session.poison();
+            return Err(BackendError::fatal(
+                Status::HostError,
+                "native timer dispatch did not produce a final command batch",
+            ));
+        }
+        match session.native_host.apply(&batch) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                session.poison();
+                Err(BackendError::from(error))
+            }
+        }
+    })
 }
 
-#[cfg(test)]
 #[allow(unsafe_code)]
-mod tests {
-    use std::ptr;
-    use std::sync::{Arc, Barrier};
-
-    use lynx_element_bridge_core::{CommandBatch, ResponseBatch};
-    use lynx_element_bridge_wire::{decode_response, encode_response};
-
-    use super::*;
-
-    struct EmptyBackend {
-        session: SessionId,
-        panic_on_dispatch: bool,
+unsafe extern "C" fn native_on_timer(
+    context: *mut c_void,
+    renderer: NativeRendererHandle,
+    timer: NativeTimerHandle,
+    callback: NativeCallbackHandle,
+) -> NativeStatus {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        dispatch_native_timer(callback_session(context)?, renderer, timer, callback)
+    }));
+    match result {
+        Ok(Ok(())) => NATIVE_STATUS_OK,
+        Ok(Err(error)) => status_to_native(error.status),
+        Err(_) => NATIVE_STATUS_PANIC,
     }
+}
 
-    impl BridgeBackend for EmptyBackend {
-        fn dispatch_event(&mut self, _: EventMessage) -> Result<CommandBatch, BackendError> {
-            assert!(!self.panic_on_dispatch, "contained backend panic");
-            Err(BackendError::recoverable(
-                Status::InvalidListener,
-                "invalid listener",
-            ))
-        }
-
-        fn destroy(self: Box<Self>, _: bool) -> Result<CommandBatch, BackendError> {
-            Ok(CommandBatch {
-                session: self.session,
-                sequence: 1,
-                commands: Vec::new(),
-                final_commit: true,
-            })
-        }
-
-        fn discard_pending(&mut self) {}
-    }
-
-    fn create_empty(
-        session: SessionId,
-        _: NodeId,
-    ) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError> {
-        Ok((
-            Box::new(EmptyBackend {
-                session,
-                panic_on_dispatch: false,
-            }),
-            CommandBatch {
-                session,
-                sequence: 0,
-                commands: Vec::new(),
-                final_commit: true,
-            },
-        ))
-    }
-
-    fn copy_and_free(buffer: LynxElementBridgeBuffer) -> Vec<u8> {
-        let bytes = if buffer.data.is_null() {
-            Vec::new()
-        } else {
-            // SAFETY: The buffer came from this API and remains live.
-            unsafe { std::slice::from_raw_parts(buffer.data, buffer.len) }.to_vec()
-        };
-        // SAFETY: The allocating API receives the buffer exactly once.
-        unsafe { buffer_free(buffer) };
-        bytes
-    }
-
-    #[test]
-    fn malformed_spans_and_stale_sessions_return_result_failures() {
-        // SAFETY: Empty buffers own no allocation and may always be returned.
-        unsafe {
-            buffer_free(LynxElementBridgeBuffer {
-                data: ptr::null_mut(),
-                len: 0,
-            })
-        };
-        let invalid = mount(0, create_empty);
-        assert_eq!(invalid.session, 0);
-        assert_eq!(
-            decode_response(&copy_and_free(invalid.response))
-                .unwrap()
-                .status,
-            Status::InvalidArgument
-        );
-
-        let mounted = mount(1, create_empty);
-        copy_and_free(mounted.response);
-        // SAFETY: A null, nonempty span is intentionally rejected before reading.
-        let malformed = unsafe { dispatch_event(mounted.session, ptr::null(), 1) };
-        assert_eq!(
-            decode_response(&copy_and_free(malformed)).unwrap().status,
-            Status::InvalidArgument
-        );
-        let destroyed = destroy_session(mounted.session);
-        assert_eq!(destroyed.consumed, 1);
-        copy_and_free(destroyed.response);
-        let stale = destroy_session(mounted.session);
-        assert_eq!(stale.consumed, 0);
-        assert_eq!(
-            decode_response(&copy_and_free(stale.response))
-                .unwrap()
-                .status,
-            Status::InvalidSession
-        );
-    }
-
-    #[test]
-    fn complete_acknowledges_committed_wire_bytes() {
-        let mounted = mount(1, create_empty);
-        let session = mounted.session;
-        copy_and_free(mounted.response);
-        let response = encode_response(&ResponseBatch {
-            session: Some(SessionId::new(session).unwrap()),
-            sequence: 0,
-            status: Status::Ok,
-            message: None,
-            results: Vec::new(),
-            committed: true,
-        })
-        .unwrap();
-        // SAFETY: The response bytes remain readable for this call.
-        let echoed = unsafe { complete_batch(session, response.as_ptr(), response.len()) };
-        assert_eq!(copy_and_free(echoed), response);
-        copy_and_free(destroy_session(session).response);
-    }
-
-    #[test]
-    fn wrong_thread_destroy_does_not_consume_the_session() {
-        let mounted = mount(1, create_empty);
-        let session = mounted.session;
-        copy_and_free(mounted.response);
-        let barrier = Arc::new(Barrier::new(2));
-        let worker_barrier = Arc::clone(&barrier);
-        let worker = std::thread::spawn(move || {
-            worker_barrier.wait();
-            let destroyed = destroy_session(session);
-            (
-                destroyed.consumed,
-                decode_response(&copy_and_free(destroyed.response))
-                    .unwrap()
-                    .status,
+fn remove_ready_session(
+    session_id: LynxElementBridgeSession,
+) -> Result<Box<Session>, BackendError> {
+    SESSIONS.with(|sessions| {
+        let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
+            BackendError::fatal(
+                Status::InternalError,
+                "session registry is already borrowed",
             )
-        });
-        barrier.wait();
-        assert_eq!(worker.join().unwrap(), (0, Status::WrongThread));
-        let destroyed = destroy_session(session);
-        assert_eq!(destroyed.consumed, 1);
-        copy_and_free(destroyed.response);
+        })?;
+        let state = sessions
+            .get(&session_id)
+            .ok_or_else(|| invalid_session(session_id))?;
+        if matches!(state, SessionState::Busy) {
+            return Err(busy_session(session_id));
+        }
+        let Some(SessionState::Ready(session)) = sessions.remove(&session_id) else {
+            unreachable!("the ready state was checked above")
+        };
+        Ok(session)
+    })
+}
+
+fn native_destroy_internal(
+    session_id: LynxElementBridgeSession,
+    consumed: &mut bool,
+) -> Result<(), BackendError> {
+    validate_session_owner(session_id)?;
+    let mut session = remove_ready_session(session_id)?;
+    lock_owners().remove(&session_id);
+    *consumed = true;
+
+    let was_poisoned = session.poisoned;
+    let work = catch_unwind(AssertUnwindSafe(|| {
+        let backend = session.backend.take().ok_or_else(|| {
+            BackendError::fatal(
+                Status::InternalError,
+                format!("session {session_id} has no backend"),
+            )
+        })?;
+        let destroyed = backend.destroy(was_poisoned);
+        if was_poisoned {
+            return Err(BackendError::recoverable(
+                Status::HostError,
+                format!("session {session_id} was destroyed after becoming permanently poisoned"),
+            ));
+        }
+        session
+            .native_host
+            .apply(&destroyed?)
+            .map_err(BackendError::from)
+    }));
+    let work = match work {
+        Ok(result) => result,
+        Err(payload) => Err(BackendError::recoverable(
+            Status::Panic,
+            panic_message(payload.as_ref()),
+        )),
+    };
+    let released = session.native_host.release().map_err(BackendError::from);
+    match (work, released) {
+        (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+pub fn native_destroy_session(
+    session: LynxElementBridgeSession,
+) -> LynxElementBridgeNativeDestroyResult {
+    let mut consumed = false;
+    let destroyed = catch_unwind(AssertUnwindSafe(|| {
+        native_destroy_internal(session, &mut consumed)
+    }));
+    let status = match destroyed {
+        Ok(Ok(())) => NATIVE_STATUS_OK,
+        Ok(Err(error)) => status_to_native(error.status),
+        Err(_) => NATIVE_STATUS_PANIC,
+    };
+    LynxElementBridgeNativeDestroyResult {
+        status,
+        consumed: u32::from(consumed),
+    }
+}
+
+fn native_abandon_internal(
+    session_id: LynxElementBridgeSession,
+    consumed: &mut bool,
+) -> Result<(), BackendError> {
+    validate_session_owner(session_id)?;
+    let mut session = remove_ready_session(session_id)?;
+    lock_owners().remove(&session_id);
+    *consumed = true;
+
+    let mut first_error = None;
+    match session.backend.take() {
+        Some(mut backend) => {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| backend.abandon())) {
+                first_error = Some(BackendError::recoverable(
+                    Status::Panic,
+                    panic_message(payload.as_ref()),
+                ));
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| backend.discard_pending())) {
+                if first_error.is_none() {
+                    first_error = Some(BackendError::recoverable(
+                        Status::Panic,
+                        panic_message(payload.as_ref()),
+                    ));
+                }
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(backend))) {
+                if first_error.is_none() {
+                    first_error = Some(BackendError::recoverable(
+                        Status::Panic,
+                        panic_message(payload.as_ref()),
+                    ));
+                }
+            }
+        }
+        None => {
+            first_error = Some(BackendError::fatal(
+                Status::InternalError,
+                format!("session {session_id} has no backend"),
+            ));
+        }
     }
 
-    #[test]
-    fn mount_and_dispatch_panics_are_contained_and_dispatch_poisons_the_session() {
-        let mounted = mount(1, |_, _| panic!("contained mount panic"));
-        assert_eq!(mounted.session, 0);
-        let failure = decode_response(&copy_and_free(mounted.response)).unwrap();
-        assert_eq!(failure.status, Status::Panic);
-        assert_eq!(failure.message.as_deref(), Some("contained mount panic"));
+    let released = match catch_unwind(AssertUnwindSafe(|| session.native_host.release())) {
+        Ok(result) => result.map_err(BackendError::from),
+        Err(payload) => Err(BackendError::recoverable(
+            Status::Panic,
+            panic_message(payload.as_ref()),
+        )),
+    };
+    match (first_error, released) {
+        (Some(error), _) | (None, Err(error)) => Err(error),
+        (None, Ok(())) => Ok(()),
+    }
+}
 
-        let mounted = mount(1, |session, _| {
-            Ok((
-                Box::new(EmptyBackend {
-                    session,
-                    panic_on_dispatch: true,
-                }),
-                CommandBatch {
-                    session,
-                    sequence: 0,
-                    commands: Vec::new(),
-                    final_commit: true,
-                },
-            ))
-        });
-        let session = mounted.session;
-        copy_and_free(mounted.response);
-        let event = lynx_element_bridge_wire::encode_event(&EventMessage {
-            session: SessionId::new(session).unwrap(),
-            listener: lynx_element_bridge_core::ListenerId::new(1).unwrap(),
-            callback: lynx_element_bridge_core::CallbackId::new(1).unwrap(),
-            content_type: "application/octet-stream".into(),
-            payload: Vec::new(),
-        })
-        .unwrap();
-        // SAFETY: The encoded event remains readable for this call.
-        let panicked = unsafe { dispatch_event(session, event.as_ptr(), event.len()) };
-        assert_eq!(
-            decode_response(&copy_and_free(panicked)).unwrap().status,
-            Status::Panic
-        );
-        let completion = encode_response(&ResponseBatch {
-            session: Some(SessionId::new(session).unwrap()),
-            sequence: 0,
-            status: Status::Ok,
-            message: None,
-            results: Vec::new(),
-            committed: true,
-        })
-        .unwrap();
-        // SAFETY: The encoded response remains readable for this call.
-        let poisoned_completion =
-            unsafe { complete_batch(session, completion.as_ptr(), completion.len()) };
-        let poisoned_completion = decode_response(&copy_and_free(poisoned_completion)).unwrap();
-        assert_eq!(poisoned_completion.status, Status::HostError);
-        assert!(
-            poisoned_completion
-                .message
-                .as_deref()
-                .unwrap()
-                .contains("permanently poisoned")
-        );
-        // SAFETY: The encoded event remains readable for this call.
-        let poisoned = unsafe { dispatch_event(session, event.as_ptr(), event.len()) };
-        assert_eq!(
-            decode_response(&copy_and_free(poisoned)).unwrap().status,
-            Status::HostError
-        );
-        let destroyed = destroy_session(session);
-        assert_eq!(destroyed.consumed, 1);
-        let destroyed = decode_response(&copy_and_free(destroyed.response)).unwrap();
-        assert_eq!(destroyed.status, Status::HostError);
-        assert!(
-            destroyed
-                .message
-                .as_deref()
-                .unwrap()
-                .contains("permanently poisoned")
-        );
+/// Emergency owner-thread cleanup for a native session whose normal destroy could not consume it.
+///
+/// This consumes the session without producing or applying a teardown command batch.
+pub fn native_abandon_session(
+    session: LynxElementBridgeSession,
+) -> LynxElementBridgeNativeDestroyResult {
+    let mut consumed = false;
+    let abandoned = catch_unwind(AssertUnwindSafe(|| {
+        native_abandon_internal(session, &mut consumed)
+    }));
+    let status = match abandoned {
+        Ok(Ok(())) => NATIVE_STATUS_OK,
+        Ok(Err(error)) => status_to_native(error.status),
+        Err(_) => NATIVE_STATUS_PANIC,
+    };
+    LynxElementBridgeNativeDestroyResult {
+        status,
+        consumed: u32::from(consumed),
     }
 }

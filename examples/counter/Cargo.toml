@@ -18,6 +18,5 @@ crate-type = ["staticlib"]
 [dependencies]
 lynx-element-bridge-core.workspace = true
 lynx-element-bridge-ffi.workspace = true
-lynx-element-bridge-wire.workspace = true
 lynx-element-bridge-yew.workspace = true
 yew.workspace = true

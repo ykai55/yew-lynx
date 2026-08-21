@@ -1,0 +1,459 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 16:00:00 +0800
+Subject: [PATCH 3/3] Add Android native renderer host
+
+Expose generation-checked Native Renderer host tokens through LynxView and
+LynxTemplateRender, enforce ALL_ON_UI ownership, and invalidate outstanding
+renderer state before Android host teardown.
+
+---
+diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
+index 0248d9d21c7ffca9ed2ce3b760f8af7d0167f378..c211f99eda9a319041a31b5648812161d890bdee 100644
+--- a/core/renderer/native_renderer.cc
++++ b/core/renderer/native_renderer.cc
+@@ -262,6 +262,13 @@ class HostRegistry {
+     return true;
+   }
+ 
++  bool Owns(LynxNativeHostHandle handle, TemplateAssembler* tasm) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    Slot* slot = GetLocked(handle);
++    return slot != nullptr && slot->tasm == tasm &&
++           slot->owner == std::this_thread::get_id();
++  }
++
+   Status Reserve(LynxNativeHostHandle handle, TemplateAssembler** tasm) {
+     if (handle == 0) {
+       return kInvalidArgument;
+@@ -333,10 +340,12 @@ class Session;
+ 
+ class RendererRegistry {
+  public:
+-  LynxNativeRendererHandle Insert(std::shared_ptr<Session> session) {
++  LynxNativeRendererHandle Insert(LynxNativeHostHandle host,
++                                  std::shared_ptr<Session> session) {
+     std::lock_guard<std::mutex> lock(mutex_);
+     for (size_t i = 0; i < slots_.size(); ++i) {
+       if (slots_[i].session == nullptr) {
++        slots_[i].host = host;
+         slots_[i].session = std::move(session);
+         return Encode(i, slots_[i].generation);
+       }
+@@ -344,7 +353,7 @@ class RendererRegistry {
+     if (slots_.size() >= std::numeric_limits<uint32_t>::max()) {
+       return 0;
+     }
+-    slots_.push_back({1, std::move(session)});
++    slots_.push_back({1, host, std::move(session)});
+     return Encode(slots_.size() - 1, slots_.back().generation);
+   }
+ 
+@@ -354,6 +363,18 @@ class RendererRegistry {
+     return slot == nullptr ? nullptr : slot->session;
+   }
+ 
++  std::vector<std::shared_ptr<Session>> GetForHost(
++      LynxNativeHostHandle host) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    std::vector<std::shared_ptr<Session>> sessions;
++    for (const Slot& slot : slots_) {
++      if (slot.host == host && slot.session != nullptr) {
++        sessions.push_back(slot.session);
++      }
++    }
++    return sessions;
++  }
++
+   bool Remove(LynxNativeRendererHandle handle,
+               const std::shared_ptr<Session>& expected) {
+     std::lock_guard<std::mutex> lock(mutex_);
+@@ -361,6 +382,7 @@ class RendererRegistry {
+     if (slot == nullptr || slot->session != expected) {
+       return false;
+     }
++    slot->host = 0;
+     slot->session.reset();
+     slot->generation = NextGeneration(slot->generation);
+     return true;
+@@ -369,6 +391,7 @@ class RendererRegistry {
+  private:
+   struct Slot {
+     uint32_t generation{1};
++    LynxNativeHostHandle host{0};
+     std::shared_ptr<Session> session;
+   };
+ 
+@@ -454,6 +477,12 @@ class Session final : public std::enable_shared_from_this<Session> {
+     renderer_ = renderer;
+   }
+ 
++  LynxNativeRendererHandle renderer_handle() const { return renderer_; }
++
++  bool CanReleaseSynchronously() const {
++    return CheckThread() == kOk && dispatch_depth_ == 0;
++  }
++
+   Status CheckThread() const {
+     return owner_ == std::this_thread::get_id() ? kOk : kWrongThread;
+   }
+@@ -1104,7 +1133,7 @@ Status Acquire(LynxNativeHostHandle host,
+       session->BeginRelease();
+       return status;
+     }
+-    LynxNativeRendererHandle handle = Renderers().Insert(session);
++    LynxNativeRendererHandle handle = Renderers().Insert(host, session);
+     if (handle == 0) {
+       session->BeginRelease();
+       return kResourceExhausted;
+@@ -1283,6 +1312,48 @@ bool UnregisterNativeRendererHost(LynxNativeHostHandle host) {
+ #endif
+ }
+ 
++bool UnregisterNativeRendererHost(LynxNativeHostHandle host,
++                                  TemplateAssembler* expected_tasm) {
++#if defined(__cpp_exceptions)
++  try {
++#endif
++    return Hosts().Owns(host, expected_tasm) && Hosts().Unregister(host);
++#if defined(__cpp_exceptions)
++  } catch (...) {
++    return false;
++  }
++#endif
++}
++
++bool DestroyNativeRendererHost(LynxNativeHostHandle host,
++                               TemplateAssembler* expected_tasm) {
++#if defined(__cpp_exceptions)
++  try {
++#endif
++    if (!Hosts().Owns(host, expected_tasm)) {
++      return false;
++    }
++    std::vector<std::shared_ptr<Session>> sessions =
++        Renderers().GetForHost(host);
++    for (const auto& session : sessions) {
++      if (!session->CanReleaseSynchronously()) {
++        return false;
++      }
++    }
++    for (const auto& session : sessions) {
++      if (!Renderers().Remove(session->renderer_handle(), session) ||
++          session->BeginRelease() != kOk) {
++        return false;
++      }
++    }
++    return Hosts().Unregister(host);
++#if defined(__cpp_exceptions)
++  } catch (...) {
++    return false;
++  }
++#endif
++}
++
+ }  // namespace tasm
+ }  // namespace lynx
+ 
+diff --git a/core/renderer/native_renderer.h b/core/renderer/native_renderer.h
+index aca6b5251e3c340bd20445825e8bccb8fcf98f80..7aecb8f52e07c7ed762d15616d647bf65fbfb08a 100644
+--- a/core/renderer/native_renderer.h
++++ b/core/renderer/native_renderer.h
+@@ -16,6 +16,12 @@ class TemplateAssembler;
+ // unregister on the TASM thread, and must unregister before destroying |tasm|.
+ LynxNativeHostHandle RegisterNativeRendererHost(TemplateAssembler* tasm);
+ bool UnregisterNativeRendererHost(LynxNativeHostHandle host);
++bool UnregisterNativeRendererHost(LynxNativeHostHandle host,
++                                  TemplateAssembler* expected_tasm);
++// Host teardown invalidates the token and any outstanding renderer before
++// |expected_tasm| is destroyed.
++bool DestroyNativeRendererHost(LynxNativeHostHandle host,
++                               TemplateAssembler* expected_tasm);
+ 
+ }  // namespace tasm
+ }  // namespace lynx
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index bcad640d387ad6c5e25fccb393dab691b80ce72e..1074888069c2af1f3f51c1a799989d00aa33b609 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -297,6 +297,24 @@ TEST(NativeRendererApiTest, TimerCancellationAndReleaseAreReentrantSafe) {
+   EXPECT_TRUE(UnregisterNativeRendererHost(host));
+ }
+ 
++TEST(NativeRendererApiTest, HostDestructionInvalidatesOutstandingRenderer) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  EXPECT_TRUE(DestroyNativeRendererHost(host, harness.tasm_.get()));
++  LynxNativeNodeHandle root = 0;
++  EXPECT_EQ(api->get_root(renderer, &root),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION);
++  EXPECT_FALSE(UnregisterNativeRendererHost(host));
++}
++
+ }  // namespace
+ }  // namespace testing
+ }  // namespace tasm
+diff --git a/core/shell/android/lynx_template_render_android.cc b/core/shell/android/lynx_template_render_android.cc
+index a539805807768f0f0ce0e978ceb5492dea1a7e82..2bf4bde233026a17324263d7b77f6f12bfb53995 100644
+--- a/core/shell/android/lynx_template_render_android.cc
++++ b/core/shell/android/lynx_template_render_android.cc
+@@ -15,6 +15,7 @@
+ #include "core/public/ui_delegate.h"
+ #include "core/renderer/data/android/platform_data_android.h"
+ #include "core/renderer/dom/android/lepus_message_consumer.h"
++#include "core/renderer/native_renderer.h"
+ #include "core/renderer/utils/android/event_converter_android.h"
+ #include "core/renderer/utils/android/value_converter_android.h"
+ #include "core/renderer/utils/base/base_def.h"
+@@ -431,6 +432,57 @@ void Destroy(JNIEnv* env, jclass jcaller, jlong ptr) {
+   delete reinterpret_cast<LynxShell*>(ptr);
+ }
+ 
++jlong RegisterNativeRendererHost(JNIEnv* env, jclass jcaller, jlong ptr,
++                                 jlong lifecycle) {
++  AtomicLifecycle* lifecycle_ptr =
++      reinterpret_cast<AtomicLifecycle*>(lifecycle);
++  if (!AtomicLifecycle::TryLock(lifecycle_ptr)) {
++    return 0;
++  }
++  auto* shell = reinterpret_cast<LynxShell*>(ptr);
++  LynxNativeHostHandle host = 0;
++  if (shell != nullptr &&
++      shell->ThreadStrategy() ==
++          lynx::base::ThreadStrategyForRendering::ALL_ON_UI &&
++      shell->CanRunOnTasmThreadNow()) {
++    host = lynx::tasm::RegisterNativeRendererHost(shell->GetTasm());
++  }
++  AtomicLifecycle::TryFree(lifecycle_ptr);
++  return static_cast<jlong>(host);
++}
++
++jboolean UnregisterNativeRendererHost(JNIEnv* env, jclass jcaller, jlong ptr,
++                                      jlong lifecycle, jlong host) {
++  AtomicLifecycle* lifecycle_ptr =
++      reinterpret_cast<AtomicLifecycle*>(lifecycle);
++  if (!AtomicLifecycle::TryLock(lifecycle_ptr)) {
++    return JNI_FALSE;
++  }
++  auto* shell = reinterpret_cast<LynxShell*>(ptr);
++  const bool unregistered =
++      shell != nullptr && shell->CanRunOnTasmThreadNow() &&
++      lynx::tasm::UnregisterNativeRendererHost(
++          static_cast<LynxNativeHostHandle>(host), shell->GetTasm());
++  AtomicLifecycle::TryFree(lifecycle_ptr);
++  return unregistered ? JNI_TRUE : JNI_FALSE;
++}
++
++jboolean DestroyNativeRendererHost(JNIEnv* env, jclass jcaller, jlong ptr,
++                                   jlong lifecycle, jlong host) {
++  AtomicLifecycle* lifecycle_ptr =
++      reinterpret_cast<AtomicLifecycle*>(lifecycle);
++  if (!AtomicLifecycle::TryLock(lifecycle_ptr)) {
++    return JNI_FALSE;
++  }
++  auto* shell = reinterpret_cast<LynxShell*>(ptr);
++  const bool destroyed =
++      shell != nullptr && shell->CanRunOnTasmThreadNow() &&
++      lynx::tasm::DestroyNativeRendererHost(
++          static_cast<LynxNativeHostHandle>(host), shell->GetTasm());
++  AtomicLifecycle::TryFree(lifecycle_ptr);
++  return destroyed ? JNI_TRUE : JNI_FALSE;
++}
++
+ jlong LifecycleCreate(JNIEnv* env, jclass jclass) {
+   return reinterpret_cast<jlong>(new AtomicLifecycle());
+ }
+diff --git a/core/shell/lynx_shell.cc b/core/shell/lynx_shell.cc
+index c426ea2de6cfc9722d6d912e3c7bd876ca60f34f..2af491d9a4cd581db0e80ab34f5811f76ca55f0f 100644
+--- a/core/shell/lynx_shell.cc
++++ b/core/shell/lynx_shell.cc
+@@ -1627,6 +1627,11 @@ void LynxShell::RunOnTasmThread(std::function<void(void)>&& task) {
+   engine_actor_->Act([task = std::move(task)](auto& engine) { task(); });
+ }
+ 
++bool LynxShell::CanRunOnTasmThreadNow() {
++  return !is_destroyed_ && engine_actor_ != nullptr &&
++         engine_actor_->CanRunNow();
++}
++
+ void LynxShell::AttachEngineToUIThread() {
+ #if ENABLE_TESTBENCH_RECORDER
+   tasm::recorder::TemplateAssemblerRecorder::RecordSwitchEngineFromUIThread(
+diff --git a/core/shell/lynx_shell.h b/core/shell/lynx_shell.h
+index e1b98cf6744049cc1ceaad55a609c157e1b8b4dd..2ce18fc6ad8c802c0ea4ab94a9da8173e38da8ee 100644
+--- a/core/shell/lynx_shell.h
++++ b/core/shell/lynx_shell.h
+@@ -359,6 +359,8 @@ class LynxShell {
+ 
+   void RunOnTasmThread(std::function<void(void)>&& task);
+ 
++  bool CanRunOnTasmThreadNow();
++
+   tasm::LynxGetUIResult GetLynxUI(const tasm::NodeSelectRoot& root,
+                                   const tasm::NodeSelectOptions& options);
+ 
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index dabc9d43125acbbdc369c2716023d9dd2fbd8af8..dcf15eeabb4ae38c12e698d023334d5a451ba89d 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -288,6 +288,7 @@ public class LynxTemplateRender
+ 
+   private volatile NativeFacade mNativeFacade;
+   private long mNativePtr = 0;
++  private long mNativeRendererHost = 0;
+   private volatile LynxLogContext mLogContext = LynxLogContext.UNAVAILABLE;
+ 
+   @Keep @Nullable private LynxResourceLoader mLoader;
+@@ -2679,6 +2680,52 @@ public class LynxTemplateRender
+     return mThreadStrategyForRendering;
+   }
+ 
++  /** Registers this renderer for use through the Native Renderer C API. */
++  public synchronized long registerNativeRendererHost() {
++    if (!UIThreadUtils.isOnUiThread()) {
++      throw new IllegalStateException("Native renderer host must be registered on the UI thread");
++    }
++    if (mThreadStrategyForRendering != ThreadStrategyForRendering.ALL_ON_UI) {
++      throw new IllegalStateException("Native renderer host requires ALL_ON_UI rendering");
++    }
++    if (mNativePtr == 0 || mNativeLifecycle == 0 || mIsDestroyed.get() || mHasDestroy
++        || mDestroying) {
++      throw new IllegalStateException("LynxTemplateRender is destroyed");
++    }
++    if (mNativeRendererHost != 0) {
++      throw new IllegalStateException("Native renderer host is already registered");
++    }
++    long host = nativeRegisterNativeRendererHost(mNativePtr, mNativeLifecycle);
++    if (host == 0) {
++      throw new IllegalStateException("Unable to register native renderer host");
++    }
++    mNativeRendererHost = host;
++    return host;
++  }
++
++  /** Unregisters the exact token returned by {@link #registerNativeRendererHost}. */
++  public synchronized void unregisterNativeRendererHost(long host) {
++    if (!UIThreadUtils.isOnUiThread()) {
++      throw new IllegalStateException("Native renderer host must be unregistered on the UI thread");
++    }
++    if (host == 0) {
++      throw new IllegalArgumentException("Native renderer host token must not be zero");
++    }
++    if (mNativeRendererHost == 0) {
++      throw new IllegalStateException("Native renderer host is not registered");
++    }
++    if (host != mNativeRendererHost) {
++      throw new IllegalArgumentException("Native renderer host token is stale");
++    }
++    if (mNativePtr == 0 || mNativeLifecycle == 0 || mIsDestroyed.get() || mHasDestroy) {
++      throw new IllegalStateException("LynxTemplateRender is destroyed");
++    }
++    if (!nativeUnregisterNativeRendererHost(mNativePtr, mNativeLifecycle, host)) {
++      throw new IllegalStateException("Native renderer host is still in use");
++    }
++    mNativeRendererHost = 0;
++  }
++
+   private void dispatchOnPageStart(final String url) {
+     LLog.i(TAG, "dispatchOnPageStart url " + url + " in " + this.toString());
+     if (mHasPageStart || null == mClient) {
+@@ -4264,9 +4311,16 @@ public class LynxTemplateRender
+       mNativeFacade.destroyAnyThreadPart();
+     }
+ 
++    long nativeRendererHost;
++    synchronized (this) {
++      nativeRendererHost = mNativeRendererHost;
++      mNativeRendererHost = 0;
++    }
++
+     // need ensure destroy native on ui thread
+     UIThreadUtils.runOnUiThreadImmediately(
+-        new DestroyTask(mNativePtr, mNativeLifecycle, this, mNativeFacade));
++        new DestroyTask(
++            mNativePtr, mNativeLifecycle, nativeRendererHost, this, mNativeFacade));
+ 
+     if (shouldCacheLynxEngine) {
+       LynxEngine lynxEngine = mLynxEngineRef;
+@@ -4312,13 +4366,15 @@ public class LynxTemplateRender
+   private static class DestroyTask implements Runnable {
+     private long mNativePtr;
+     private long mNativeLifecycle;
++    private long mNativeRendererHost;
+     private volatile NativeFacade mNativeFacade;
+     private LynxTemplateRender mRenderer;
+ 
+-    public DestroyTask(long nativePtr, long nativeLifecycle, LynxTemplateRender renderer,
+-        NativeFacade nativeFacade) {
++    public DestroyTask(long nativePtr, long nativeLifecycle, long nativeRendererHost,
++        LynxTemplateRender renderer, NativeFacade nativeFacade) {
+       mNativePtr = nativePtr;
+       mNativeLifecycle = nativeLifecycle;
++      mNativeRendererHost = nativeRendererHost;
+       mRenderer = ((nativeLifecycle != 0) && (nativePtr != 0)) ? renderer : null;
+       mNativeFacade = nativeFacade;
+     }
+@@ -4326,6 +4382,13 @@ public class LynxTemplateRender
+     @Override
+     public void run() {
+       if ((mNativeLifecycle != 0) && (mNativePtr != 0)) {
++        if (mNativeRendererHost != 0) {
++          if (!nativeDestroyNativeRendererHost(
++                  mNativePtr, mNativeLifecycle, mNativeRendererHost)) {
++            throw new IllegalStateException("Unable to destroy native renderer host");
++          }
++          mNativeRendererHost = 0;
++        }
+         if (nativeLifecycleTryTerminate(mNativeLifecycle)) {
+           nativeDestroy(mNativePtr);
+           mNativePtr = 0;
+@@ -4635,6 +4698,14 @@ public class LynxTemplateRender
+ 
+   private static native void nativeDestroy(long ptr);
+ 
++  private static native long nativeRegisterNativeRendererHost(long ptr, long lifecycle);
++
++  private static native boolean nativeUnregisterNativeRendererHost(
++      long ptr, long lifecycle, long host);
++
++  private static native boolean nativeDestroyNativeRendererHost(
++      long ptr, long lifecycle, long host);
++
+   private static native long nativeLifecycleCreate();
+ 
+   private static native boolean nativeLifecycleTryTerminate(long lifecycle);
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java
+index a6bfcabfe37ee16c9de829b65c4a0c5f17851061..bf3ae6b5195aa4ec5ec4046035c4919c7b2a098f 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java
+@@ -1318,6 +1318,22 @@ public class LynxView extends UIBodyView implements ILynxSecurityTarget {
+     return mLynxTemplateRender.getThreadStrategyForRendering();
+   }
+ 
++  /** Returns an opaque token for mounting a Native Renderer application. */
++  public long registerNativeRendererHost() {
++    if (mLynxTemplateRender == null || mDestroyed) {
++      throw new IllegalStateException("LynxView is destroyed");
++    }
++    return mLynxTemplateRender.registerNativeRendererHost();
++  }
++
++  /** Unregisters a Native Renderer token previously returned by this view. */
++  public void unregisterNativeRendererHost(long host) {
++    if (mLynxTemplateRender == null || mDestroyed) {
++      throw new IllegalStateException("LynxView is destroyed");
++    }
++    mLynxTemplateRender.unregisterNativeRendererHost(host);
++  }
++
+   @Override
+   public boolean dispatchKeyEvent(KeyEvent event) {
+     if ((lynxUIRenderer() == null) || (!lynxUIRenderer().needHandleDispatchKeyEvent())) {

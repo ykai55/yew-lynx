@@ -27,16 +27,21 @@ clean=0
 offline=0
 lynx_patches_applied=0
 LYNX_PATCH_FILES=()
+LYNX_APPLIED_PATCH_FILES=()
 
 restore_lynx_source() {
   local exit_status=$?
 
   trap - EXIT
   if ((lynx_patches_applied)); then
-    if ! git -C "$LYNX_SOURCE_DIR" apply --reverse "${LYNX_PATCH_FILES[@]}"; then
-      printf 'Failed to remove temporary Lynx patches; source checkout is dirty\n' >&2
-      return 1
-    fi
+    for ((i = ${#LYNX_APPLIED_PATCH_FILES[@]} - 1; i >= 0; --i)); do
+      if ! git -C "$LYNX_SOURCE_DIR" apply --reverse \
+          "${LYNX_APPLIED_PATCH_FILES[$i]}"; then
+        printf 'Failed to remove temporary Lynx patch %s; source checkout is dirty\n' \
+          "${LYNX_APPLIED_PATCH_FILES[$i]}" >&2
+        return 1
+      fi
+    done
   fi
   return "$exit_status"
 }
@@ -50,7 +55,6 @@ usage() {
 remove_generated_android_outputs() {
   rm -rf -- \
     "$ROOT_DIR/.deps/android" \
-    "$ROOT_DIR/adapters/mts/dist" \
     "$ROOT_DIR/target/android-libs" \
     "$ROOT_DIR/target/android-build" \
     "$ROOT_DIR/target/android-cxx" \
@@ -74,10 +78,9 @@ calculate_cache_key() {
     printf 'lynx_sha=%s\n' "$LYNX_SHA"
     git -C "$ROOT_DIR" ls-files -co --exclude-standard -- \
       .gitmodules Cargo.lock Cargo.toml rust-toolchain.toml include \
-      adapters/android adapters/mts/package.json adapters/mts/package-lock.json \
-      adapters/mts/scripts adapters/mts/src adapters/mts/template android \
+      adapters/android android \
       crates examples/android examples/counter examples/dioxus-counter \
-      patches/lynx patches/yew protocol \
+      patches/lynx patches/yew \
       scripts/bootstrap-yew.sh scripts/build-android.sh scripts/prepare-hab.sh \
       scripts/prepare-primjs.sh scripts/publish-lynx-maven.sh \
       | sort -u \
@@ -191,7 +194,7 @@ require_command() {
   fi
 }
 
-for command in awk cargo curl cut git grep head java node npm python3 rustc sha256sum sort strings unzip; do
+for command in awk cargo curl cut git grep head java python3 rustc sha256sum sort strings unzip; do
   require_command "$command"
 done
 
@@ -228,12 +231,16 @@ if [[ -n "$tracked_lynx_changes" ]]; then
     "$tracked_lynx_changes" >&2
   exit 1
 fi
-if ! git -C "$LYNX_SOURCE_DIR" apply --check "${LYNX_PATCH_FILES[@]}"; then
-  printf 'Lynx patch series does not apply to pinned revision %s\n' "$LYNX_SHA" >&2
-  exit 1
-fi
-git -C "$LYNX_SOURCE_DIR" apply "${LYNX_PATCH_FILES[@]}"
-lynx_patches_applied=1
+for patch_file in "${LYNX_PATCH_FILES[@]}"; do
+  if ! git -C "$LYNX_SOURCE_DIR" apply --check "$patch_file"; then
+    printf 'Lynx patch %s does not apply in series to pinned revision %s\n' \
+      "$patch_file" "$LYNX_SHA" >&2
+    exit 1
+  fi
+  git -C "$LYNX_SOURCE_DIR" apply "$patch_file"
+  LYNX_APPLIED_PATCH_FILES+=("$patch_file")
+  lynx_patches_applied=1
+done
 
 java_major="$(java -version 2>&1 | awk -F '[".]' '/version/ { print $2; exit }')"
 if [[ "$java_major" != 11 ]]; then
@@ -383,17 +390,17 @@ if grep -Eq '^lib/(armeabi|armeabi-v7a|x86|x86_64)/' <<<"$apk_entries"; then
   printf 'APK contains an unsupported ABI\n' >&2
   exit 1
 fi
-if ! grep -q '^assets/lynx-element-bridge-counter\.lynx\.bundle$' <<<"$apk_entries"; then
-  printf 'APK is missing the Lynx Element Bridge template bundle\n' >&2
+if grep -q '\.lynx\.bundle$' <<<"$apk_entries"; then
+  printf 'Native-only APK unexpectedly contains a Lynx template bundle\n' >&2
   exit 1
 fi
 backend_strings="$(unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge.so | strings)"
-if ! grep -Fqx "$EXPECTED_BACKEND_MARKER" <<<"$backend_strings"; then
+if ! grep -Fq "$EXPECTED_BACKEND_MARKER" <<<"$backend_strings"; then
   printf 'APK native library does not contain marker %s\n' \
     "$EXPECTED_BACKEND_MARKER" >&2
   exit 1
 fi
-if grep -Fqx "$OTHER_BACKEND_MARKER" <<<"$backend_strings"; then
+if grep -Fq "$OTHER_BACKEND_MARKER" <<<"$backend_strings"; then
   printf 'APK native library contains marker for the unselected backend: %s\n' \
     "$OTHER_BACKEND_MARKER" >&2
   exit 1
@@ -412,9 +419,7 @@ hab_lock_sha256=$(sha256sum "$ROOT_DIR/android/hab.lock" | cut -d ' ' -f 1)
 primjs_lock_sha256=$(sha256sum "$ROOT_DIR/android/primjs.lock" | cut -d ' ' -f 1)
 yew_head=$(git -C "$YEW_SOURCE_DIR" rev-parse HEAD)
 yew_patch_series_sha256=$(sha256sum "$ROOT_DIR/patches/yew/series" | cut -d ' ' -f 1)
-npm_lock_sha256=$(sha256sum "$ROOT_DIR/adapters/mts/package-lock.json" | cut -d ' ' -f 1)
 rustc=$(rustc --version)
-node=$(node --version)
 java=$(java -version 2>&1 | head -n 1)
 lynx_gradle=6.7.1
 app_gradle=7.6.4

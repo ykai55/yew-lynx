@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 02:00:00 +0800
+Subject: [PATCH 8/8] Initialize native renderer event lifecycle
+
+Mark a native renderer session as template-ready after its Fiber page is
+created so platform touch events reach the ordinary TouchEventHandler path.
+Restore the flag on rollback and release, and cover a platform tap targeting a
+listener descendant.
+
+---
+ core/renderer/native_renderer.cc          | 13 ++++++++
+ core/renderer/native_renderer_unittest.cc | 39 +++++++++++++++++++++++
+ core/renderer/template_assembler.cc       | 12 +++++++
+ core/renderer/template_assembler.h        |  3 ++
+ 4 files changed, 67 insertions(+)
+
+diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
+index 7c79685..ebe0b38 100644
+--- a/core/renderer/native_renderer.cc
++++ b/core/renderer/native_renderer.cc
+@@ -476,6 +476,10 @@ class Session final : public std::enable_shared_from_this<Session> {
+     if (status != kOk) {
+       return status;
+     }
++    if (!tasm_->BeginNativeRendererSession()) {
++      return kHostError;
++    }
++    template_lifecycle_started_ = true;
+     return kOk;
+   }
+ 
+@@ -980,6 +984,10 @@ class Session final : public std::enable_shared_from_this<Session> {
+   }
+ 
+   void RollbackInitialize() noexcept {
++    if (template_lifecycle_started_) {
++      tasm_->EndNativeRendererSession();
++      template_lifecycle_started_ = false;
++    }
+     ClearRootState(false);
+     RestorePageConfig();
+   }
+@@ -1202,6 +1210,10 @@ class Session final : public std::enable_shared_from_this<Session> {
+ #endif
+     listeners_.clear();
+     timer_manager_.reset();
++    if (template_lifecycle_started_) {
++      tasm_->EndNativeRendererSession();
++      template_lifecycle_started_ = false;
++    }
+     ClearRootState(true);
+     RestorePageConfig();
+     Hosts().Release(host_);
+@@ -1226,6 +1238,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+   size_t dispatch_depth_{0};
+   bool active_{true};
+   bool page_config_replaced_{false};
++  bool template_lifecycle_started_{false};
+   bool cleanup_scheduled_{false};
+   bool finalized_{false};
+ };
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index ed99589..3bc01bb 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -500,6 +500,45 @@ TEST(NativeRendererApiTest,
+   EXPECT_TRUE(UnregisterNativeRendererHost(host));
+ }
+ 
++TEST(NativeRendererApiTest,
++     NativeSessionDispatchesPlatformTapFromDescendant) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle root = 0;
++  LynxNativeNodeHandle parent = 0;
++  LynxNativeNodeHandle child = 0;
++  ASSERT_EQ(api->get_root(renderer, &root), LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->create_element(renderer, Utf8("view"), &parent),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->create_element(renderer, Utf8("text"), &child),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->insert_before(renderer, root, parent, 0),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->insert_before(renderer, parent, child, 0),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->add_event_listener(renderer, parent, 7, 11, Utf8("tap")),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->flush(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  Element* target = harness.manager_->root()->GetChildAt(0)->GetChildAt(0);
++  harness.tasm_->SendTouchEvent(
++      "tap", EventInfo(target->impl_id(), 0, 0, 0, 0, 0, 0));
++  EXPECT_EQ(state.event_count, 1);
++  EXPECT_EQ(state.event_listener, 7u);
++  EXPECT_EQ(state.event_callback, 11u);
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
+ TEST(NativeRendererApiTest, TimerCancellationAndReleaseAreReentrantSafe) {
+   NativeRendererHarness harness;
+   const auto* api = lynx_native_renderer_get_api(1);
+diff --git a/core/renderer/template_assembler.cc b/core/renderer/template_assembler.cc
+index 0837243..5a6b8d9 100644
+--- a/core/renderer/template_assembler.cc
++++ b/core/renderer/template_assembler.cc
+@@ -826,6 +826,18 @@ void TemplateAssembler::DidRenderTemplate(
+   template_loaded_ = true;
+ }
+ 
++bool TemplateAssembler::BeginNativeRendererSession() {
++  if (template_loaded_ || destroyed()) {
++    return false;
++  }
++  template_loaded_ = true;
++  return true;
++}
++
++void TemplateAssembler::EndNativeRendererSession() {
++  template_loaded_ = false;
++}
++
+ void TemplateAssembler::DidLoadTemplate() {
+   // exec callback
+   // Pending post js when pre_painting_ is enabled
+diff --git a/core/renderer/template_assembler.h b/core/renderer/template_assembler.h
+index e93aaa3..517bc37 100644
+--- a/core/renderer/template_assembler.h
++++ b/core/renderer/template_assembler.h
+@@ -861,6 +861,9 @@ class TemplateAssembler final : public TemplateEntryHolder,
+                : false;
+   }
+ 
++  bool BeginNativeRendererSession();
++  void EndNativeRendererSession();
++
+  private:
+   void ExecuteOnLayoutReadyHooks();
+   void EnsureOnLayoutReadyHooksFinish();
+-- 
+2.39.5

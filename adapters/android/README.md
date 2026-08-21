@@ -1,129 +1,68 @@
-# Android LynxModule adapter
+# Android native host adapter
 
-This directory contains the framework-neutral JNI adapter between Lynx's
-synchronous MTS module path and one selected Rust counter backend. It uses the
-public `LynxModule` surface and does not bind hidden Lynx C++ symbols.
+This directory connects the Rust application ABI to the native renderer host
+added by `patches/lynx/0002-0009`. It has one Java owner and one JNI lifecycle;
+there is no Java `LynxModule` or application byte-buffer transport.
 
-The adapter targets Lynx commit
-`0df14207cebb060f1bed8de12b64a1119dee8f06`. At that revision:
+## Lifecycle
 
-- `LynxModule` provides public constructors and a `void destroy()` lifecycle
-  hook.
-- `LynxMethodWrapper` supports synchronous numeric and `byte[]` parameters and
-  return values.
-- `LynxBaseConfigurator` exposes per-runtime module registration and the MTS
-  opt-in, which is disabled by default.
-- Module teardown runs on the module execution thread. The adapter does not
-  marshal threads, and Rust requires every session call to remain on its mount
-  thread.
+1. `LynxView.registerNativeRendererHost()` returns an opaque 64-bit host token.
+2. `LynxNativeRendererHost.mount()` enters JNI.
+3. JNI resolves `lynx_native_renderer_get_api` from the loaded Lynx library.
+4. The selected Rust staticlib creates its framework backend and calls
+   `lynx_element_bridge_native_mount`.
+5. Rust copies `LynxNativeRendererApiV1`, acquires the renderer, applies the
+   initial in-memory `CommandBatch`, and registers its timer.
+6. Lynx invokes Rust event/timer callbacks synchronously; Rust validates IDs,
+   runs the framework, and directly applies the resulting mutations.
+7. `destroy()` applies framework teardown and releases the renderer. If normal
+   destroy fails without consuming the token, `abandon()` is the emergency
+   cleanup path.
 
-The pinned Lynx patch under `patches/lynx` exposes Java ByteArray values to
-ordinary LepusNG as a read-only byte view. It is required for MTS to read the
-returned FlatBuffers buffers directly.
+Java clears its session whenever native returns `consumed=1`, including status
+failures. Wrong-thread or busy calls return `consumed=0` and retain ownership.
 
-## Registration
+## Native Contracts
 
-Register one non-shared module per runtime before building the `LynxView`:
+- `include/lynx_native_application.h` declares session ownership, mount,
+  destroy, abandon, and backend identity.
+- `include/lynx_native_renderer.h` declares the versioned host function table,
+  callbacks, statuses, and opaque handles.
+- The patched Lynx public renderer header must byte-match the root copy.
+- Event `content_type` and payload spans are borrowed for one callback and
+  copied into opaque Rust bytes before framework entry.
+- All lifecycle work stays on the `ALL_ON_UI` mounting thread.
 
-```java
-LynxViewBuilder builder = new LynxViewBuilder();
-builder.setEnableMTSModule(true);
-builder.registerModule(
-    LynxElementBridgeModule.NAME, LynxElementBridgeModule.class);
-LynxView view = builder.build(context);
-```
+`dlsym` is intentional: the standalone app links the Rust/JNI shared library
+separately from Lynx's shared library. A missing export fails mount before a
+Rust session is published.
 
-The module name is `LynxElementBridge`. One Java module instance owns at most
-one live Rust session. Methods are synchronized to prevent concurrent access to
-that session. `backendName()` obtains `yew` or `dioxus` from the linked Rust
-archive rather than from a Java build constant. JNI validates the stable
-`lynx-element-bridge-backend:<backend>` marker before returning the short name.
+## Verification
 
-## MTS Surface
-
-All payloads are FlatBuffers v2 buffers with file identifier `LEB2`:
-
-```js
-const module = lynx.module('LynxElementBridge');
-const mountCommands = module.invoke('mount', rootId);
-const eventCommands = module.invoke('dispatchEvent', eventBytes);
-const completionResult = module.invoke('completeBatch', resultBytes);
-const cleanupCommands = module.invoke('destroySession');
-```
-
-IDs cross Java as positive unsigned 32-bit values represented by `long` because
-Java has no unsigned `int`. Event and completion envelopes cross unchanged as
-`byte[]`. Java-generated failures are valid Result-channel `LEB2` envelopes.
-
-Java cannot expose an MTS method named `destroy` while overriding inherited
-`void destroy()`, so `destroySession()` is the callable teardown method. A
-consumed `destroySession()` permits a later mount on the same live module;
-inherited `destroy()` permanently closes the module.
-
-## Rust C ABI
-
-The JNI source includes the shared `include/lynx_element_bridge.h`. Yew and
-Dioxus static libraries each export the same ABI, and one is linked per build:
-
-```c
-typedef uint32_t LynxElementBridgeSession;
-
-LynxElementBridgeMountResult lynx_element_bridge_mount(uint32_t root_id);
-LynxElementBridgeBuffer lynx_element_bridge_dispatch_event(
-    LynxElementBridgeSession session, const uint8_t* event, size_t event_len);
-LynxElementBridgeBuffer lynx_element_bridge_complete_batch(
-    LynxElementBridgeSession session,
-    const uint8_t* response,
-    size_t response_len);
-LynxElementBridgeDestroyResult lynx_element_bridge_destroy_session(
-    LynxElementBridgeSession session);
-void lynx_element_bridge_buffer_free(LynxElementBridgeBuffer buffer);
-const char* lynx_element_bridge_backend(void);
-const char* lynx_element_bridge_backend_marker(void);
-```
-
-Input buffers are borrowed only for the call. Rust owns every returned buffer
-until JNI calls `lynx_element_bridge_buffer_free` exactly once. JNI copies
-responses into Java byte arrays and frees Rust allocations on both success and
-Java allocation failure. No Rust panic or C++ exception may cross the ABI.
-
-`lynx_element_bridge_destroy_session` returns `consumed=0` when a token remains
-live, including a wrong-thread call. Once it returns `consumed=1`, Java clears
-the token even if response copying fails. The Yew archive retains the original
-`yew_lynx_*` names only as thin source-compatibility aliases.
-
-## Build Integration
-
-Build one Rust archive per packaged Android ABI and stage the selected backend
-under `target/android-libs/<backend>/<abi>/liblynx_element_bridge_backend.a`.
-`CMakeLists.txt` imports that archive and links `liblynx_element_bridge.so`.
-Backend-specific Gradle and `buildStagingDirectory` paths prevent AGP/CMake
-cache reuse.
-
-`gradle-integration.gradle.kts` demonstrates the arm64 staging and CMake setup.
-No Lynx Maven coordinate is prescribed because this adapter targets the pinned
-source revision and uses the consuming application's Lynx build.
-
-For the repository's full Android pipeline, run:
-
-```bash
-./scripts/build-android.sh
-./scripts/build-android.sh --backend dioxus
-```
-
-That script temporarily applies the pinned Lynx ByteArray patch, builds the
-required AARs and APK, and reverses the patch on exit.
-
-## Mock Checks
-
-Run the stock-API Java checks, JNI binary round trip, C header checks, and both
-real host staticlib smoke tests with:
+Run:
 
 ```bash
 bash adapters/android/test/run-mock-checks.sh
 ```
 
-The repository also assembles isolated arm64 APKs for both backends. On
-2026-08-20, both backends independently passed the Android 15/API 35 arm64
-physical-device acceptance flow. See `COMPATIBILITY.md` for the exact devices,
-APK hashes, and evidence boundary.
+The script checks the native-only Activity/Gradle wiring, Java owner semantics,
+JNI status mapping and resolver failure, required JNI exports, absence of the
+removed module JNI prefix, both real Rust static-library links, and required and
+forbidden application C symbols.
+
+The final 2026-08-22 patch-0009 release-safe Yew and Dioxus runs both passed on
+an anonymous physical OPPO PGBM10 device running Android 13/API 33, arm64-v8a.
+Each passed fresh launch, timer, tap, recreation, force-stop/reopen, and three
+cycles; all six acceptance result flags were true for both. Yew recorded
+`onCreate=9`, `onDestroy=4`, `diagnostics=9`, and nine selected-backend markers.
+Dioxus recorded `onCreate=10`, `onDestroy=5`, `diagnostics=10`, and ten
+selected-backend markers because the OS performed one extra recreation. Both
+recorded `renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
+`template=false`, with zero wrong-backend, crash, or timer-teardown markers.
+Evidence is at
+`.deps/android/device-acceptance-native-yew-20260822-release-safe-success` and
+`.deps/android/device-acceptance-native-dioxus-20260822-release-safe-success`.
+
+The stock Lynx AAR still packages and loads Quick, PrimJS, and NAPI;
+binary-native packaging remains a blocked follow-up milestone, and complete
+JS-engine removal is not claimed.

@@ -4,17 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::thread::{self, ThreadId};
 
-mod generated_capabilities {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../protocol/generated/rust/capabilities_generated.rs"
-    ));
-}
-
-pub use generated_capabilities::{CAPABILITIES, GeneratedCapability, LYNX_REVISION};
-
-pub const PROTOCOL_VERSION: u16 = 2;
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SessionId(u32);
 
@@ -60,19 +49,6 @@ pub struct CallbackId(u32);
 impl CallbackId {
     pub fn new(value: u32) -> Result<Self, BridgeError> {
         nonzero_id(value, "callback").map(Self)
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ResultSlot(u32);
-
-impl ResultSlot {
-    pub const fn new(value: u32) -> Self {
-        Self(value)
     }
 
     pub const fn get(self) -> u32 {
@@ -130,34 +106,6 @@ impl fmt::Display for BridgeError {
 impl std::error::Error for BridgeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CapabilityRequest {
-    pub name: String,
-    pub required: bool,
-}
-
-impl CapabilityRequest {
-    pub fn required(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            required: true,
-        }
-    }
-
-    pub fn optional(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            required: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NegotiatedCapability {
-    pub name: String,
-    pub available: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
     CreateElement {
         node: NodeId,
@@ -200,58 +148,15 @@ pub enum Command {
         callback: CallbackId,
         name: String,
     },
-    GetTag {
-        node: NodeId,
-    },
-    InvokeCapability {
-        capability: String,
-    },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandItem {
-    pub result_slot: Option<ResultSlot>,
-    pub command: Command,
-}
-
+/// An ordered, session-scoped set of in-memory renderer mutations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandBatch {
     pub session: SessionId,
     pub sequence: u32,
-    pub commands: Vec<CommandItem>,
+    pub commands: Vec<Command>,
     pub final_commit: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ResultValue {
-    Element(NodeId),
-    Elements(Vec<NodeId>),
-    String(String),
-    Strings(Vec<String>),
-    Boolean(bool),
-    Number(f64),
-    Payload {
-        content_type: String,
-        bytes: Vec<u8>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommandResult {
-    pub slot: Option<ResultSlot>,
-    pub status: Status,
-    pub message: Option<String>,
-    pub value: Option<ResultValue>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ResponseBatch {
-    pub session: Option<SessionId>,
-    pub sequence: u32,
-    pub status: Status,
-    pub message: Option<String>,
-    pub results: Vec<CommandResult>,
-    pub committed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -292,72 +197,37 @@ pub struct Session {
     next_node: u32,
     next_listener: u32,
     sequence: u32,
-    negotiated: HashMap<String, bool>,
     nodes: HashMap<NodeId, NodeState>,
     listeners: HashMap<ListenerId, ListenerState>,
-    pending: Vec<CommandItem>,
+    pending: Vec<Command>,
     destroyed: bool,
 }
 
 impl Session {
-    pub fn create(
-        id: SessionId,
-        root: NodeId,
-        requests: &[CapabilityRequest],
-    ) -> Result<(Self, Vec<NegotiatedCapability>), BridgeError> {
-        let mut negotiated = HashMap::new();
-        let mut response = Vec::with_capacity(requests.len());
-        for request in requests {
-            if negotiated.contains_key(&request.name) {
-                return Err(BridgeError::new(
-                    Status::InvalidArgument,
-                    format!("capability `{}` was requested more than once", request.name),
-                ));
-            }
-            let available = CAPABILITIES
-                .iter()
-                .find(|capability| capability.name == request.name)
-                .is_some_and(|capability| capability.available);
-            if request.required && !available {
-                return Err(BridgeError::new(
-                    Status::Unsupported,
-                    format!("required capability `{}` is unavailable", request.name),
-                ));
-            }
-            negotiated.insert(request.name.clone(), available);
-            response.push(NegotiatedCapability {
-                name: request.name.clone(),
-                available,
-            });
-        }
-
+    pub fn create(id: SessionId, root: NodeId) -> Result<Self, BridgeError> {
         let mut next_node = 1;
         if root.get() == next_node {
             next_node += 1;
         }
-        Ok((
-            Self {
-                id,
+        Ok(Self {
+            id,
+            root,
+            owner: thread::current().id(),
+            next_node,
+            next_listener: 1,
+            sequence: 1,
+            nodes: HashMap::from([(
                 root,
-                owner: thread::current().id(),
-                next_node,
-                next_listener: 1,
-                sequence: 1,
-                negotiated,
-                nodes: HashMap::from([(
-                    root,
-                    NodeState {
-                        kind: NodeKind::Root,
-                        parent: None,
-                        children: Vec::new(),
-                    },
-                )]),
-                listeners: HashMap::new(),
-                pending: Vec::new(),
-                destroyed: false,
-            },
-            response,
-        ))
+                NodeState {
+                    kind: NodeKind::Root,
+                    parent: None,
+                    children: Vec::new(),
+                },
+            )]),
+            listeners: HashMap::new(),
+            pending: Vec::new(),
+            destroyed: false,
+        })
     }
 
     pub const fn id(&self) -> SessionId {
@@ -369,7 +239,7 @@ impl Session {
     }
 
     pub fn create_element(&mut self, tag: &str) -> Result<NodeId, BridgeError> {
-        self.require_capability("create_element")?;
+        self.ensure_owner()?;
         if tag.is_empty() {
             return Err(BridgeError::new(
                 Status::InvalidArgument,
@@ -385,7 +255,7 @@ impl Session {
                 children: Vec::new(),
             },
         );
-        self.push(Command::CreateElement {
+        self.pending.push(Command::CreateElement {
             node,
             tag: tag.into(),
         });
@@ -393,7 +263,7 @@ impl Session {
     }
 
     pub fn create_text(&mut self, text: &str) -> Result<NodeId, BridgeError> {
-        self.require_capability("create_raw_text")?;
+        self.ensure_owner()?;
         let node = self.allocate_node()?;
         self.nodes.insert(
             node,
@@ -403,7 +273,7 @@ impl Session {
                 children: Vec::new(),
             },
         );
-        self.push(Command::CreateRawText {
+        self.pending.push(Command::CreateRawText {
             node,
             text: text.into(),
         });
@@ -416,12 +286,7 @@ impl Session {
         child: NodeId,
         reference: Option<NodeId>,
     ) -> Result<(), BridgeError> {
-        let capability = if reference.is_some() {
-            "insert_element_before"
-        } else {
-            "append_element"
-        };
-        self.require_capability(capability)?;
+        self.ensure_owner()?;
         let parent_state = self.node(parent)?.clone();
         let child_state = self.node(child)?.clone();
         if matches!(parent_state.kind, NodeKind::RawText(_)) {
@@ -456,7 +321,7 @@ impl Session {
             .children
             .insert(index, child);
         self.nodes.get_mut(&child).expect("validated child").parent = Some(parent);
-        self.push(match reference {
+        self.pending.push(match reference {
             Some(reference) => Command::InsertElementBefore {
                 parent,
                 child,
@@ -468,7 +333,7 @@ impl Session {
     }
 
     pub fn remove(&mut self, parent: NodeId, child: NodeId) -> Result<(), BridgeError> {
-        self.require_capability("remove_element")?;
+        self.ensure_owner()?;
         if self.node(child)?.parent != Some(parent) {
             return Err(self.ownership("child is not attached to the specified parent"));
         }
@@ -480,7 +345,7 @@ impl Session {
             .expect("validated direct child");
         parent_state.children.remove(index);
         self.nodes.get_mut(&child).expect("validated child").parent = None;
-        self.push(Command::RemoveElement { parent, child });
+        self.pending.push(Command::RemoveElement { parent, child });
         Ok(())
     }
 
@@ -498,7 +363,7 @@ impl Session {
             return Err(self.ownership("node still owns event listeners"));
         }
         self.nodes.remove(&node);
-        self.push(Command::DestroyNode { node });
+        self.pending.push(Command::DestroyNode { node });
         Ok(())
     }
 
@@ -508,14 +373,14 @@ impl Session {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), BridgeError> {
-        self.require_capability("set_attribute")?;
+        self.ensure_owner()?;
         if name.is_empty() || !matches!(self.node(node)?.kind, NodeKind::Element(_)) {
             return Err(BridgeError::new(
                 Status::InvalidArgument,
                 "attributes require an element and a nonempty name",
             ));
         }
-        self.push(Command::SetAttribute {
+        self.pending.push(Command::SetAttribute {
             node,
             name: name.into(),
             value: value.map(Into::into),
@@ -529,7 +394,7 @@ impl Session {
         name: &str,
         callback: CallbackId,
     ) -> Result<ListenerId, BridgeError> {
-        self.require_capability("add_event_listener")?;
+        self.ensure_owner()?;
         if name.is_empty() || !matches!(self.node(node)?.kind, NodeKind::Element(_)) {
             return Err(BridgeError::new(
                 Status::InvalidArgument,
@@ -552,7 +417,7 @@ impl Session {
                 name: name.into(),
             },
         );
-        self.push(Command::AddEventListener {
+        self.pending.push(Command::AddEventListener {
             node,
             listener,
             callback,
@@ -566,7 +431,7 @@ impl Session {
         node: NodeId,
         listener: ListenerId,
     ) -> Result<(), BridgeError> {
-        self.require_capability("remove_event_listener")?;
+        self.ensure_owner()?;
         let state = self.listeners.get(&listener).cloned().ok_or_else(|| {
             BridgeError::new(
                 Status::InvalidListener,
@@ -577,50 +442,13 @@ impl Session {
             return Err(self.ownership("listener belongs to a different node"));
         }
         self.listeners.remove(&listener);
-        self.push(Command::RemoveEventListener {
+        self.pending.push(Command::RemoveEventListener {
             node,
             listener,
             callback: state.callback,
             name: state.name,
         });
         Ok(())
-    }
-
-    pub fn query_tag(&mut self, node: NodeId, slot: ResultSlot) -> Result<(), BridgeError> {
-        self.require_capability("get_tag")?;
-        self.node(node)?;
-        self.pending.push(CommandItem {
-            result_slot: Some(slot),
-            command: Command::GetTag { node },
-        });
-        Ok(())
-    }
-
-    pub fn invoke_optional(
-        &mut self,
-        capability: &str,
-        slot: ResultSlot,
-    ) -> Result<(), BridgeError> {
-        self.ensure_owner()?;
-        match self.negotiated.get(capability) {
-            Some(false) => {
-                self.pending.push(CommandItem {
-                    result_slot: Some(slot),
-                    command: Command::InvokeCapability {
-                        capability: capability.into(),
-                    },
-                });
-                Ok(())
-            }
-            Some(true) => Err(BridgeError::new(
-                Status::InvalidArgument,
-                format!("capability `{capability}` is available and requires typed arguments"),
-            )),
-            None => Err(BridgeError::new(
-                Status::InvalidArgument,
-                format!("capability `{capability}` was not negotiated"),
-            )),
-        }
     }
 
     pub fn event(
@@ -654,16 +482,7 @@ impl Session {
 
     pub fn take_batch(&mut self) -> Result<CommandBatch, BridgeError> {
         self.ensure_owner()?;
-        let batch = CommandBatch {
-            session: self.id,
-            sequence: self.sequence,
-            commands: std::mem::take(&mut self.pending),
-            final_commit: true,
-        };
-        self.sequence = self.sequence.checked_add(1).ok_or_else(|| {
-            BridgeError::new(Status::ResourceExhausted, "batch sequence is exhausted")
-        })?;
-        Ok(batch)
+        self.take_batch_allow_destroyed()
     }
 
     pub fn discard_pending(&mut self) -> Result<(), BridgeError> {
@@ -721,21 +540,6 @@ impl Session {
         Ok(batch)
     }
 
-    fn require_capability(&self, capability: &str) -> Result<(), BridgeError> {
-        self.ensure_owner()?;
-        match self.negotiated.get(capability) {
-            Some(true) => Ok(()),
-            Some(false) => Err(BridgeError::new(
-                Status::Unsupported,
-                format!("capability `{capability}` is unavailable"),
-            )),
-            None => Err(BridgeError::new(
-                Status::InvalidArgument,
-                format!("capability `{capability}` was not negotiated"),
-            )),
-        }
-    }
-
     fn ensure_owner(&self) -> Result<(), BridgeError> {
         if self.destroyed {
             return Err(BridgeError::new(
@@ -756,7 +560,6 @@ impl Session {
     }
 
     fn allocate_node(&mut self) -> Result<NodeId, BridgeError> {
-        self.ensure_owner()?;
         loop {
             let node = NodeId::new(self.next_node)?;
             self.next_node = self.next_node.checked_add(1).ok_or_else(|| {
@@ -769,7 +572,6 @@ impl Session {
     }
 
     fn allocate_listener(&mut self) -> Result<ListenerId, BridgeError> {
-        self.ensure_owner()?;
         let listener = ListenerId::new(self.next_listener)?;
         self.next_listener = self.next_listener.checked_add(1).ok_or_else(|| {
             BridgeError::new(Status::ResourceExhausted, "listener ID space is exhausted")
@@ -797,13 +599,6 @@ impl Session {
 
     fn ownership(&self, message: impl Into<String>) -> BridgeError {
         BridgeError::new(Status::InvalidOwnership, message)
-    }
-
-    fn push(&mut self, command: Command) {
-        self.pending.push(CommandItem {
-            result_slot: None,
-            command,
-        });
     }
 }
 
@@ -844,41 +639,17 @@ impl HostFake {
         }
     }
 
-    pub fn apply(&mut self, batch: &CommandBatch) -> ResponseBatch {
+    pub fn apply(&mut self, batch: &CommandBatch) -> Result<(), BridgeError> {
         if batch.session != self.session {
-            return self.failure(batch.sequence, Status::InvalidSession, "session mismatch");
+            return Err(BridgeError::new(Status::InvalidSession, "session mismatch"));
         }
-        let mut results = Vec::with_capacity(batch.commands.len());
-        let mut batch_status = Status::Ok;
-        for item in &batch.commands {
-            let outcome = self.apply_command(&item.command);
-            let (status, message, value) = match outcome {
-                Ok(value) => (Status::Ok, None, value),
-                Err(error) => {
-                    if batch_status == Status::Ok {
-                        batch_status = error.status;
-                    }
-                    (error.status, Some(error.message), None)
-                }
-            };
-            results.push(CommandResult {
-                slot: item.result_slot,
-                status,
-                message,
-                value,
-            });
+        for command in &batch.commands {
+            self.apply_command(command)?;
         }
         if batch.final_commit {
             self.commits += 1;
         }
-        ResponseBatch {
-            session: Some(self.session),
-            sequence: batch.sequence,
-            status: batch_status,
-            message: None,
-            results,
-            committed: batch.final_commit,
-        }
+        Ok(())
     }
 
     pub fn snapshot(&self) -> TreeSnapshot {
@@ -893,7 +664,7 @@ impl HostFake {
         self.listeners.len()
     }
 
-    fn apply_command(&mut self, command: &Command) -> Result<Option<ResultValue>, BridgeError> {
+    fn apply_command(&mut self, command: &Command) -> Result<(), BridgeError> {
         match command {
             Command::CreateElement { node, tag } => {
                 self.insert_node(*node, NodeKind::Element(tag.clone()))?;
@@ -901,16 +672,12 @@ impl HostFake {
             Command::CreateRawText { node, text } => {
                 self.insert_node(*node, NodeKind::RawText(text.clone()))?;
             }
-            Command::AppendElement { parent, child } => {
-                self.attach(*parent, *child, None)?;
-            }
+            Command::AppendElement { parent, child } => self.attach(*parent, *child, None)?,
             Command::InsertElementBefore {
                 parent,
                 child,
                 reference,
-            } => {
-                self.attach(*parent, *child, Some(*reference))?;
-            }
+            } => self.attach(*parent, *child, Some(*reference))?,
             Command::RemoveElement { parent, child } => {
                 let state = self.require_node(*child)?;
                 if state.parent != Some(*parent) {
@@ -962,22 +729,8 @@ impl HostFake {
                     ));
                 }
             }
-            Command::GetTag { node } => {
-                let tag = match &self.require_node(*node)?.kind {
-                    NodeKind::Root => "page",
-                    NodeKind::Element(tag) => tag,
-                    NodeKind::RawText(_) => "raw-text",
-                };
-                return Ok(Some(ResultValue::String(tag.into())));
-            }
-            Command::InvokeCapability { capability } => {
-                return Err(BridgeError::new(
-                    Status::Unsupported,
-                    format!("capability `{capability}` is unsupported"),
-                ));
-            }
         }
-        Ok(None)
+        Ok(())
     }
 
     fn insert_node(&mut self, node: NodeId, kind: NodeKind) -> Result<(), BridgeError> {
@@ -1061,86 +814,17 @@ impl HostFake {
                 .collect(),
         }
     }
-
-    fn failure(&self, sequence: u32, status: Status, message: &str) -> ResponseBatch {
-        ResponseBatch {
-            session: Some(self.session),
-            sequence,
-            status,
-            message: Some(message.into()),
-            results: Vec::new(),
-            committed: false,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn request(name: &str) -> CapabilityRequest {
-        CapabilityRequest::required(name)
-    }
-
-    fn all_test_capabilities() -> Vec<CapabilityRequest> {
-        [
-            "create_element",
-            "create_raw_text",
-            "append_element",
-            "insert_element_before",
-            "remove_element",
-            "set_attribute",
-            "add_event_listener",
-            "remove_event_listener",
-            "get_tag",
-        ]
-        .into_iter()
-        .map(request)
-        .collect()
-    }
-
     #[test]
-    fn required_and_optional_capabilities_are_negotiated_before_mount() {
-        let required = Session::create(
-            SessionId::new(1).unwrap(),
-            NodeId::new(1).unwrap(),
-            &[CapabilityRequest::required("set_static_style")],
-        )
-        .unwrap_err();
-        assert_eq!(required.status, Status::Unsupported);
-
-        let (_, negotiated) = Session::create(
-            SessionId::new(1).unwrap(),
-            NodeId::new(1).unwrap(),
-            &[
-                CapabilityRequest::required("create_element"),
-                CapabilityRequest::optional("set_static_style"),
-            ],
-        )
-        .unwrap();
-        assert_eq!(
-            negotiated,
-            vec![
-                NegotiatedCapability {
-                    name: "create_element".into(),
-                    available: true,
-                },
-                NegotiatedCapability {
-                    name: "set_static_style".into(),
-                    available: false,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn ordered_batch_produces_tree_query_optional_status_and_one_commit() {
+    fn ordered_mutations_mount_and_update_a_tree() {
         let session_id = SessionId::new(7).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut capabilities = all_test_capabilities();
-        capabilities.push(CapabilityRequest::optional("set_static_style"));
-        let (mut session, _) = Session::create(session_id, root, &capabilities).unwrap();
-
+        let mut session = Session::create(session_id, root).unwrap();
         let view = session.create_element("view").unwrap();
         let text = session.create_element("text").unwrap();
         let raw = session.create_text("Count: 0").unwrap();
@@ -1148,39 +832,16 @@ mod tests {
         session.insert_before(root, view, None).unwrap();
         session.insert_before(view, text, None).unwrap();
         session.insert_before(text, raw, None).unwrap();
-        session.query_tag(text, ResultSlot::new(0)).unwrap();
-        session
-            .invoke_optional("set_static_style", ResultSlot::new(1))
-            .unwrap();
 
         let batch = session.take_batch().unwrap();
+        assert!(batch.commands.iter().all(|command| !matches!(
+            command,
+            Command::DestroyNode { .. } | Command::RemoveElement { .. }
+        )));
         let mut host = HostFake::new(session_id, root);
-        let response = host.apply(&batch);
+        host.apply(&batch).unwrap();
 
-        assert_eq!(response.status, Status::Unsupported);
-        assert!(response.committed);
         assert_eq!(host.commits(), 1);
-        assert_eq!(
-            response
-                .results
-                .iter()
-                .find(|result| result.slot == Some(ResultSlot::new(0))),
-            Some(&CommandResult {
-                slot: Some(ResultSlot::new(0)),
-                status: Status::Ok,
-                message: None,
-                value: Some(ResultValue::String("text".into())),
-            })
-        );
-        assert_eq!(
-            response
-                .results
-                .iter()
-                .find(|result| result.slot == Some(ResultSlot::new(1)))
-                .unwrap()
-                .status,
-            Status::Unsupported
-        );
         assert_eq!(
             host.snapshot().children[0].attributes.get("id"),
             Some(&"counter".into())
@@ -1197,7 +858,7 @@ mod tests {
     fn event_payload_is_opaque_and_destroy_releases_host_state() {
         let session_id = SessionId::new(3).unwrap();
         let root = NodeId::new(1).unwrap();
-        let (mut session, _) = Session::create(session_id, root, &all_test_capabilities()).unwrap();
+        let mut session = Session::create(session_id, root).unwrap();
         let button = session.create_element("view").unwrap();
         session.insert_before(root, button, None).unwrap();
         let callback = CallbackId::new(9).unwrap();
@@ -1209,23 +870,17 @@ mod tests {
         assert_eq!(event.payload, vec![0, 255, 7]);
 
         let mut host = HostFake::new(session_id, root);
-        host.apply(&session.take_batch().unwrap());
+        host.apply(&session.take_batch().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 1);
-        let destroyed = session.destroy().unwrap();
-        let response = host.apply(&destroyed);
-        assert_eq!(response.status, Status::Ok);
+        host.apply(&session.destroy().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 0);
         assert!(host.snapshot().children.is_empty());
     }
 
     #[test]
     fn sessions_reject_calls_from_non_owner_threads() {
-        let (session, _) = Session::create(
-            SessionId::new(11).unwrap(),
-            NodeId::new(1).unwrap(),
-            &all_test_capabilities(),
-        )
-        .unwrap();
+        let session =
+            Session::create(SessionId::new(11).unwrap(), NodeId::new(1).unwrap()).unwrap();
         let error = std::thread::spawn(move || {
             session
                 .event(

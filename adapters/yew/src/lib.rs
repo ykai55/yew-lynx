@@ -6,22 +6,10 @@ use std::fmt;
 use std::rc::Rc;
 
 use lynx_element_bridge_core::{
-    BridgeError, CallbackId, CapabilityRequest, CommandBatch, EventMessage, ListenerId, NodeId,
-    Session, SessionId, Status,
+    BridgeError, CallbackId, CommandBatch, EventMessage, ListenerId, NodeId, Session, SessionId,
+    Status,
 };
 use yew::{NativeEvent, NativeListener, NativeNode, NativeRendererBackend};
-
-const REQUIRED_CAPABILITIES: &[&str] = &[
-    "create_element",
-    "create_raw_text",
-    "append_element",
-    "insert_element_before",
-    "remove_element",
-    "set_attribute",
-    "add_event_listener",
-    "remove_event_listener",
-    "get_tag",
-];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum YewAdapterError {
@@ -81,21 +69,7 @@ impl fmt::Debug for YewAdapter {
 
 impl YewAdapter {
     pub fn new(session: SessionId, root: NodeId) -> Result<Rc<Self>, YewAdapterError> {
-        Self::new_with_capabilities(session, root, &[])
-    }
-
-    pub fn new_with_capabilities(
-        session: SessionId,
-        root: NodeId,
-        additional: &[CapabilityRequest],
-    ) -> Result<Rc<Self>, YewAdapterError> {
-        let mut requests = REQUIRED_CAPABILITIES
-            .iter()
-            .copied()
-            .map(CapabilityRequest::required)
-            .collect::<Vec<_>>();
-        requests.extend_from_slice(additional);
-        let (session, _) = Session::create(session, root, &requests)?;
+        let session = Session::create(session, root)?;
         Ok(Rc::new(Self {
             session: RefCell::new(session),
             next_callback: Cell::new(1),
@@ -177,23 +151,6 @@ impl YewAdapter {
             .map_err(|_| YewAdapterError::Borrowed("session"))?
             .destroy()
             .map_err(Into::into)
-    }
-
-    pub fn query_tag(
-        &self,
-        node: NativeNode,
-        slot: lynx_element_bridge_core::ResultSlot,
-    ) -> Result<(), YewAdapterError> {
-        let node = node_id(node)?;
-        self.with_session(|session| session.query_tag(node, slot))
-    }
-
-    pub fn invoke_optional(
-        &self,
-        capability: &str,
-        slot: lynx_element_bridge_core::ResultSlot,
-    ) -> Result<(), YewAdapterError> {
-        self.with_session(|session| session.invoke_optional(capability, slot))
     }
 
     pub fn discard_pending(&self) {
@@ -412,12 +369,12 @@ mod tests {
         adapter.flush(NativeNode(1));
 
         let batch = adapter.take_batch().unwrap();
-        assert!(batch.commands.iter().any(|item| matches!(
-            item.command,
-            Command::CreateElement { ref tag, .. } if tag == "view"
+        assert!(batch.commands.iter().any(|command| matches!(
+            command,
+            Command::CreateElement { tag, .. } if tag == "view"
         )));
         let mut host = HostFake::new(session, root);
-        assert_eq!(host.apply(&batch).status, Status::Ok);
+        host.apply(&batch).unwrap();
         let event = adapter
             .event(listener, "tap", "application/vnd.lynx.tap", vec![0, 255])
             .unwrap();
@@ -445,7 +402,7 @@ mod tests {
         adapter.remove(NativeNode(1), view);
         adapter.destroy_node(view);
         let mut host = HostFake::new(session, root);
-        host.apply(&adapter.take_batch().unwrap());
+        host.apply(&adapter.take_batch().unwrap()).unwrap();
         assert!(host.snapshot().children.is_empty());
     }
 }

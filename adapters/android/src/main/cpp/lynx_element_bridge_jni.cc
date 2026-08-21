@@ -1,12 +1,13 @@
 #include <jni.h>
 
+#include <dlfcn.h>
+
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <new>
-#include <vector>
 
-#include "lynx_element_bridge.h"
+#include "lynx_native_application.h"
 
 namespace {
 
@@ -25,214 +26,91 @@ void Throw(JNIEnv* env, const char* class_name, const char* message) {
   env->DeleteLocalRef(exception_class);
 }
 
-bool ReadBytes(JNIEnv* env, jbyteArray input, std::vector<uint8_t>* output) {
-  if (input == nullptr) {
-    Throw(env, "java/lang/NullPointerException", "input buffer must not be null");
+bool SessionFromJLong(JNIEnv* env, jlong value,
+                      LynxElementBridgeSession* output) {
+  if (value <= 0 ||
+      static_cast<uint64_t>(value) > std::numeric_limits<uint32_t>::max()) {
+    Throw(env, "java/lang/IllegalArgumentException",
+          "session ID must be a nonzero 32-bit integer");
     return false;
   }
-
-  const jsize length = env->GetArrayLength(input);
-  if (env->ExceptionCheck()) {
-    return false;
-  }
-  output->resize(static_cast<size_t>(length));
-  if (length != 0) {
-    env->GetByteArrayRegion(input, 0, length,
-                            reinterpret_cast<jbyte*>(output->data()));
-  }
-  return !env->ExceptionCheck();
-}
-
-const uint8_t* BytesData(const std::vector<uint8_t>& bytes) {
-  static constexpr uint8_t kEmptyInput = 0;
-  return bytes.empty() ? &kEmptyInput : bytes.data();
-}
-
-jbyteArray CopyAndFreeBuffer(JNIEnv* env, LynxElementBridgeBuffer buffer) {
-  if (buffer.len > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
-    lynx_element_bridge_buffer_free(buffer);
-    Throw(env, "java/lang/IllegalStateException", "Rust response exceeds JNI array limits");
-    return nullptr;
-  }
-  if (buffer.len != 0 && buffer.data == nullptr) {
-    Throw(env, "java/lang/IllegalStateException", "Rust returned an invalid buffer");
-    return nullptr;
-  }
-
-  const jsize length = static_cast<jsize>(buffer.len);
-  jbyteArray result = env->NewByteArray(length);
-  if (result != nullptr && length != 0) {
-    env->SetByteArrayRegion(result, 0, length,
-                            reinterpret_cast<const jbyte*>(buffer.data));
-  }
-  lynx_element_bridge_buffer_free(buffer);
-
-  if (env->ExceptionCheck()) {
-    if (result != nullptr) {
-      env->DeleteLocalRef(result);
-    }
-    return nullptr;
-  }
-  return result;
-}
-
-void DestroyAfterMountFailure(LynxElementBridgeSession session) {
-  if (session == 0) {
-    return;
-  }
-  LynxElementBridgeDestroyResult cleanup =
-      lynx_element_bridge_destroy_session(session);
-  lynx_element_bridge_buffer_free(cleanup.response);
-}
-
-bool IdFromJLong(JNIEnv* env, jlong value, const char* name, uint32_t* output) {
-  if (value <= 0 || static_cast<uint64_t>(value) > std::numeric_limits<uint32_t>::max()) {
-    Throw(env, "java/lang/IllegalArgumentException", name);
-    return false;
-  }
-  *output = static_cast<uint32_t>(value);
+  *output = static_cast<LynxElementBridgeSession>(value);
   return true;
 }
 
-jlong SessionToJLong(LynxElementBridgeSession session) {
-  return static_cast<jlong>(session);
-}
-
-}  // namespace
-
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeMount(
-    JNIEnv* env, jclass, jlong root_id, jlongArray session_out) {
-  try {
-    if (session_out == nullptr || env->GetArrayLength(session_out) < 1) {
-      Throw(env, "java/lang/IllegalArgumentException",
-            "sessionOut must contain one element");
-      return nullptr;
-    }
-    if (env->ExceptionCheck()) {
-      return nullptr;
-    }
-
-    uint32_t native_root_id = 0;
-    if (!IdFromJLong(env, root_id, "root ID must be a nonzero 32-bit integer",
-                     &native_root_id)) {
-      return nullptr;
-    }
-
-    LynxElementBridgeMountResult mounted =
-        lynx_element_bridge_mount(native_root_id);
-    jbyteArray batch = CopyAndFreeBuffer(env, mounted.response);
-    if (batch == nullptr) {
-      DestroyAfterMountFailure(mounted.session);
-      return nullptr;
-    }
-
-    const jlong session = SessionToJLong(mounted.session);
-    env->SetLongArrayRegion(session_out, 0, 1, &session);
-    if (env->ExceptionCheck()) {
-      env->DeleteLocalRef(batch);
-      DestroyAfterMountFailure(mounted.session);
-      return nullptr;
-    }
-    return batch;
-  } catch (const std::bad_alloc&) {
-    Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
-  } catch (...) {
-    Throw(env, "java/lang/RuntimeException", "Unexpected native bridge failure");
+void ThrowNativeStatus(JNIEnv* env, LynxNativeRendererStatus status,
+                       const char* operation) {
+  const char* class_name = "java/lang/IllegalStateException";
+  const char* detail = "unknown status";
+  switch (status) {
+    case LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT:
+      class_name = "java/lang/IllegalArgumentException";
+      detail = "invalid argument";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION:
+      detail = "invalid session";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_WRONG_THREAD:
+      detail = "wrong thread";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_UNSUPPORTED:
+      class_name = "java/lang/UnsupportedOperationException";
+      detail = "unsupported";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP:
+      detail = "invalid ownership";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_INVALID_LISTENER:
+      detail = "invalid listener";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_RESOURCE_EXHAUSTED:
+      class_name = "java/lang/OutOfMemoryError";
+      detail = "resource exhausted";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR:
+      detail = "host error";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_PANIC:
+      class_name = "java/lang/RuntimeException";
+      detail = "Rust panic";
+      break;
+    case LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR:
+      detail = "internal error";
+      break;
+    default:
+      break;
   }
-  return nullptr;
+  char message[128];
+  std::snprintf(message, sizeof(message), "%s failed: %s (status %u)", operation,
+                detail, status);
+  Throw(env, class_name, message);
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeDispatchEvent(
-    JNIEnv* env, jclass, jlong session, jbyteArray event) {
-  try {
-    if (session == 0) {
-      Throw(env, "java/lang/IllegalStateException", "Session is not mounted");
-      return nullptr;
+LynxNativeRendererGetApiFn ResolveNativeRendererApi(JNIEnv* env) {
+  void* symbol = dlsym(RTLD_DEFAULT, "lynx_native_renderer_get_api");
+#if defined(RTLD_NOLOAD)
+  if (symbol == nullptr) {
+    void* lynx = dlopen("liblynx.so", RTLD_NOW | RTLD_NOLOAD);
+    if (lynx != nullptr) {
+      symbol = dlsym(lynx, "lynx_native_renderer_get_api");
+      dlclose(lynx);
     }
-
-    uint32_t native_session = 0;
-    std::vector<uint8_t> event_bytes;
-    if (!IdFromJLong(env, session, "session ID must be a nonzero 32-bit integer",
-                     &native_session) ||
-        !ReadBytes(env, event, &event_bytes)) {
-      return nullptr;
-    }
-
-    return CopyAndFreeBuffer(
-        env, lynx_element_bridge_dispatch_event(
-                 native_session, BytesData(event_bytes), event_bytes.size()));
-  } catch (const std::bad_alloc&) {
-    Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
-  } catch (...) {
-    Throw(env, "java/lang/RuntimeException", "Unexpected native bridge failure");
   }
-  return nullptr;
-}
-
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeCompleteBatch(
-    JNIEnv* env, jclass, jlong session, jbyteArray response) {
-  try {
-    uint32_t native_session = 0;
-    std::vector<uint8_t> response_bytes;
-    if (!IdFromJLong(env, session, "session ID must be a nonzero 32-bit integer",
-                     &native_session) ||
-        !ReadBytes(env, response, &response_bytes)) {
-      return nullptr;
-    }
-    return CopyAndFreeBuffer(
-        env, lynx_element_bridge_complete_batch(
-                 native_session, BytesData(response_bytes), response_bytes.size()));
-  } catch (const std::bad_alloc&) {
-    Throw(env, "java/lang/OutOfMemoryError", "Unable to allocate JNI input buffer");
-  } catch (...) {
-    Throw(env, "java/lang/RuntimeException", "Unexpected native bridge failure");
+#endif
+  if (symbol == nullptr) {
+    Throw(env, "java/lang/UnsupportedOperationException",
+          "native mount failed: Lynx Native Renderer API export is unavailable");
+    return nullptr;
   }
-  return nullptr;
+
+  LynxNativeRendererGetApiFn get_api = nullptr;
+  static_assert(sizeof(get_api) == sizeof(symbol),
+                "Function and data pointers must have the same size");
+  std::memcpy(&get_api, &symbol, sizeof(get_api));
+  return get_api;
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeDestroySession(
-    JNIEnv* env, jclass, jlong session, jbooleanArray consumed_out) {
-  try {
-    if (session == 0) {
-      Throw(env, "java/lang/IllegalStateException", "Session is not mounted");
-      return nullptr;
-    }
-    if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
-      Throw(env, "java/lang/IllegalArgumentException",
-            "consumedOut must contain one element");
-      return nullptr;
-    }
-    if (env->ExceptionCheck()) {
-      return nullptr;
-    }
-
-    uint32_t native_session = 0;
-    if (!IdFromJLong(env, session, "session ID must be a nonzero 32-bit integer",
-                     &native_session)) {
-      return nullptr;
-    }
-    LynxElementBridgeDestroyResult destroyed =
-        lynx_element_bridge_destroy_session(native_session);
-    const jboolean consumed = destroyed.consumed != 0 ? JNI_TRUE : JNI_FALSE;
-    env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
-    if (env->ExceptionCheck()) {
-      lynx_element_bridge_buffer_free(destroyed.response);
-      return nullptr;
-    }
-    return CopyAndFreeBuffer(env, destroyed.response);
-  } catch (...) {
-    Throw(env, "java/lang/RuntimeException", "Unexpected native bridge failure");
-  }
-  return nullptr;
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeBackend(JNIEnv* env,
-                                                                  jclass) {
+jstring BackendName(JNIEnv* env) {
   const char* backend = lynx_element_bridge_backend();
   const char* marker = lynx_element_bridge_backend_marker();
   static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:";
@@ -244,4 +122,101 @@ Java_com_lynx_elementbridge_LynxElementBridgeModule_nativeBackend(JNIEnv* env,
     return nullptr;
   }
   return env->NewStringUTF(backend);
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(
+    JNIEnv* env, jclass, jlong host) {
+  if (host == 0) {
+    Throw(env, "java/lang/IllegalArgumentException",
+          "Lynx host token must not be zero");
+    return 0;
+  }
+  LynxNativeRendererGetApiFn get_api = ResolveNativeRendererApi(env);
+  if (get_api == nullptr) {
+    return 0;
+  }
+
+  LynxElementBridgeNativeMountResult mounted = lynx_element_bridge_native_mount(
+      get_api, static_cast<LynxNativeHostHandle>(host));
+  if (mounted.status != LYNX_NATIVE_RENDERER_STATUS_OK) {
+    ThrowNativeStatus(env, mounted.status, "native mount");
+    return 0;
+  }
+  if (mounted.session == 0) {
+    ThrowNativeStatus(env, LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR,
+                      "native mount");
+    return 0;
+  }
+  return static_cast<jlong>(mounted.session);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
+    JNIEnv* env, jclass, jlong session, jbooleanArray consumed_out) {
+  if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
+    Throw(env, "java/lang/IllegalArgumentException",
+          "consumedOut must contain one element");
+    return;
+  }
+  if (env->ExceptionCheck()) {
+    return;
+  }
+
+  LynxElementBridgeSession native_session = 0;
+  if (!SessionFromJLong(env, session, &native_session)) {
+    return;
+  }
+  LynxElementBridgeNativeDestroyResult destroyed =
+      lynx_element_bridge_native_destroy_session(native_session);
+  const jboolean consumed = destroyed.consumed != 0 ? JNI_TRUE : JNI_FALSE;
+  env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
+  if (env->ExceptionCheck()) {
+    return;
+  }
+  if (destroyed.status != LYNX_NATIVE_RENDERER_STATUS_OK) {
+    ThrowNativeStatus(env, destroyed.status, "native destroy");
+  } else if (destroyed.consumed == 0) {
+    ThrowNativeStatus(env, LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR,
+                      "native destroy");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
+    JNIEnv* env, jclass, jlong session, jbooleanArray consumed_out) {
+  if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
+    Throw(env, "java/lang/IllegalArgumentException",
+          "consumedOut must contain one element");
+    return;
+  }
+  if (env->ExceptionCheck()) {
+    return;
+  }
+
+  LynxElementBridgeSession native_session = 0;
+  if (!SessionFromJLong(env, session, &native_session)) {
+    return;
+  }
+  LynxElementBridgeNativeDestroyResult abandoned =
+      lynx_element_bridge_native_abandon_session(native_session);
+  const jboolean consumed = abandoned.consumed != 0 ? JNI_TRUE : JNI_FALSE;
+  env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
+  if (env->ExceptionCheck()) {
+    return;
+  }
+  if (abandoned.status != LYNX_NATIVE_RENDERER_STATUS_OK) {
+    ThrowNativeStatus(env, abandoned.status, "native abandon");
+  } else if (abandoned.consumed == 0) {
+    ThrowNativeStatus(env, LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR,
+                      "native abandon");
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeBackend(JNIEnv* env,
+                                                                 jclass) {
+  return BackendName(env);
 }

@@ -1,25 +1,57 @@
 package com.lynx.elementbridge;
 
-import android.content.Context;
-import java.util.Arrays;
-
 public final class JniIntegrationTest {
-  private static final byte[] SUCCESS = {20, 0, 0, 0, 'L', 'E', 'B', '2', 0, (byte) 255};
-
   public static void main(String[] args) {
-    assertEquals("mock", LynxElementBridgeModule.backendName());
-    LynxElementBridgeModule module = new LynxElementBridgeModule(new Context());
-    assertEquals(SUCCESS, module.mount(0xffff_ffffL));
-    assertEquals(SUCCESS, module.dispatchEvent(SUCCESS));
-    assertEquals(SUCCESS, module.completeBatch(SUCCESS));
-    assertEquals(SUCCESS, module.destroySession());
-    assertEquals(SUCCESS, module.mount(0xffff_ffffL));
-    module.destroy();
+    System.loadLibrary("lynx");
+    nativeRendererLifecycleUsesResolvedFunctionTable();
+    nativeRendererStatusesAreDeterministicExceptions();
   }
 
-  private static void assertEquals(byte[] expected, byte[] actual) {
-    if (!Arrays.equals(expected, actual)) {
-      throw new AssertionError("byte arrays differ");
+  private static void nativeRendererLifecycleUsesResolvedFunctionTable() {
+    assertEquals("mock", LynxNativeRendererHost.backendName());
+    LynxNativeRendererHost host = new LynxNativeRendererHost();
+    assertEquals("mock", host.mount(0x1_0000_0001L));
+    assertThrows(IllegalStateException.class, () -> host.mount(0x1_0000_0001L),
+        "already mounted");
+    host.destroy();
+    assertThrows(IllegalStateException.class, host::destroy, "already destroyed");
+
+    LynxNativeRendererHost abandoned = new LynxNativeRendererHost();
+    assertEquals("mock", abandoned.mount(0x1_0000_0001L));
+    abandoned.abandon();
+    assertThrows(IllegalStateException.class, abandoned::abandon, "already destroyed");
+    assertThrows(IllegalStateException.class, abandoned::destroy, "already destroyed");
+  }
+
+  private static void nativeRendererStatusesAreDeterministicExceptions() {
+    assertNativeMountFailure(1, IllegalArgumentException.class, "invalid argument");
+    assertNativeMountFailure(2, IllegalStateException.class, "invalid session");
+    assertNativeMountFailure(3, IllegalStateException.class, "wrong thread");
+    assertNativeMountFailure(4, UnsupportedOperationException.class, "unsupported");
+    assertNativeMountFailure(5, IllegalStateException.class, "invalid ownership");
+    assertNativeMountFailure(6, IllegalStateException.class, "invalid listener");
+    assertNativeMountFailure(7, OutOfMemoryError.class, "resource exhausted");
+    assertNativeMountFailure(8, IllegalStateException.class, "host error");
+    assertNativeMountFailure(9, RuntimeException.class, "Rust panic");
+    assertNativeMountFailure(10, IllegalStateException.class, "internal error");
+    assertNativeMountFailure(11, IllegalStateException.class, "unknown status");
+  }
+
+  private static void assertNativeMountFailure(
+      long host, Class<? extends Throwable> type, String messagePart) {
+    assertThrows(type, () -> new LynxNativeRendererHost().mount(host), messagePart);
+  }
+
+  private static void assertThrows(
+      Class<? extends Throwable> type, Runnable runnable, String messagePart) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected " + type.getName());
+    } catch (Throwable error) {
+      if (!type.isInstance(error) || error.getMessage() == null
+          || !error.getMessage().contains(messagePart)) {
+        throw new AssertionError("unexpected exception", error);
+      }
     }
   }
 

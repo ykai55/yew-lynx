@@ -1,59 +1,70 @@
 # Standalone Android example
 
-This Kotlin application is the public stock OSS Lynx host for either counter
-backend. It consumes locally published AARs built from the pinned
-`third_party/lynx` submodule, registers one framework-neutral
-`LynxElementBridgeModule` per `LynxView`, links exactly one real arm64 Rust
-archive through the shared JNI library, and loads the ordinary LepusNG bundle.
+This Kotlin app hosts either the Yew or Dioxus counter through Lynx's native
+renderer function table. It registers one native host per `LynxView`, links one
+backend-specific Rust arm64 archive, and does not render a template bundle or
+enable JS/MTS application execution.
 
-From the repository root, use the orchestration command for the desired backend:
+## Build
+
+From the repository root:
 
 ```bash
-./scripts/build-android.sh
+./scripts/build-android.sh --backend yew
 ./scripts/build-android.sh --backend dioxus
 ```
 
-Use `--clean` to discard generated integration outputs before rebuilding. The
-default cached mode fingerprints the Lynx/Yew pins, Habitat and PrimJS locks,
-Rust/Node lockfiles, and Android build inputs before reusing outputs. Once a
-successful online build has prepared a matching cache, `--offline` constrains
-Gradle, npm, and Cargo to local inputs.
+`--clean` discards generated integration outputs. After a matching online build,
+`--offline` constrains Cargo, Gradle, and the Lynx source build to prepared local
+inputs. Backend-specific staging prevents cross-framework cache reuse.
 
 Requirements:
 
 - JDK 11
 - Android SDK platform 33 and build-tools 33.0.1
-- Android NDK 21.1.6352462 for the pinned Lynx AAR build
-- Android NDK 25.2.9519653 for the Rust/JNI shared library link
+- Android NDK 21.1.6352462 for Lynx AARs
+- Android NDK 25.2.9519653 for Rust/JNI linking
 - CMake 3.22.1
 - Rust 1.85.0 with `aarch64-linux-android`
-- Node.js 22.18.0 and npm
+- Node.js 22.18.0 for Lynx's source build tooling
 
-The default backend is Yew. Backend-specific Rust staging, AGP/CMake staging,
-APKs, and evidence prevent one framework from reusing the other's native cache.
-The only supported application ABI is `arm64-v8a`. Final APKs are written to
-`.deps/android/apks/lynx-element-bridge-yew.apk` and
-`.deps/android/apks/lynx-element-bridge-dioxus.apk`; matching build evidence is
-written under `.deps/android/`.
+The app supports only `arm64-v8a`. APKs are written to
+`.deps/android/apks/lynx-element-bridge-{yew,dioxus}.apk`. The build rejects any
+packaged `.lynx.bundle` and verifies that exactly the selected backend marker is
+present.
 
-After connecting an ARM64 physical device through ADB, run the lifecycle
-acceptance flow from the repository root:
+## Acceptance
+
+Do not rebuild the APK when validating a previously recorded artifact. Run the
+acceptance script with its backend, serial, APK, and evidence directory:
 
 ```bash
 python3 scripts/android-device-acceptance.py \
   --backend dioxus \
   --serial "$ANDROID_SERIAL" \
   --apk .deps/android/apks/lynx-element-bridge-dioxus.apk \
-  --evidence-dir .deps/android/device-evidence-dioxus
+  --evidence-dir .deps/android/device-acceptance-native-dioxus-20260822-release-safe-success
 ```
 
-The script locates and taps the rendered Increment control from raw screenshots,
-checks that the visible counter region changes, recreates the Activity through
-rotation, force-stops and reopens the process, and repeats mount/tap/destroy
-cycles. It saves PNGs for visual review of the exact `Count: 0` and `Count: 1`
-states, requires the expected backend identity from the linked Rust archive in
-logcat, restores the original rotation settings, and does not write the ADB
-serial into evidence. On 2026-08-20, both Yew and Dioxus independently passed
-this flow on Android 15/API 35 arm64 physical devices; exact device and APK
-identities are recorded in `COMPATIBILITY.md`. Physical-device access remains
-outside public CI.
+The script verifies timer-only update, tap update, rotation recreation,
+force-stop/reopen, repeated mount/tap/destroy cycles, backend identity, and the
+native diagnostics line. It restores rotation settings and does not persist the
+ADB serial.
+
+Final patch-0009 release-safe evidence from 2026-08-22 was recorded on an
+anonymous physical OPPO PGBM10 device running Android 13/API 33, arm64-v8a:
+
+| Backend | APK SHA-256 | Evidence | `onCreate` | `onDestroy` | diagnostics/backend |
+| --- | --- | --- | ---: | ---: | ---: |
+| Yew | `685e8000ac037607fc9cd870d0445293c3f11ec11d6c00b2a375033ed468a1bf` | `.deps/android/device-acceptance-native-yew-20260822-release-safe-success` | 9 | 4 | 9 |
+| Dioxus | `6a51be912a01764566edbf8bea859effe0af073116a785fd6251d71f53664513` | `.deps/android/device-acceptance-native-dioxus-20260822-release-safe-success` | 10 | 5 | 10 |
+
+Both runs passed fresh launch, timer, tap, recreation, force-stop/reopen, and
+three cycles, with all six acceptance result flags true. Both recorded
+`renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
+`template=false`, with zero wrong-backend, crash, or timer-teardown markers.
+Dioxus totals are one higher because the OS performed one extra recreation.
+
+The stock Lynx AAR still packages and loads Quick, PrimJS, and NAPI;
+binary-native packaging remains a blocked follow-up milestone, and complete
+JS-engine removal is not claimed.

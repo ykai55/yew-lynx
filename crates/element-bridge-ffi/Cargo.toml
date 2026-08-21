@@ -9,4 +9,3 @@ publish.workspace = true
 
 [dependencies]
 lynx-element-bridge-core.workspace = true
-lynx-element-bridge-wire.workspace = true

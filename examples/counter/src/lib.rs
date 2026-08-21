@@ -1,51 +1,70 @@
-//! Counter static library backed by Lynx Element Bridge protocol v2.
+//! Yew counter static library backed by the Lynx native renderer function table.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
-use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId, Status};
+use lynx_element_bridge_core::{CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status};
+use lynx_element_bridge_ffi::native_host::{NativeHostHandle, NativeRendererGetApiFn};
 use lynx_element_bridge_ffi::{
-    BackendError, BridgeBackend, LynxElementBridgeBuffer, LynxElementBridgeDestroyResult,
-    LynxElementBridgeMountResult, LynxElementBridgeSession,
+    BackendError, BridgeBackend, LynxElementBridgeNativeDestroyResult,
+    LynxElementBridgeNativeMountResult, LynxElementBridgeSession, NativeTimerRequest,
 };
 use lynx_element_bridge_yew::{YewAdapter, YewAdapterError};
 use yew::prelude::*;
 use yew::{NativeAppHandle, NativeEvent, NativeNode, NativeRenderer};
 
-pub const YEW_LYNX_COUNTER_STATUS_OK: u32 = 0;
-pub const YEW_LYNX_COUNTER_STATUS_INVALID_ARGUMENT: u32 = 1;
-pub const YEW_LYNX_COUNTER_STATUS_INVALID_SESSION: u32 = 2;
-pub const YEW_LYNX_COUNTER_STATUS_WRONG_THREAD: u32 = 3;
-pub const YEW_LYNX_COUNTER_STATUS_UNSUPPORTED: u32 = 4;
-pub const YEW_LYNX_COUNTER_STATUS_INVALID_OWNERSHIP: u32 = 5;
-pub const YEW_LYNX_COUNTER_STATUS_INVALID_LISTENER: u32 = 6;
-pub const YEW_LYNX_COUNTER_STATUS_RESOURCE_EXHAUSTED: u32 = 7;
-pub const YEW_LYNX_COUNTER_STATUS_HOST_ERROR: u32 = 8;
-pub const YEW_LYNX_COUNTER_STATUS_PANIC: u32 = 9;
-pub const YEW_LYNX_COUNTER_STATUS_INTERNAL_ERROR: u32 = 10;
+const TIMER_CALLBACK_ID: u32 = 1;
 
-#[function_component(Counter)]
-pub fn counter() -> Html {
-    let count = use_state(|| 0);
-    let increment = {
-        let count = count.clone();
-        Callback::from(move |_: NativeEvent| count.set(*count + 1))
-    };
-
-    html! {
-        <view style="height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;">
-            <text id="counter-value" style="font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;">{format!("Count: {}", *count)}</text>
-            <view id="counter-increment" style="height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;" ontap={increment}>
-                <text style="font-size: 28px; font-weight: 600; color: #ffffff;">{"Increment"}</text>
-            </view>
-        </view>
-    }
+pub struct Counter {
+    count: u32,
+    timer_fired: bool,
 }
 
-pub type YewLynxSession = LynxElementBridgeSession;
-pub type YewLynxBuffer = LynxElementBridgeBuffer;
-pub type YewLynxMountResult = LynxElementBridgeMountResult;
-pub type YewLynxDestroyResult = LynxElementBridgeDestroyResult;
+pub enum CounterMessage {
+    Increment,
+    TimerFired,
+}
+
+impl Component for Counter {
+    type Message = CounterMessage;
+    type Properties = ();
+
+    fn create(_: &Context<Self>) -> Self {
+        Self {
+            count: 0,
+            timer_fired: false,
+        }
+    }
+
+    fn update(&mut self, _: &Context<Self>, message: Self::Message) -> bool {
+        match message {
+            CounterMessage::Increment => self.count += 1,
+            CounterMessage::TimerFired => self.timer_fired = true,
+        }
+        true
+    }
+
+    fn view(&self, context: &Context<Self>) -> Html {
+        let increment = context
+            .link()
+            .callback(|_: NativeEvent| CounterMessage::Increment);
+        let timer_status = if self.timer_fired {
+            "Timer: fired"
+        } else {
+            "Timer: pending"
+        };
+
+        html! {
+            <view style="height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;">
+                <text id="counter-value" style="font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 20px;">{format!("Count: {}", self.count)}</text>
+                <text id="timer-status" style="font-size: 28px; font-weight: 500; color: #5f665f; margin-bottom: 32px;">{timer_status}</text>
+                <view id="counter-increment" style="height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;" ontap={increment}>
+                    <text style="font-size: 28px; font-weight: 600; color: #ffffff;">{"Increment"}</text>
+                </view>
+            </view>
+        }
+    }
+}
 
 struct YewBackend {
     adapter: Rc<YewAdapter>,
@@ -53,8 +72,35 @@ struct YewBackend {
 }
 
 impl BridgeBackend for YewBackend {
+    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
+        vec![NativeTimerRequest {
+            delay_millis: 1_500,
+            repeating: false,
+            callback: CallbackId::new(TIMER_CALLBACK_ID).expect("timer callback ID is nonzero"),
+        }]
+    }
+
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError> {
         self.adapter.dispatch_event(&event).map_err(adapter_error)?;
+        self.adapter.take_batch().map_err(adapter_error)
+    }
+
+    fn dispatch_timer(&mut self, callback: CallbackId) -> Result<CommandBatch, BackendError> {
+        if callback.get() != TIMER_CALLBACK_ID {
+            return Err(BackendError::recoverable(
+                Status::InvalidArgument,
+                "Yew timer callback identity does not match",
+            ));
+        }
+        self.app
+            .as_ref()
+            .ok_or_else(|| {
+                BackendError::fatal(
+                    Status::InternalError,
+                    "Yew backend has no application handle",
+                )
+            })?
+            .send_message(CounterMessage::TimerFired);
         self.adapter.take_batch().map_err(adapter_error)
     }
 
@@ -149,51 +195,32 @@ fn create_backend(
     ))
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn lynx_element_bridge_mount(root_id: u32) -> YewLynxMountResult {
-    lynx_element_bridge_ffi::mount(root_id, create_backend)
-}
-
+/// Mounts the counter directly through the native renderer function table.
+///
 /// # Safety
 ///
-/// When `event_len` is nonzero, `event` must point to that many readable bytes.
+/// `get_api` and `host` must obey the native renderer C ABI for the mounted session lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lynx_element_bridge_dispatch_event(
-    session: YewLynxSession,
-    event: *const u8,
-    event_len: usize,
-) -> YewLynxBuffer {
+pub unsafe extern "C" fn lynx_element_bridge_native_mount(
+    get_api: Option<NativeRendererGetApiFn>,
+    host: NativeHostHandle,
+) -> LynxElementBridgeNativeMountResult {
     // SAFETY: This forwards the caller obligations documented on this function.
-    unsafe { lynx_element_bridge_ffi::dispatch_event(session, event, event_len) }
-}
-
-/// # Safety
-///
-/// When `response_len` is nonzero, `response` must point to that many readable bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lynx_element_bridge_complete_batch(
-    session: YewLynxSession,
-    response: *const u8,
-    response_len: usize,
-) -> YewLynxBuffer {
-    // SAFETY: This forwards the caller obligations documented on this function.
-    unsafe { lynx_element_bridge_ffi::complete_batch(session, response, response_len) }
+    unsafe { lynx_element_bridge_ffi::native_mount(get_api, host, create_backend) }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn lynx_element_bridge_destroy_session(
-    session: YewLynxSession,
-) -> YewLynxDestroyResult {
-    lynx_element_bridge_ffi::destroy_session(session)
+pub extern "C" fn lynx_element_bridge_native_destroy_session(
+    session: LynxElementBridgeSession,
+) -> LynxElementBridgeNativeDestroyResult {
+    lynx_element_bridge_ffi::native_destroy_session(session)
 }
 
-/// # Safety
-///
-/// `buffer` must be empty or an unmodified, not-yet-freed buffer returned by this library.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lynx_element_bridge_buffer_free(buffer: YewLynxBuffer) {
-    // SAFETY: This forwards the caller obligations documented on this function.
-    unsafe { lynx_element_bridge_ffi::buffer_free(buffer) }
+pub extern "C" fn lynx_element_bridge_native_abandon_session(
+    session: LynxElementBridgeSession,
+) -> LynxElementBridgeNativeDestroyResult {
+    lynx_element_bridge_ffi::native_abandon_session(session)
 }
 
 #[unsafe(no_mangle)]
@@ -206,51 +233,7 @@ pub extern "C" fn lynx_element_bridge_backend_marker() -> *const std::ffi::c_cha
     c"lynx-element-bridge-backend:yew".as_ptr()
 }
 
-// Keep the original source ABI as thin aliases for existing embedders.
-#[unsafe(no_mangle)]
-pub extern "C" fn yew_lynx_mount(root_id: u32) -> YewLynxMountResult {
-    lynx_element_bridge_mount(root_id)
-}
-
-/// # Safety
-///
-/// Each nonempty byte span must remain readable for this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn yew_lynx_dispatch(
-    session: YewLynxSession,
-    event: *const u8,
-    event_len: usize,
-) -> YewLynxBuffer {
-    // SAFETY: This forwards the caller obligations documented on this function.
-    unsafe { lynx_element_bridge_dispatch_event(session, event, event_len) }
-}
-
-/// # Safety
-///
-/// Each nonempty byte span must remain readable for this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn yew_lynx_complete(
-    session: YewLynxSession,
-    response: *const u8,
-    response_len: usize,
-) -> YewLynxBuffer {
-    // SAFETY: This forwards the caller obligations documented on this function.
-    unsafe { lynx_element_bridge_complete_batch(session, response, response_len) }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn yew_lynx_destroy(session: YewLynxSession) -> YewLynxDestroyResult {
-    lynx_element_bridge_destroy_session(session)
-}
-
-/// # Safety
-///
-/// `buffer` must be empty or an unmodified, not-yet-freed buffer returned by this library.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn yew_lynx_buffer_free(buffer: YewLynxBuffer) {
-    // SAFETY: This forwards the caller obligations documented on this function.
-    unsafe { lynx_element_bridge_buffer_free(buffer) }
-}
-
 #[cfg(test)]
-mod tests_v2;
+#[allow(unsafe_code)]
+#[path = "../../native_lifecycle_tests.rs"]
+mod native_lifecycle_tests;

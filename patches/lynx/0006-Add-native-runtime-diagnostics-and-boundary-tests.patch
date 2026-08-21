@@ -1,0 +1,322 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 22:00:00 +0800
+Subject: [PATCH 6/6] Add native runtime diagnostics and boundary tests
+
+Reject Android native host registration when BTS, template, or MTS state is
+present. Cover the production function-table rejection boundary and expose
+stable runtime-native diagnostics to the Android host.
+
+---
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index a3bf3db5209ec53a6d09d405c0a751212819ecae..2de51360d40b4e205cc4a4ead87fbe0f991576a6 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -129,6 +129,144 @@ TEST(NativeRendererApiTest, NegotiatesOnlyV1) {
+   EXPECT_EQ(api->struct_size, sizeof(LynxNativeRendererApiV1));
+ }
+ 
++TEST(NativeRendererApiTest, RejectsNullCallbacksAndOutputsWithoutMutation) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++
++  LynxNativeRendererHandle renderer = 41;
++  EXPECT_EQ(api->acquire(host, nullptr, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(renderer, 41u);
++  EXPECT_EQ(api->acquire(host, &callbacks, nullptr),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(harness.manager_->root(), nullptr);
++
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_NE(renderer, 0u);
++  EXPECT_EQ(api->get_root(renderer, nullptr),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(api->create_element(renderer, Utf8("view"), nullptr),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(api->create_raw_text(renderer, Utf8("text"), nullptr),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(api->create_timer(renderer, 0, 0, 1, nullptr),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  ASSERT_NE(harness.manager_->root(), nullptr);
++  EXPECT_EQ(harness.manager_->root()->GetChildCount(), 0u);
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest, RejectsInvalidUtf8AndNullNonEmptySpans) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  const uint8_t invalid_utf8[] = {0xc0, 0xaf};
++  LynxNativeNodeHandle rejected_node = 73;
++  EXPECT_EQ(api->create_element(renderer, {invalid_utf8, 2}, &rejected_node),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(rejected_node, 0u);
++  rejected_node = 73;
++  EXPECT_EQ(api->create_element(renderer, {nullptr, 1}, &rejected_node),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(rejected_node, 0u);
++  EXPECT_EQ(harness.manager_->root()->GetChildCount(), 0u);
++
++  LynxNativeNodeHandle node = 0;
++  ASSERT_EQ(api->create_element(renderer, Utf8("view"), &node),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->set_attribute(renderer, node, Utf8("id"), Utf8("before")),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->set_attribute(renderer, node, Utf8("id"),
++                               {invalid_utf8, 2}),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  ASSERT_EQ(harness.manager_->root()->GetChildCount(), 0u);
++  LynxNativeNodeHandle root = 0;
++  ASSERT_EQ(api->get_root(renderer, &root), LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->insert_before(renderer, root, node, 0),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  Element* element = harness.manager_->root()->GetChildAt(0);
++  EXPECT_EQ(element->GetIdSelector().str(), "before");
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest, RejectedHandlesHaveNoSideEffects) {
++  NativeRendererHarness first_harness;
++  NativeRendererHarness second_harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  CallbackState first_state{api};
++  CallbackState second_state{api};
++  LynxNativeRendererCallbacksV1 first_callbacks{&first_state, &OnEvent,
++                                                 &OnTimer};
++  LynxNativeRendererCallbacksV1 second_callbacks{&second_state, &OnEvent,
++                                                  &OnTimer};
++  LynxNativeHostHandle first_host =
++      RegisterNativeRendererHost(first_harness.tasm_.get());
++  LynxNativeHostHandle second_host =
++      RegisterNativeRendererHost(second_harness.tasm_.get());
++  ASSERT_NE(first_host, 0u);
++  ASSERT_NE(second_host, 0u);
++  LynxNativeRendererHandle first_renderer = 0;
++  LynxNativeRendererHandle second_renderer = 0;
++  ASSERT_EQ(api->acquire(first_host, &first_callbacks, &first_renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->acquire(second_host, &second_callbacks, &second_renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  LynxNativeNodeHandle first_root = 0;
++  ASSERT_EQ(api->get_root(first_renderer, &first_root),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->set_attribute(first_renderer, first_root, Utf8("id"),
++                               Utf8("owner")),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->set_attribute(second_renderer, first_root, Utf8("id"),
++                               Utf8("foreign")),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
++  EXPECT_EQ(first_harness.manager_->root()->GetIdSelector().str(), "owner");
++  EXPECT_TRUE(second_harness.manager_->root()->GetIdSelector().str().empty());
++
++  LynxNativeNodeHandle wrong_thread_output = 91;
++  LynxNativeRendererStatus wrong_thread_status =
++      LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR;
++  std::thread other_thread([&]() {
++    wrong_thread_status =
++        api->create_element(first_renderer, Utf8("view"), &wrong_thread_output);
++  });
++  other_thread.join();
++  EXPECT_EQ(wrong_thread_status, LYNX_NATIVE_RENDERER_STATUS_WRONG_THREAD);
++  EXPECT_EQ(wrong_thread_output, 91u);
++  EXPECT_EQ(first_harness.manager_->root()->GetChildCount(), 0u);
++
++  EXPECT_EQ(api->release(first_renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle stale_output = 92;
++  EXPECT_EQ(api->create_element(first_renderer, Utf8("view"), &stale_output),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION);
++  EXPECT_EQ(stale_output, 92u);
++  EXPECT_EQ(first_harness.manager_->root(), nullptr);
++
++  EXPECT_EQ(api->release(second_renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(first_host));
++  EXPECT_TRUE(UnregisterNativeRendererHost(second_host));
++}
++
+ TEST(NativeRendererApiTest, MutatesFiberTreeThroughFunctionTable) {
+   NativeRendererHarness harness;
+   const auto* api = lynx_native_renderer_get_api(1);
+diff --git a/core/shell/android/lynx_template_render_android.cc b/core/shell/android/lynx_template_render_android.cc
+index 358937a7a60e22e75e06df5940988212f67bf2a6..b1e2499a7644ff8cc156ef4aae65ced4b456d114 100644
+--- a/core/shell/android/lynx_template_render_android.cc
++++ b/core/shell/android/lynx_template_render_android.cc
+@@ -451,7 +451,8 @@ jlong RegisterNativeRendererHost(JNIEnv* env, jclass jcaller, jlong ptr,
+   if (shell != nullptr &&
+       shell->ThreadStrategy() ==
+           lynx::base::ThreadStrategyForRendering::ALL_ON_UI &&
+-      shell->CanRunOnTasmThreadNow()) {
++      shell->CanRunOnTasmThreadNow() &&
++      shell->CanRegisterNativeRendererHost()) {
+     host = lynx::tasm::RegisterNativeRendererHost(shell->GetTasm());
+   }
+   AtomicLifecycle::TryFree(lifecycle_ptr);
+diff --git a/core/shell/lynx_shell.cc b/core/shell/lynx_shell.cc
+index 2af491d9a4cd581db0e80ab34f5811f76ca55f0f..ba641f5f2339ccf0cca4e18f196187ba69281b0f 100644
+--- a/core/shell/lynx_shell.cc
++++ b/core/shell/lynx_shell.cc
+@@ -1632,6 +1632,28 @@ bool LynxShell::CanRunOnTasmThreadNow() {
+          engine_actor_->CanRunNow();
+ }
+ 
++NativeRendererDiagnostics LynxShell::GetNativeRendererDiagnostics() {
++  NativeRendererDiagnostics diagnostics;
++  diagnostics.bts_runtime = GetRuntimeActor() != nullptr;
++  tasm::TemplateAssembler* assembler = GetTasm();
++  if (assembler == nullptr) {
++    return diagnostics;
++  }
++  std::shared_ptr<tasm::TemplateEntry> entry =
++      assembler->FindTemplateEntry(tasm::DEFAULT_ENTRY_NAME);
++  diagnostics.mts_context = entry != nullptr && entry->GetVm() != nullptr;
++  diagnostics.template_bundle =
++      entry != nullptr && entry->GetCompleteTemplateBundle() != nullptr;
++  return diagnostics;
++}
++
++bool LynxShell::CanRegisterNativeRendererHost() {
++  const NativeRendererDiagnostics diagnostics =
++      GetNativeRendererDiagnostics();
++  return !diagnostics.bts_runtime && !diagnostics.mts_context &&
++         !diagnostics.template_bundle;
++}
++
+ void LynxShell::AttachEngineToUIThread() {
+ #if ENABLE_TESTBENCH_RECORDER
+   tasm::recorder::TemplateAssemblerRecorder::RecordSwitchEngineFromUIThread(
+diff --git a/core/shell/lynx_shell.h b/core/shell/lynx_shell.h
+index 2ce18fc6ad8c802c0ea4ab94a9da8173e38da8ee..2a65253994a93db81520b7d6a5a91c93e161e2ed 100644
+--- a/core/shell/lynx_shell.h
++++ b/core/shell/lynx_shell.h
+@@ -95,6 +95,12 @@ struct LynxEngineBuildOptions {
+   std::string locale_;
+ };
+ 
++struct NativeRendererDiagnostics {
++  bool bts_runtime{false};
++  bool mts_context{false};
++  bool template_bundle{false};
++};
++
+ // support create and destroy in any thread
+ class LynxShell {
+  public:
+@@ -327,6 +333,10 @@ class LynxShell {
+     return runtime_actor_;
+   }
+ 
++  NativeRendererDiagnostics GetNativeRendererDiagnostics();
++
++  bool CanRegisterNativeRendererHost();
++
+   std::shared_ptr<LynxActor<shell::LynxEngine>> GetEngineActor() {
+     return engine_actor_;
+   }
+diff --git a/core/shell/lynx_shell_unittest.cc b/core/shell/lynx_shell_unittest.cc
+index d9479fb5f0f700f26caa28ac3ca22c0efac3460d..c7c8e612e8122c24bd291d5b41dbf4fe67d488a6 100644
+--- a/core/shell/lynx_shell_unittest.cc
++++ b/core/shell/lynx_shell_unittest.cc
+@@ -91,6 +91,32 @@ class LynxShellTest : public ::testing::Test {
+   std::shared_ptr<fml::AutoResetWaitableEvent> arwe_;
+ };
+ 
++TEST_F(LynxShellTest, NativeRendererRegistrationRejectsRuntimeOrTemplateState) {
++  NativeRendererDiagnostics diagnostics =
++      shell_->GetNativeRendererDiagnostics();
++  EXPECT_TRUE(diagnostics.bts_runtime);
++  EXPECT_FALSE(diagnostics.mts_context);
++  EXPECT_FALSE(diagnostics.template_bundle);
++  EXPECT_FALSE(shell_->CanRegisterNativeRendererHost());
++
++  shell_->runtime_actor_.reset();
++  diagnostics = shell_->GetNativeRendererDiagnostics();
++  EXPECT_FALSE(diagnostics.bts_runtime);
++  EXPECT_FALSE(diagnostics.mts_context);
++  EXPECT_FALSE(diagnostics.template_bundle);
++  EXPECT_TRUE(shell_->CanRegisterNativeRendererHost());
++
++  auto entry =
++      shell_->GetTasm()->FindTemplateEntry(tasm::DEFAULT_ENTRY_NAME);
++  ASSERT_NE(entry, nullptr);
++  entry->is_template_bundle_complete_ = true;
++  diagnostics = shell_->GetNativeRendererDiagnostics();
++  EXPECT_FALSE(diagnostics.bts_runtime);
++  EXPECT_FALSE(diagnostics.mts_context);
++  EXPECT_TRUE(diagnostics.template_bundle);
++  EXPECT_FALSE(shell_->CanRegisterNativeRendererHost());
++}
++
+ TEST_F(LynxShellTest, ResetLoadOrderOnlyForEmbeddedMode) {
+   shell_->ui_operation_queue_->is_engine_async_ = true;
+   shell_->ui_operation_queue_->CreateImpl();
+diff --git a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+index 7cb4dee723aee18001232e17e1fb77041f1344b1..cc08e1cc55906ac9f3fd7f054443528af499dd12 100644
+--- a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
++++ b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+@@ -9,6 +9,21 @@ import static org.junit.Assert.fail;
+ import org.junit.Test;
+ 
+ public class LynxTemplateRenderNativeRendererTest {
++  @Test
++  public void nativeRendererRegistrationRejectsIncompatibleRuntimeState() {
++    try {
++      LynxTemplateRender.requireNativeRendererHostRegistration(0);
++      fail("Expected incompatible runtime state to reject native renderer registration");
++    } catch (IllegalStateException expected) {
++      // Expected.
++    }
++  }
++
++  @Test
++  public void nativeRendererRegistrationAcceptsNativeOnlyRuntimeState() {
++    LynxTemplateRender.requireNativeRendererHostRegistration(1);
++  }
++
+   @Test
+   public void engineRebuildRejectsRegisteredNativeRendererHost() {
+     try {
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index 35250d345af4a02bb61d4e52a3206899e614d83e..2b5c11826528bf92231d6c2609eed3f5c7e82111 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -2695,11 +2695,17 @@ public class LynxTemplateRender
+     if (mNativeRendererHost != 0) {
+       throw new IllegalStateException("Native renderer host is already registered");
+     }
+-    long host = nativeRegisterNativeRendererHost(mNativePtr, mNativeLifecycle);
++    long host = requireNativeRendererHostRegistration(
++        nativeRegisterNativeRendererHost(mNativePtr, mNativeLifecycle));
++    mNativeRendererHost = host;
++    return host;
++  }
++
++  static long requireNativeRendererHostRegistration(long host) {
+     if (host == 0) {
+-      throw new IllegalStateException("Unable to register native renderer host");
++      throw new IllegalStateException(
++          "Native renderer host requires no BTS runtime, MTS context, or template");
+     }
+-    mNativeRendererHost = host;
+     return host;
+   }
+ 

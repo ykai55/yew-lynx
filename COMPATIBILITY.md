@@ -1,78 +1,75 @@
 # Compatibility and support status
 
-Lynx Element Bridge is an experimental preview. Its compatibility claim stops
-at the exact revisions, source generation, and host verification listed here.
+Lynx Element Bridge is an experimental preview. Its support claim is limited to
+the exact source revisions, native ABI, Android target, and evidence below.
 
 ## Matrix
 
 | Component | Revision or target | Evidence |
 | --- | --- | --- |
-| Protocol | FlatBuffers v2, identifier `LEB2` | Rust round trips, TypeScript consumer tests, Java/JNI binary transport tests |
-| FlatBuffers | `25.2.10` | Locked compiler download and runtime dependencies; committed generated Rust/TypeScript/Java |
-| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned submodule, generated 107-declaration manifest, clean-apply ByteArray patch gate |
-| Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Patch identity checks, renderer/macro tests, adapter and real counter tests |
-| Dioxus Core | `0.7.10` | `WriteMutations` adapter, exact listener/callback registry, real `VirtualDom` wire/FFI counter tests, arm64 staticlib and APK assembly |
-| Rust | `1.85.0` | Locked workspace check, test, formatting, Clippy, host and arm64 builds |
-| Android | API 24+, `arm64-v8a` reference target | Framework-neutral Java/JNI mocks, dual real-staticlib links, isolated Yew and Dioxus APK builds |
-| MTS toolchain | Node 22.18.0, esbuild 0.25.9, `@lynx-js/tasm` 0.0.51 | Locked install, native and forced-WASM bundle builds, broker tests |
-
-## Capability Surface
-
-The schema contains one typed table for each of the 107 public declarations in
-the pinned Lynx Element API type package. The revision manifest reports 100 as
-available on Android and 7 as unsupported. The 33 native-only registry bindings
-that are absent from the public type package are out of scope.
-
-Capability support is revision metadata, not a runtime probe. Required gaps
-reject session creation; optional gaps return `UNSUPPORTED` for the associated
-result slot.
+| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 0002-0009 series, public-header byte comparison, native renderer tests |
+| Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Patch identity, renderer/macro tests, adapter, native lifecycle staticlib |
+| Dioxus Core | `0.7.10` | `WriteMutations` adapter, real `VirtualDom`, native lifecycle staticlib |
+| Rust | `1.85.0` | Locked workspace format/check/test/Clippy and arm64 staticlibs |
+| Android app | API 24+, tested arm64-v8a | Native Java/JNI lifecycle, both real staticlib links, native-only APK checks |
+| Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, release |
 
 ## Runtime Contract
 
-- IDs are nonzero opaque 32-bit values scoped to one session.
-- Calls are synchronous on the mounting thread; cross-thread calls fail with
-  `WRONG_THREAD`.
-- Commands, results, and events use distinct FlatBuffers channels.
-- Events retain opaque payload bytes and a content type.
-- The MTS consumer validates a complete command batch before host mutation.
-- Host execution is ordered and has no transactional rollback guarantee.
-- Explicit destroy invalidates all IDs and releases tree/listener state.
-- Android Java returns `byte[]`; the pinned Lynx patch exposes it to ordinary
-  LepusNG as a read-only `length` plus numeric-index byte view.
+- `CommandBatch` is an ordered in-memory `Vec<Command>` mutation boundary.
+- Sessions, nodes, listeners, callbacks, and native handles are nonzero opaque
+  IDs scoped to one session.
+- Session operations, function-table calls, and callbacks stay synchronous on
+  the mounting thread; wrong-thread and reentrant calls are rejected.
+- Session tree ownership and exact listener identity are validated before each
+  mutation.
+- Native event content type and payload bytes remain opaque to the bridge.
+- Host application is ordered and does not promise rollback after a partial
+  native failure; such a failure poisons the session.
+- Normal destroy removes framework state and then releases the native renderer.
+  Abandon skips application teardown and exists only for emergency cleanup.
+- Android registration rejects a host with an active BTS runtime, MTS context,
+  or template lifecycle.
 
-## Evidence Boundary
+There is no serialized application command/result channel, runtime capability
+negotiation, Java module transport, or template-bundle application path.
 
-Host-independent verification covers both framework adapters, the core host
-fake, protocol generation, FlatBuffers verification, MTS/Fiber mocks, the
-framework-neutral Android Java/JNI transport, both real host static libraries,
-and isolated arm64 APK assembly for Yew and Dioxus.
+## Final Device Evidence
 
-The acceptance script accepts `--backend yew|dioxus`, retains visual counter and
-lifecycle checks, and rejects logs that do not identify the expected linked
-backend.
+Both frameworks passed the final patch-0009 release-safe physical-device
+acceptance flow on 2026-08-22:
 
-On 2026-08-20, the v2 Yew counter passed that flow on a Samsung SM-S9210 running
-Android 15/API 35 with `arm64-v8a`. Evidence covered initial `Count: 0`, tap to
-`Count: 1`, rotation recreation, force-stop/reopen, and three repeated
-mount/tap/destroy cycles; the run observed 9 Activity creates and 4 destroys.
-The tested APK SHA-256 was
-`cff39b46c2b2bfc5b6d0f428229adb60818232c8d57b2e21ccc80a216be56925`.
+- Device: anonymous physical OPPO PGBM10 device
+- OS: Android 13, API 33
+- ABI: arm64-v8a
+- Repeated cycles: 3
+- Yew totals: `onCreate=9`, `onDestroy=4`, `diagnostics=9`, selected backend 9
+- Dioxus totals: `onCreate=10`, `onDestroy=5`, `diagnostics=10`, selected backend
+  10 because the OS performed one extra recreation
+- Acceptance result flags: all six true (fresh launch, timer visual change, tap
+  visual change, activity recreation, force-stop/reopen, and visual review) for
+  both backends
+- Diagnostics: `renderer_mode=native`, `bts_runtime=false`,
+  `mts_context=false`, `template=false`
+- Rejected log markers per run: wrong backend 0; crash 0; timer teardown 0
 
-On 2026-08-20, the Dioxus counter independently passed the same flow on a
-Samsung SM-S9310 running Android 15/API 35 with `arm64-v8a`. Screenshots were
-reviewed for exact `Count: 0` and `Count: 1` states; the run observed 9 Activity
-creates and 4 destroys, and logcat repeatedly identified `backend=dioxus` with
-no crash or native bridge failure. The tested APK SHA-256 was
-`5bf66c4c6aab42af3af900ccc7277d02d369532ef1729029ceb7e144988fc430`.
+| Backend | APK SHA-256 | Evidence path |
+| --- | --- | --- |
+| Yew | `685e8000ac037607fc9cd870d0445293c3f11ec11d6c00b2a375033ed468a1bf` | `.deps/android/device-acceptance-native-yew-20260822-release-safe-success` |
+| Dioxus | `6a51be912a01764566edbf8bea859effe0af073116a785fd6251d71f53664513` | `.deps/android/device-acceptance-native-dioxus-20260822-release-safe-success` |
 
-No claim is made for other Lynx revisions, Android ABIs, iOS, Harmony, desktop,
-web, accessibility, performance, Dioxus asynchronous scheduling, or production
-use.
+The diagnostics prove only which rendering path executed. The stock Lynx AAR
+still packages and loads Quick, PrimJS, and NAPI. Binary-native packaging remains
+a blocked follow-up milestone; complete JS-engine removal is not claimed.
 
-## Changing Pins
+## Limits
 
-A Lynx revision change requires regenerating and reviewing the schema and
-manifest, rebasing `patches/lynx`, and rerunning all verification. A Yew revision
-change requires rebasing `patches/yew`. A Dioxus change requires rerunning the
-real `VirtualDom` fixture and conformance suite. Compatibility must not be
-inferred across any of these changes.
+No claim is made for other Lynx, Yew, or Dioxus revisions; Android ABIs other
+than arm64-v8a; Android API levels outside the declared app range; iOS, Harmony,
+desktop, or web; accessibility; performance; asynchronous Dioxus scheduling; or
+production use.
+
+A Lynx pin change requires rebasing 0002-0009 and rerunning patch, header,
+native-host, Android, and device verification. A Yew pin change requires
+rebasing its patch and focused tests. A Dioxus pin change requires the real
+`VirtualDom` and cross-framework conformance suites.

@@ -1,1 +1,8 @@
-0001-Expose-ByteArray-bytes-to-LepusNG.patch
+0002-Add-native-renderer-C-API.patch
+0003-Add-Android-native-renderer-host.patch
+0004-Initialize-native-renderer-page-config.patch
+0005-Fix-native-renderer-lifecycle-and-handles.patch
+0006-Add-native-runtime-diagnostics-and-boundary-tests.patch
+0007-Fix-native-platform-event-subscription.patch
+0008-Initialize-native-renderer-event-lifecycle.patch
+0009-Make-native-renderer-release-infallible.patch

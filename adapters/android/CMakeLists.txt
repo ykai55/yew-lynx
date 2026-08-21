@@ -22,7 +22,9 @@ set_target_properties(lynx_element_bridge_backend PROPERTIES
       "${LYNX_ELEMENT_BRIDGE_RUST_LIB_DIR}/${ANDROID_ABI}/liblynx_element_bridge_backend.a")
 
 add_library(lynx_element_bridge SHARED
-  src/main/cpp/lynx_element_bridge_jni.cc)
+  src/main/cpp/lynx_element_bridge_jni.cc
+  ../../include/lynx_native_application.h
+  ../../include/lynx_native_renderer.h)
 
 target_include_directories(lynx_element_bridge PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../include")

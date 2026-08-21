@@ -15,5 +15,4 @@ crate-type = ["staticlib", "rlib"]
 dioxus-core.workspace = true
 lynx-element-bridge-core.workspace = true
 lynx-element-bridge-ffi.workspace = true
-lynx-element-bridge-wire.workspace = true
 lynx-element-bridge-dioxus = { path = "../../adapters/dioxus" }
