@@ -23,13 +23,6 @@ allprojects {
                 )
             )
         }
-        maven {
-            url = uri(repositoryRoot.resolve(".deps/android/primjs-maven"))
-            content {
-                includeModule("org.lynxsdk.lynx", "primjs")
-                includeModule("org.lynxsdk.lynx", "primjsWasm")
-            }
-        }
         google()
         mavenCentral()
     }

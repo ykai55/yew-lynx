@@ -138,6 +138,16 @@ class MainActivity : Activity() {
         Log.i(TAG, "MainActivity onDestroy complete")
     }
 
+    override fun onResume() {
+        super.onResume()
+        lynxView?.onEnterForeground()
+    }
+
+    override fun onPause() {
+        lynxView?.onEnterBackground()
+        super.onPause()
+    }
+
     private companion object {
         const val TAG = "LynxElementBridge"
     }

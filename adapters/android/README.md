@@ -1,8 +1,17 @@
 # Android native host adapter
 
 This directory connects the Rust application ABI to the native renderer host
-added by `patches/lynx/0002-0009`. It has one Java owner and one JNI lifecycle;
-there is no Java `LynxModule` or application byte-buffer transport.
+added by the 14-patch `patches/lynx` series (`0002-0015`). It has one Java owner
+and one JNI lifecycle; there is no Java `LynxModule` or application byte-buffer
+transport.
+
+The app opts into
+`org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207`, which packages
+`liblynx_native_renderer.so`. The separately built and published stock
+`org.lynxsdk.lynx:lynx:0.0.1-0df14207` product packages `liblynx.so` and retains
+its existing JavaScript/template behavior; it is not an app dependency. The
+runtime path remains the versioned C ABI and does not use MTS or template
+transport.
 
 ## Lifecycle
 
@@ -50,19 +59,27 @@ JNI status mapping and resolver failure, required JNI exports, absence of the
 removed module JNI prefix, both real Rust static-library links, and required and
 forbidden application C symbols.
 
-The final 2026-08-22 patch-0009 release-safe Yew and Dioxus runs both passed on
-an anonymous physical OPPO PGBM10 device running Android 13/API 33, arm64-v8a.
-Each passed fresh launch, timer, tap, recreation, force-stop/reopen, and three
-cycles; all six acceptance result flags were true for both. Yew recorded
-`onCreate=9`, `onDestroy=4`, `diagnostics=9`, and nine selected-backend markers.
-Dioxus recorded `onCreate=10`, `onDestroy=5`, `diagnostics=10`, and ten
-selected-backend markers because the OS performed one extra recreation. Both
-recorded `renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
-`template=false`, with zero wrong-backend, crash, or timer-teardown markers.
-Evidence is at
-`.deps/android/device-acceptance-native-yew-20260822-release-safe-success` and
-`.deps/android/device-acceptance-native-dioxus-20260822-release-safe-success`.
+The Android build additionally verifies that the native product and app graphs
+exclude stock `lynx`, Quick/PrimJS, NAPI, Wasm, V8, and LynxJSSDK; that the APK
+excludes their shared libraries and `assets/lynx_core.js`; and that
+`liblynx_native_renderer.so` has no forbidden runtime `DT_NEEDED` entries or
+undefined runtime symbols and exports `lynx_native_renderer_get_api`.
 
-The stock Lynx AAR still packages and loads Quick, PrimJS, and NAPI;
-binary-native packaging remains a blocked follow-up milestone, and complete
-JS-engine removal is not claimed.
+The final 2026-08-22 patch-0015 binary-native Yew and Dioxus runs both passed on
+an anonymous Xiaomi Redmi K60 Pro physical device running Android 13/API 33,
+arm64-v8a.
+Each passed fresh launch, timer, tap, recreation, force-stop/reopen, and three
+cycles; every functional result flag was true for both. Each recorded
+`onCreate=9`, `onDestroy=4`, `diagnostics=9`, nine selected-backend markers,
+`renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
+`template=false`, with zero crash markers. `proc_maps_checked` is true: all five
+required libraries were mapped after fresh launch and interaction, the
+forbidden set was empty, and Quick/NAPI/Wasm/V8 mapping flags were false.
+The Yew APK SHA-256 is
+`121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d`, with
+evidence at
+`.deps/android/device-acceptance-binary-native-yew-20260822-0015-final`. The
+Dioxus APK SHA-256 is
+`008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc`, with
+evidence at
+`.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final`.

@@ -123,6 +123,6 @@ tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
 
 dependencies {
     val lynxVersion: String by rootProject.extra
-    implementation("org.lynxsdk.lynx:lynx:$lynxVersion")
+    implementation("org.lynxsdk.lynx:lynx-native-renderer:$lynxVersion")
     implementation("com.google.code.gson:gson:2.8.5")
 }

@@ -1,0 +1,336 @@
+From 1e14b5e8c415b2cfa06c7c8f8641ab939b872a16 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 08:15:00 +0800
+Subject: [PATCH 11/11] Productize native renderer Android artifact
+
+Give the native-renderer-only product a distinct soname and runtime
+boundary while preserving the stock Android artifact.
+---
+ .../android/lynx_template_render_android.cc   |  2 +-
+ platform/android/lynx_android/BUILD.gn        |  6 ++-
+ platform/android/lynx_android/build.gradle    |  8 +++-
+ .../LynxTemplateRenderNativeRendererTest.java | 24 ++++++++++++
+ .../com/lynx/tasm/LynxBackgroundRuntime.java  |  5 +++
+ .../main/java/com/lynx/tasm/LynxEngine.java   |  5 +++
+ .../src/main/java/com/lynx/tasm/LynxEnv.java  |  2 +-
+ .../com/lynx/tasm/LynxTemplateRender.java     | 38 +++++++++++++++++--
+ .../src/main/java/com/lynx/tasm/LynxView.java |  1 +
+ .../java/com/lynx/tasm/TemplateBundle.java    |  5 +++
+ .../main/java/com/lynx/tasm/core/JSProxy.java |  9 +++++
+ .../lynx_android/src/main/jni/jni_configs.yml |  2 +
+ 12 files changed, 99 insertions(+), 8 deletions(-)
+
+diff --git a/core/shell/android/lynx_template_render_android.cc b/core/shell/android/lynx_template_render_android.cc
+index e1f4e61..c814b25 100644
+--- a/core/shell/android/lynx_template_render_android.cc
++++ b/core/shell/android/lynx_template_render_android.cc
+@@ -299,7 +299,7 @@ jlong Create(JNIEnv* env, jclass jcaller, jlong view_id,
+              jlong engine_wrapper_ptr, jobject module_factory) {
+ #if ENABLE_NATIVE_RENDERER_ONLY
+   if (enable_js || runtime_wrapper_ptr != 0 || engine_wrapper_ptr != 0 ||
+-      module_factory != nullptr) {
++      module_factory != nullptr || has_logic_executor || embedded_mode != 0) {
+     return 0;
+   }
+ #endif
+diff --git a/platform/android/lynx_android/BUILD.gn b/platform/android/lynx_android/BUILD.gn
+index 1a2949d..92d54c2 100644
+--- a/platform/android/lynx_android/BUILD.gn
++++ b/platform/android/lynx_android/BUILD.gn
+@@ -24,7 +24,11 @@ if (enable_native_renderer_only) {
+ cmake_target("lynx_android") {
+   cmake_version = "3.4.1"
+   target_type = "shared_library"
+-  output_name = "lynx"
++  if (enable_native_renderer_only) {
++    output_name = "lynx_native_renderer"
++  } else {
++    output_name = "lynx"
++  }
+   deps = [
+     ":lynx_android_lib",
+     ":lynx_jni_files",
+diff --git a/platform/android/lynx_android/build.gradle b/platform/android/lynx_android/build.gradle
+index 2c34bed..25190a5 100644
+--- a/platform/android/lynx_android/build.gradle
++++ b/platform/android/lynx_android/build.gradle
+@@ -30,6 +30,8 @@ android {
+         buildConfigField("Boolean","enable_lepusng_worklet",enable_lepusng_worklet)
+         buildConfigField("Boolean","enable_napi_binding",enable_napi_binding)
+         buildConfigField("Boolean","enable_native_renderer_only",enable_native_renderer_only)
++        buildConfigField("String", "LYNX_NATIVE_LIBRARY_NAME",
++                enable_native_renderer_only.toBoolean() ? '"lynx_native_renderer"' : '"lynx"')
+ 
+         multiDexEnabled true
+ 
+@@ -180,6 +182,8 @@ android {
+        cmake {
+            path "CMakeLists.txt"
+            version CMAKE_VERSION
++           buildStagingDirectory file(".cxx/" +
++                   (enable_native_renderer_only.toBoolean() ? "native-renderer" : "stock"))
+        }
+    }
+ 
+@@ -347,6 +351,8 @@ dependencies {
+         extractJNI 'org.lynxsdk.lynx:v8so:11.1.277.4'
+     }
+ 
+-    api project(':LynxJSSDK')
++    if (!enable_native_renderer_only.toBoolean()) {
++        api project(':LynxJSSDK')
++    }
+     api project(':ServiceAPI')
+ }
+diff --git a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+index cc08e1c..c6dd4d9 100644
+--- a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
++++ b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+@@ -38,4 +38,28 @@ public class LynxTemplateRenderNativeRendererTest {
+   public void engineRebuildAllowsMissingNativeRendererHost() {
+     LynxTemplateRender.checkNativeRendererHostForEngineRebuild(0);
+   }
++
++  @Test
++  public void nativeRendererOnlyConfigurationAcceptsRendererOnlyBuilder() {
++    LynxTemplateRender.requireNativeRendererOnlyConfiguration(false, false, false, false);
++  }
++
++  @Test
++  public void nativeRendererOnlyConfigurationRejectsRuntimeAndEngineProducts() {
++    assertNativeRendererOnlyConfigurationRejected(true, false, false, false);
++    assertNativeRendererOnlyConfigurationRejected(false, true, false, false);
++    assertNativeRendererOnlyConfigurationRejected(false, false, true, false);
++    assertNativeRendererOnlyConfigurationRejected(false, false, false, true);
++  }
++
++  private static void assertNativeRendererOnlyConfigurationRejected(boolean enableJSRuntime,
++      boolean hasBackgroundRuntime, boolean hasViewGroup, boolean hasLogicExecutor) {
++    try {
++      LynxTemplateRender.requireNativeRendererOnlyConfiguration(
++          enableJSRuntime, hasBackgroundRuntime, hasViewGroup, hasLogicExecutor);
++      fail("Expected native-renderer-only configuration to reject runtime or engine state");
++    } catch (UnsupportedOperationException expected) {
++      // Expected.
++    }
++  }
+ }
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
+index f7f91f5..9d1884d 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
+@@ -10,6 +10,7 @@ import androidx.annotation.Keep;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+ import androidx.annotation.RestrictTo;
++import com.lynx.BuildConfig;
+ import com.lynx.devtoolwrapper.LynxDevtool;
+ import com.lynx.jsbridge.CommonModuleCreator;
+ import com.lynx.jsbridge.IContextFinder;
+@@ -95,6 +96,10 @@ public class LynxBackgroundRuntime implements ILynxErrorReceiver {
+   @AnyThread
+   public LynxBackgroundRuntime(
+       @NonNull Context context, @NonNull LynxBackgroundRuntimeOptions options, boolean debuggable) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "Background runtimes are unavailable in native-renderer-only builds");
++    }
+     mRuntimeClients = new CopyOnWriteArrayList<>();
+     mPlatformCallBackMap = new HashMap<>();
+     if (!LynxEnv.inst().isNativeLibraryLoaded()) {
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEngine.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEngine.java
+index 8ae4ce1..c5da3f4 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEngine.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEngine.java
+@@ -5,6 +5,7 @@ package com.lynx.tasm;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.annotation.RestrictTo;
++import com.lynx.BuildConfig;
+ import com.lynx.tasm.base.LLog;
+ import com.lynx.tasm.behavior.ILynxUIRenderer;
+ import java.lang.ref.WeakReference;
+@@ -39,6 +40,10 @@ public class LynxEngine {
+   private PageConfig mPageConfig;
+ 
+   public LynxEngine(@NonNull TemplateBundle templateBundle, LynxTemplateRender templateRender) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "Engine cache/reuse is unavailable in native-renderer-only builds");
++    }
+     /**
+      * 1. Check if there is an available EngineWrapper and retrieve it from the cache.
+      *  1.1 If no EngineWrapper is available, create one and obtain the nativePtr of the
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+index 3cb6880..0330369 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+@@ -605,7 +605,7 @@ public class LynxEnv {
+         initBase(mLibraryLoader);
+       }
+       mLibraryLoader.loadLibrary("lynxgfx");
+-      mLibraryLoader.loadLibrary("lynx");
++      mLibraryLoader.loadLibrary(BuildConfig.LYNX_NATIVE_LIBRARY_NAME);
+       if (!LynxTraceEnv.inst().isNativeLibraryLoaded()) {
+         mLibraryLoader.loadLibrary("lynxtrace");
+         LynxTraceEnv.inst().markNativeLibraryLoaded(true);
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index d0e7597..804ef95 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -370,6 +370,7 @@ public class LynxTemplateRender
+   }
+ 
+   private void init(@Nullable Context context, UIBodyView bodyView, LynxViewBuilder builder) {
++    requireNativeRendererOnlyConfiguration(builder);
+     TraceEvent.beginSection(TraceEventDef.TEMPLATE_RENDER_INIT);
+     ILynxTrailService trailService = LynxServiceCenter.inst().getService(ILynxTrailService.class);
+     if (trailService instanceof ILynxTrailServiceExtension) {
+@@ -416,10 +417,6 @@ public class LynxTemplateRender
+     mTemplateProvider = builder.templateProvider;
+     mEnableSyncFlush = mLynxViewConfigProvider.isEnableSyncFlush();
+     mEnableJSRuntime = mLynxViewConfigProvider.isEnableJSRuntime();
+-    if (BuildConfig.enable_native_renderer_only && (mEnableJSRuntime || mRuntime != null)) {
+-      throw new UnsupportedOperationException(
+-          "JavaScript runtimes are unavailable in native-renderer-only builds");
+-    }
+     mEnableGenericResourceFetcher =
+         checkEnableGenericResourceFetcher(mLynxViewConfigProvider.isEnableGenericResourceFetcher());
+     mEnableAirStrictMode = mLynxViewConfigProvider.isEnableAirStrictMode();
+@@ -1054,6 +1051,14 @@ public class LynxTemplateRender
+         mEmbeddedMode, mLogicExecutor != null, mLynxViewBuilder.isDebuggable(),
+         mLynxEngineRef == null ? 0 : mLynxEngineRef.getNativePtr(),
+         mMainThreadModuleFactory != null ? mMainThreadModuleFactory : null);
++    if (BuildConfig.enable_native_renderer_only && mNativePtr == 0) {
++      lynxUIRenderer.onDestroyTemplateRenderer();
++      mNativeFacade.destroyAnyThreadPart();
++      mNativeFacade = null;
++      mIsDestroyed.set(true);
++      TraceEvent.endSection(TraceEventDef.TEMPLATE_RENDER_CREATE_TASM);
++      throw new IllegalStateException("Unable to create native Lynx renderer");
++    }
+ 
+     lynxUIRenderer.attachNativeFacade(mNativeFacade);
+     lynxUIRenderer.setLynxEngineForPlatformContextRef(mNativePtr);
+@@ -3290,6 +3295,31 @@ public class LynxTemplateRender
+     }
+   }
+ 
++  static void requireNativeRendererOnlyConfiguration(LynxViewBuilder builder) {
++    if (!BuildConfig.enable_native_renderer_only) {
++      return;
++    }
++    requireNativeRendererOnlyConfiguration(builder.isEnableJSRuntime(),
++        builder.lynxBackgroundRuntime != null, builder.lynxViewGroup != null,
++        builder.getLogicExecutor() != null);
++  }
++
++  static void requireNativeRendererOnlyConfiguration(boolean enableJSRuntime,
++      boolean hasBackgroundRuntime, boolean hasViewGroup, boolean hasLogicExecutor) {
++    if (enableJSRuntime) {
++      throw new UnsupportedOperationException(
++          "JavaScript runtimes are unavailable in native-renderer-only builds");
++    }
++    if (hasBackgroundRuntime || hasLogicExecutor) {
++      throw new UnsupportedOperationException(
++          "Background runtimes are unavailable in native-renderer-only builds");
++    }
++    if (hasViewGroup) {
++      throw new UnsupportedOperationException(
++          "Template bundles and engine cache/reuse are unavailable in native-renderer-only builds");
++    }
++  }
++
+   private synchronized void fallbackNewEngine(boolean enable_async) {
+     if (!UIThreadUtils.isOnUiThread()) {
+       LLog.e(TAG, "fallbackNewEngine should be called on ui thread, url: " + mUrl);
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java
+index bf3ae6b..d82bc30 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxView.java
+@@ -138,6 +138,7 @@ public class LynxView extends UIBodyView implements ILynxSecurityTarget {
+    * @param builder
+    */
+   public void initWithLynxViewBuilder(LynxViewBuilder builder) {
++    LynxTemplateRender.requireNativeRendererOnlyConfiguration(builder);
+     mLynxUIRender = builder.createLynxUIRenderer();
+     if (builder.lynxBackgroundRuntime != null) {
+       initLynxViewWithRuntime(getContext(), builder);
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/TemplateBundle.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/TemplateBundle.java
+index 07ec7bc..f855e2c 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/TemplateBundle.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/TemplateBundle.java
+@@ -7,6 +7,7 @@ package com.lynx.tasm;
+ import android.text.TextUtils;
+ import androidx.annotation.Nullable;
+ import androidx.annotation.RestrictTo;
++import com.lynx.BuildConfig;
+ import com.lynx.devtoolwrapper.LynxDevToolPool;
+ import com.lynx.jsbridge.LynxBytecodeCallback;
+ import com.lynx.react.bridge.ReadableMap;
+@@ -82,6 +83,10 @@ public final class TemplateBundle implements ILynxSecurityTarget {
+   }
+ 
+   public TemplateBundle() {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "Template bundles are unavailable in native-renderer-only builds");
++    }
+     pageConfig = new PageConfig(null);
+     mCleanupTask = new CleanupTask();
+     mCleanupReference = new CleanupReference(this, mCleanupTask, false);
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/core/JSProxy.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/core/JSProxy.java
+index 36d9f67..0ff7f2f 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/core/JSProxy.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/core/JSProxy.java
+@@ -7,6 +7,7 @@ package com.lynx.tasm.core;
+ import androidx.annotation.GuardedBy;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.RestrictTo;
++import com.lynx.BuildConfig;
+ import com.lynx.jsbridge.JSModule;
+ import com.lynx.jsbridge.RuntimeLifecycleListener;
+ import com.lynx.jsbridge.RuntimeLifecycleListenerDelegate;
+@@ -42,12 +43,20 @@ public class JSProxy {
+   private boolean hasReport = false;
+ 
+   public JSProxy(long nativeCreator, WeakReference<LynxContext> context, String jsGroupThreadName) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "JavaScript runtimes are unavailable in native-renderer-only builds");
++    }
+     mContext = context;
+     mJSGroupThreadName = jsGroupThreadName;
+     mNativePtr = nativeCreate(nativeCreator, jsGroupThreadName);
+   }
+ 
+   public JSProxy(LynxBackgroundRuntime runtime, String jsGroupThreadName) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "JavaScript runtimes are unavailable in native-renderer-only builds");
++    }
+     mContext = new WeakReference<LynxContext>(null);
+     mJSGroupThreadName = jsGroupThreadName;
+     mNativePtr = nativeCreateWithRuntimeActor(runtime.getNativePtr(), jsGroupThreadName);
+diff --git a/platform/android/lynx_android/src/main/jni/jni_configs.yml b/platform/android/lynx_android/src/main/jni/jni_configs.yml
+index 6b4845a..61b2fab 100644
+--- a/platform/android/lynx_android/src/main/jni/jni_configs.yml
++++ b/platform/android/lynx_android/src/main/jni/jni_configs.yml
+@@ -44,6 +44,7 @@ jni_class_configs:
+         - OnEnterForeground
+         - OnEnterBackground
+         - OnLynxEngineCreated
++        - UpdateScreenMetrics
+         - SetFontScale
+         - UpdateFontScale
+         - UpdateColorScheme
+@@ -51,6 +52,7 @@ jni_class_configs:
+         - UpdateViewport
+         - SyncFetchLayoutResult
+         - EnforceRelayoutOnCurrentThreadWithUpdatedViewport
++        - QueryNativeMemoryUsageAsync
+         - MarkDirty
+         - Flush
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
+-- 
+2.39.5

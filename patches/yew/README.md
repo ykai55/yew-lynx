@@ -93,18 +93,23 @@ cargo test --locked -p yew-macro --test html_macro_test html_macro -- --exact
 `./scripts/verify.sh` runs these with workspace conformance, public native
 lifecycle, Android JNI, real staticlib symbol, and Lynx patch/header checks.
 
-The composed Yew backend passed final patch-0009 release-safe device acceptance
-on 2026-08-22 on an anonymous physical OPPO PGBM10 device running Android 13/API
-33, arm64-v8a. Fresh launch, timer, tap, recreation, force-stop/reopen, and three
-cycles passed, with all six acceptance result flags true. The run recorded
-`onCreate=9`, `onDestroy=4`, `diagnostics=9`, `renderer_mode=native`,
-`bts_runtime=false`, `mts_context=false`, and `template=false`, plus nine Yew
-backend markers and zero wrong-backend, crash, or timer-teardown markers. The
-tested APK SHA-256 is
-`685e8000ac037607fc9cd870d0445293c3f11ec11d6c00b2a375033ed468a1bf`;
-evidence is
-`.deps/android/device-acceptance-native-yew-20260822-release-safe-success`.
+The composed Yew backend passed final patch-0015 binary-native device acceptance
+on 2026-08-22 on an anonymous Xiaomi Redmi K60 Pro physical device running
+Android 13/API 33, arm64-v8a. Fresh launch, timer, tap, recreation,
+force-stop/reopen, and three cycles passed, with every functional result flag
+true. The run recorded
+`onCreate=9`, `onDestroy=4`, `diagnostics=9`, nine Yew backend markers,
+`renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
+`template=false`, with zero crash markers and `proc_maps_checked=true`. Process
+maps confirmed all five required libraries after fresh launch and interaction,
+an empty forbidden set, and false Quick/NAPI/Wasm/V8 mapping flags. The tested
+APK SHA-256 is
+`121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d`; evidence
+is `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final`.
 
-The stock Lynx AAR still packages and loads Quick, PrimJS, and NAPI;
-binary-native packaging remains a blocked follow-up milestone, and complete
-JS-engine removal is not claimed.
+The app uses the opt-in
+`org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207` /
+`liblynx_native_renderer.so` product. It does not depend on the separately
+published stock `org.lynxsdk.lynx:lynx:0.0.1-0df14207` / `liblynx.so` product or
+its JavaScript runtime dependencies. Rendering remains direct through the C ABI,
+without MTS or template transport.

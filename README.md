@@ -25,14 +25,17 @@ Yew NativeRendererBackend       Dioxus WriteMutations
 ## Pinned Inputs
 
 - Lynx: `0df14207cebb060f1bed8de12b64a1119dee8f06`
+- Lynx tools_shared: `bdea62f7b500026aab237b271abc7eff279a5c2d`
 - Yew patch base: `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`
 - Dioxus Core: `0.7.10`
 - Rust: `1.85.0`
 
-`third_party/lynx` is the audited upstream gitlink. `patches/lynx/0002-0009`
-add the native renderer API, Android host registry, lifecycle validation,
-diagnostics, event delivery, and focused boundary tests. `patches/yew` adds the
-host-independent native renderer used by the Yew adapter.
+`third_party/lynx` is the audited upstream gitlink. The 14-patch
+`patches/lynx` series (`0002-0015`) adds the native renderer API, Android host
+registry, lifecycle validation, diagnostics, event delivery, native-only Android
+product, and focused boundary tests. The pinned `patches/lynx-tools-shared`
+series makes native-only JNI registration filtering reproducible. `patches/yew`
+adds the host-independent native renderer used by the Yew adapter.
 
 ## Architecture
 
@@ -59,6 +62,26 @@ host-independent native renderer used by the Yew adapter.
 contains mutations only. Event payload bytes and content type are copied at the
 native callback boundary and remain opaque to the bridge.
 
+## Android Products
+
+The pinned source publishes two separate Maven products at version
+`0.0.1-0df14207`; this app opts into the native product:
+
+- `org.lynxsdk.lynx:lynx` contains the stock `liblynx.so`. It is built and
+  published separately, and its JavaScript/template behavior is unchanged.
+- `org.lynxsdk.lynx:lynx-native-renderer` contains
+  `liblynx_native_renderer.so`. It is the product selected by this app and does
+  not depend on the stock `lynx` artifact.
+
+The native product POM and application runtime graph exclude stock `lynx`,
+Quick/PrimJS, NAPI, Wasm, V8, and LynxJSSDK. The APK likewise excludes
+`liblynx.so`, their runtime shared libraries, and `assets/lynx_core.js`. The
+native renderer ELF has no forbidden runtime `DT_NEEDED` entries or undefined
+runtime symbols, and exports `lynx_native_renderer_get_api`.
+Packaging does not change the runtime architecture: framework mutations still
+cross the versioned C function table in memory, with no MTS or template
+transport.
+
 ## Public Native ABI
 
 Each framework static library exports only:
@@ -83,25 +106,36 @@ the session token.
 
 ## Device Evidence
 
-Final patch-0009 release-safe acceptance passed on 2026-08-22 for both backends
-on an anonymous physical OPPO PGBM10 device running Android 13/API 33,
+Final patch-0015 binary-native acceptance passed on 2026-08-22 for both backends
+on an anonymous Xiaomi Redmi K60 Pro physical device running Android 13/API 33,
 arm64-v8a:
 
 | Backend | APK SHA-256 | Evidence | `onCreate` | `onDestroy` | diagnostics/backend |
 | --- | --- | --- | ---: | ---: | ---: |
-| Yew | `685e8000ac037607fc9cd870d0445293c3f11ec11d6c00b2a375033ed468a1bf` | `.deps/android/device-acceptance-native-yew-20260822-release-safe-success` | 9 | 4 | 9 |
-| Dioxus | `6a51be912a01764566edbf8bea859effe0af073116a785fd6251d71f53664513` | `.deps/android/device-acceptance-native-dioxus-20260822-release-safe-success` | 10 | 5 | 10 |
+| Yew | `121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d` | `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final` | 9 | 4 | 9 |
+| Dioxus | `008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc` | `.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final` | 9 | 4 | 9 |
 
 Both runs passed fresh launch, timer, tap, recreation, force-stop/reopen, and
-three repeated cycles, with all six acceptance result flags true. Both recorded
+three repeated cycles, with every functional flag true and zero crash markers.
+Each recorded `onCreate=9`, `onDestroy=4`, nine native diagnostics, and nine
+selected-backend markers,
 `renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
-`template=false`, with zero wrong-backend, crash, or timer-teardown markers.
-Dioxus has one additional create, destroy, diagnostic, and selected-backend
-marker because the OS performed one extra recreation.
+`template=false` and `proc_maps_checked=true`. Maps were captured after fresh
+launch and after interaction: all five required libraries (`liblynx_native_renderer.so`,
+`liblynx_element_bridge.so`, `liblynxbase.so`, `liblynxgfx.so`, and
+`liblynxtrace.so`) were mapped at both points; the forbidden set was empty and
+Quick, NAPI, Wasm, and V8 mapping flags were false.
 
-The stock Lynx AAR still packages and loads Quick, PrimJS, and NAPI;
-binary-native packaging remains a blocked follow-up milestone, and complete
-JS-engine removal is not claimed.
+Each evidence directory contains nine files. All 21 `NativeRendererApiTest`
+cases pass (21/21), with no private test peer or helper; release behavior is
+tested through the production function table. All 11 public statuses cross the
+production boundary. `RESOURCE_EXHAUSTED` and `INTERNAL_ERROR` are returned by
+real repeating timer callbacks through the function table, and production
+task-runner behavior cancels each timer after one callback. Neither status uses
+allocator exhaustion or root rollback. The patch-0015 tests and final device
+evidence complete Issue #4's implementation and acceptance requirements, so
+the issue is closable. See `patches/lynx/README.md` for the status-by-status
+evidence.
 
 ## Build And Verify
 
@@ -115,7 +149,8 @@ Prepare the pinned Yew checkout and run the complete host-independent suite:
 Verification covers Rust formatting/check/test/Clippy, Yew/Dioxus conformance,
 public native lifecycle tests, Android Java/JNI mocks, both real static-library
 links, required/forbidden exported symbols, sequential Lynx patch application,
-public-header identity, and patched-Yew tests.
+the pinned tools_shared JNI-filter patch, public-header identity, stock/native
+product separation, dependency/APK/ELF inspection, and patched-Yew tests.
 
 Build an Android APK only when needed:
 
@@ -125,9 +160,11 @@ Build an Android APK only when needed:
 ```
 
 The Android build requires JDK 11, the documented Android SDK/NDK versions,
-Rust 1.85.0, and Node.js only for Lynx's own source build tooling. The
-application rendering path is native-only and the build rejects any packaged
-`.lynx.bundle`.
+Rust 1.85.0, and Node.js only for Lynx's own source build tooling. PrimJS lock
+and preparation inputs are used only to reproducibly build and test the
+preserved stock artifact; they are not dependencies of the native product or
+app. The application rendering path is native-only and the build rejects any
+packaged `.lynx.bundle`.
 
 Do not infer compatibility across pin changes. See
 [`COMPATIBILITY.md`](COMPATIBILITY.md) and

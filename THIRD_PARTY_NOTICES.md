@@ -33,10 +33,21 @@ Copyright (c) 2024 TikTok Inc.
 All rights reserved.
 ```
 
-The exact source is the `third_party/lynx` gitlink. `patches/lynx/0002-0009`
-add the native renderer function table, Android host registration, lifecycle,
-diagnostics, event delivery, and tests. Lynx Android modules are published only
-to an ignored local Maven repository.
+The exact source is the `third_party/lynx` gitlink. The 14-patch `patches/lynx`
+series (`0002-0015`) adds the native renderer function table, Android host
+registration, lifecycle, diagnostics, event delivery, native-only Android
+product, and tests. The native-only JNI registration filter is applied
+reproducibly to the Lynx-pinned tools_shared revision
+`bdea62f7b500026aab237b271abc7eff279a5c2d` by `patches/lynx-tools-shared`. Lynx
+Android modules are published only to an ignored local Maven repository.
+
+The build publishes the preserved stock coordinate
+`org.lynxsdk.lynx:lynx:0.0.1-0df14207` with `liblynx.so`, and the separate
+opt-in coordinate
+`org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207` with
+`liblynx_native_renderer.so`. The stock product's behavior is unchanged. The
+native product and example app do not depend on stock `lynx`, LynxJSSDK, or the
+JavaScript runtime artifacts.
 
 ## Dioxus
 
@@ -56,12 +67,13 @@ framework `Template` types locally.
 - License: Apache-2.0
 - License file: <https://github.com/lynx-family/primjs/blob/develop/LICENSE>
 
-The pinned Lynx Android source build requires these AARs. Their identities and
-SHA-256 values are recorded in `android/primjs.lock` and verified by
-`scripts/prepare-primjs.sh`. The stock Lynx AAR still packages and loads Quick,
-PrimJS, and NAPI. Runtime-native renderer diagnostics establish only the active
-path; binary-native packaging remains a blocked follow-up milestone, and
-complete JS-engine removal is not claimed.
+The preserved stock Lynx Android source build requires these AARs. Their
+identities and SHA-256 values are recorded in `android/primjs.lock` and verified
+by `scripts/prepare-primjs.sh`, so the stock artifact can be built and tested
+reproducibly. This preparation and attribution remain required for that stock
+artifact. PrimJS is not a dependency of the native renderer product or example
+app; their dependency graphs, APK, and runtime process maps exclude PrimJS,
+Quick, NAPI, Wasm, and V8.
 
 ## Habitat
 

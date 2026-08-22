@@ -7,6 +7,8 @@ readonly ROOT_DIR
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
+readonly LYNX_TOOLS_SHARED_SHA="bdea62f7b500026aab237b271abc7eff279a5c2d"
+readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
 readonly SCRIPTS=(
   "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
@@ -18,10 +20,14 @@ readonly SCRIPTS=(
 )
 
 temp_dir=""
+tools_shared_temp_dir=""
 
 cleanup() {
   if [[ -n "$temp_dir" && -d "$temp_dir" ]]; then
     rm -rf -- "$temp_dir"
+  fi
+  if [[ -n "$tools_shared_temp_dir" && -d "$tools_shared_temp_dir" ]]; then
+    rm -rf -- "$tools_shared_temp_dir"
   fi
 }
 
@@ -80,10 +86,96 @@ verify_android_metadata() {
     bash "$ROOT_DIR/android/hab.lock"
   bash -c 'set -u; source "$1"; [[ "$PRIMJS_UNIQUE_VERSION" != *SNAPSHOT && "$PRIMJS_WASM_UNIQUE_VERSION" != *SNAPSHOT && "$PRIMJS_AAR_SHA256" =~ ^[0-9a-f]{64}$ && "$PRIMJS_POM_SHA256" =~ ^[0-9a-f]{64}$ && "$PRIMJS_WASM_AAR_SHA256" =~ ^[0-9a-f]{64}$ && "$PRIMJS_WASM_POM_SHA256" =~ ^[0-9a-f]{64}$ ]]' \
     bash "$ROOT_DIR/android/primjs.lock"
-  grep -q '^org\.lynxsdk\.lynx:lynx:0\.0\.1-0df14207=' \
+  grep -q '^org\.lynxsdk\.lynx:lynx-native-renderer:0\.0\.1-0df14207=' \
     "$ROOT_DIR/examples/android/app/gradle.lockfile"
+  if grep -Eq '^org\.lynxsdk\.lynx:(lynx|lynx-jssdk|primjs|primjsWasm):' \
+      "$ROOT_DIR/examples/android/app/gradle.lockfile"; then
+    printf 'verify: Android app lock contains a forbidden stock runtime dependency\n' >&2
+    return 1
+  fi
+  grep -q '<trust group="org.lynxsdk.lynx" name="lynx-native-renderer"' \
+    "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
   grep -q '<component group="com.android.tools.build" name="gradle" version="7.4.2">' \
     "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
+}
+
+verify_lynx_tools_shared_patches() {
+  local apply_status=0
+  local checkout_status
+  local i
+  local patch_file
+  local patch_name
+  local tools_shared_dir="$ROOT_DIR/third_party/lynx/tools_shared"
+  local -a applied_patch_files=()
+  local -a patch_files=()
+
+  grep -q "commit.*$LYNX_TOOLS_SHARED_SHA" \
+    "$ROOT_DIR/third_party/lynx/dependencies/DEPS.tools_shared"
+  if [[ ! -d "$tools_shared_dir/.git" && ! -f "$tools_shared_dir/.git" ]]; then
+    tools_shared_temp_dir="$(mktemp -d "$ROOT_DIR/.deps/.tools-shared-verify.XXXXXX")"
+    tools_shared_dir="$tools_shared_temp_dir/tools_shared"
+    git clone --quiet --no-checkout \
+      https://github.com/lynx-family/tools-shared.git "$tools_shared_dir"
+    git -C "$tools_shared_dir" checkout --quiet --detach "$LYNX_TOOLS_SHARED_SHA"
+  fi
+  [[ "$(git -C "$tools_shared_dir" rev-parse HEAD)" == "$LYNX_TOOLS_SHARED_SHA" ]] || {
+    printf 'verify: Lynx tools_shared checkout is not at %s\n' \
+      "$LYNX_TOOLS_SHARED_SHA" >&2
+    return 1
+  }
+  checkout_status="$(
+    git -C "$tools_shared_dir" status --porcelain=v1 --untracked-files=all
+  )"
+  [[ -z "$checkout_status" ]] || {
+    printf 'verify: Lynx tools_shared checkout has tracked or non-ignored untracked changes:\n%s\n' \
+      "$checkout_status" >&2
+    return 1
+  }
+
+  while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
+    patch_name="${patch_name%$'\r'}"
+    case "$patch_name" in
+      '' | \#*) continue ;;
+    esac
+    case "/$patch_name/" in
+      */../* | */./*) return 1 ;;
+    esac
+    [[ "$patch_name" != /* ]] || return 1
+    patch_file="$LYNX_TOOLS_SHARED_PATCH_DIR/$patch_name"
+    [[ -f "$patch_file" ]] || return 1
+    git patch-id --stable < "$patch_file" | grep -Eq '^[0-9a-f]{40} [0-9a-f]{40}$'
+    patch_files+=("$patch_file")
+  done < "$LYNX_TOOLS_SHARED_PATCH_DIR/series"
+  ((${#patch_files[@]} > 0)) || return 1
+
+  for patch_file in "${patch_files[@]}"; do
+    if ! git -C "$tools_shared_dir" apply --check "$patch_file" \
+        || ! git -C "$tools_shared_dir" apply "$patch_file"; then
+      apply_status=1
+      break
+    fi
+    applied_patch_files+=("$patch_file")
+  done
+  if ((apply_status == 0)); then
+    if ! python3 -c 'import pathlib, sys; [compile(pathlib.Path(path).read_bytes(), path, "exec") for path in sys.argv[1:]]' \
+        "$tools_shared_dir/jni_generator/generate_and_register_jni_files.py" \
+        "$tools_shared_dir/jni_generator/jni_generator.py"; then
+      apply_status=1
+    fi
+  fi
+  for ((i = ${#applied_patch_files[@]} - 1; i >= 0; --i)); do
+    if ! git -C "$tools_shared_dir" apply --reverse \
+        "${applied_patch_files[$i]}"; then
+      printf 'verify: failed to remove temporary Lynx tools_shared patch %s\n' \
+        "${applied_patch_files[$i]}" >&2
+      apply_status=1
+    fi
+  done
+  [[ -z "$(git -C "$tools_shared_dir" status --porcelain=v1 --untracked-files=no)" ]] || {
+    printf 'verify: failed to restore Lynx tools_shared checkout\n' >&2
+    return 1
+  }
+  ((apply_status == 0))
 }
 
 verify_lynx_patches() {
@@ -135,7 +227,7 @@ verify_lynx_patches() {
         "${applied_patch_files[$i]}"; then
       printf 'verify: failed to remove temporary Lynx patch %s\n' \
         "${applied_patch_files[$i]}" >&2
-      return 1
+      apply_status=1
     fi
   done
   if ((apply_status != 0 || verification_status != 0)); then
@@ -211,8 +303,12 @@ printf '==> Checking removed transport gates\n'
 verify_removed_transport
 printf '==> Checking pinned Lynx patch series\n'
 verify_lynx_patches
+printf '==> Checking pinned Lynx tools_shared patch series\n'
+verify_lynx_tools_shared_patches
 python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], "exec")' \
   "$ROOT_DIR/scripts/android-device-acceptance.py"
+python3 "$ROOT_DIR/scripts/test_android_device_acceptance.py"
+python3 "$ROOT_DIR/scripts/test_build_android.py"
 
 printf '==> Bootstrapping pinned Yew checkout\n'
 "$ROOT_DIR/scripts/bootstrap-yew.sh"

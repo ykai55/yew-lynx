@@ -2,7 +2,7 @@ package com.lynx.elementbridge;
 
 public final class JniIntegrationTest {
   public static void main(String[] args) {
-    System.loadLibrary("lynx");
+    System.loadLibrary("lynx_native_renderer");
     nativeRendererLifecycleUsesResolvedFunctionTable();
     nativeRendererStatusesAreDeterministicExceptions();
   }

@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 11:00:00 +0800
+Subject: [PATCH 13/13] Restore native renderer platform events
+
+Native-renderer-only views still need the platform EventEmitter and engine
+proxy to forward Android touch events into TASM. Keep the layout proxy and
+runtime-only initialization disabled, but restore this renderer-owned event
+path and cover both its Java setup and native tap registration.
+---
+ core/renderer/native_renderer_unittest.cc     | 12 +++++-
+ .../LynxTemplateRenderNativeRendererTest.java | 41 +++++++++++++++++++
+ .../java/com/lynx/tasm/LynxTemplateRender.java | 17 ++++----
+ 3 files changed, 62 insertions(+), 8 deletions(-)
+
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index 52affcd..9f9c7d2 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -535,7 +535,17 @@ TEST(NativeRendererApiTest,
+             LYNX_NATIVE_RENDERER_STATUS_OK);
+   ASSERT_EQ(api->flush(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
+ 
+-  Element* target = harness.manager_->root()->GetChildAt(0)->GetChildAt(0);
++  Element* listener_target = harness.manager_->root()->GetChildAt(0);
++  auto event_handler = listener_target->event_map().find("tap");
++  ASSERT_NE(event_handler, listener_target->event_map().end());
++  EXPECT_EQ(event_handler->second->type().str(), "bindEvent");
++  auto* listeners = listener_target->GetEventListenerMap()->Find("tap");
++  ASSERT_NE(listeners, nullptr);
++  ASSERT_EQ(listeners->size(), 1u);
++  EXPECT_EQ(listeners->front()->type(),
++            event::EventListener::Type::kNativeEventListener);
++
++  Element* target = listener_target->GetChildAt(0);
+   harness.tasm_->SendTouchEvent(
+       "tap", EventInfo(target->impl_id(), 0, 0, 0, 0, 0, 0));
+   EXPECT_EQ(state.event_count, 1);
+diff --git a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+index c6dd4d9..b249875 100644
+--- a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
++++ b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+@@ -4,10 +4,20 @@
+ 
+ package com.lynx.tasm;
+ 
++import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.fail;
++import static org.junit.Assume.assumeTrue;
+ 
++import android.app.Application;
++import android.content.Context;
++import androidx.test.ext.junit.runners.AndroidJUnit4;
++import androidx.test.platform.app.InstrumentationRegistry;
++import com.lynx.BuildConfig;
++import java.lang.reflect.Field;
+ import org.junit.Test;
++import org.junit.runner.RunWith;
+ 
++@RunWith(AndroidJUnit4.class)
+ public class LynxTemplateRenderNativeRendererTest {
+   @Test
+   public void nativeRendererRegistrationRejectsIncompatibleRuntimeState() {
+@@ -52,6 +62,37 @@ public class LynxTemplateRenderNativeRendererTest {
+     assertNativeRendererOnlyConfigurationRejected(false, false, false, true);
+   }
+ 
++  @Test
++  public void nativeRendererOnlyInitializesPlatformEventPlumbing() throws Exception {
++    assumeTrue(BuildConfig.enable_native_renderer_only);
++    Context context =
++        InstrumentationRegistry.getInstrumentation().getTargetContext().getApplicationContext();
++    LynxEnv.inst().init((Application) context, System::loadLibrary, null, null, null);
++    Field proxyField =
++        LynxEventEmitter.LynxEngineProxyWrapper.class.getDeclaredField("mEngineProxy");
++    proxyField.setAccessible(true);
++
++    InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
++      LynxView view =
++          new LynxViewBuilder()
++              .setEnableJSRuntime(false)
++              .setThreadStrategyForRendering(ThreadStrategyForRendering.ALL_ON_UI)
++              .build(context);
++      try {
++        assertNotNull(view.getLynxContext());
++        assertNotNull(view.getLynxContext().getEventEmitter());
++        LynxEventEmitter eventEmitter = (LynxEventEmitter) view.getLynxContext().getEventEmitter();
++        try {
++          assertNotNull(proxyField.get(eventEmitter.mEngineProxy));
++        } catch (IllegalAccessException error) {
++          throw new AssertionError(error);
++        }
++      } finally {
++        view.destroy();
++      }
++    });
++  }
++
+   private static void assertNativeRendererOnlyConfigurationRejected(boolean enableJSRuntime,
+       boolean hasBackgroundRuntime, boolean hasViewGroup, boolean hasLogicExecutor) {
+     try {
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index 804ef95..ecac310 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -1143,15 +1143,15 @@ public class LynxTemplateRender
+     mIntersectionObserverManager = new LynxIntersectionObserverManager(mLynxContext, mJSProxy);
+     mLynxContext.setIntersectionObserverManager(mIntersectionObserverManager);
+ 
+-    if (!BuildConfig.enable_native_renderer_only) {
+-      initEngineAndLayoutProxies();
++    initEngineAndLayoutProxies();
+ 
+-      EventEmitter eventEmitter = new LynxEventEmitter(mEngineProxy);
+-      eventEmitter.addObserver(mIntersectionObserverManager);
+-      eventEmitter.registerEventReporter(mNativeFacade);
+-      eventEmitter.registerEventFallback(this);
+-      mLynxContext.setEventEmitter(eventEmitter);
++    EventEmitter eventEmitter = new LynxEventEmitter(mEngineProxy);
++    eventEmitter.addObserver(mIntersectionObserverManager);
++    eventEmitter.registerEventReporter(mNativeFacade);
++    eventEmitter.registerEventFallback(this);
++    mLynxContext.setEventEmitter(eventEmitter);
+ 
++    if (!BuildConfig.enable_native_renderer_only) {
+       setThemeInternal(mTheme);
+       updateGlobalPropsInternal(globalProps);
+     }
+@@ -4238,6 +4238,9 @@ public class LynxTemplateRender
+   private void initEngineAndLayoutProxies() {
+     mEngineProxy = new LynxEngineProxy(mNativePtr);
+     mNativeFacade.setEngineProxy(mEngineProxy);
++    if (BuildConfig.enable_native_renderer_only) {
++      return;
++    }
+     if (mLynxContext == null) {
+       LLog.e(TAG, "mLynxContext is null, can not set LayoutProxy");
+     } else {
+-- 
+2.39.5

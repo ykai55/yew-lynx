@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 09:00:00 +0800
+Subject: [PATCH 12/12] Skip runtime cache cleanup in native renderer build
+
+The native-renderer-only product does not register or link the template and
+JavaScript runtime cache JNI path. Avoid calling that runtime-only method while
+applying environment settings during initialization.
+---
+ .../src/main/java/com/lynx/tasm/LynxEnv.java                 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+index 0330369..76cf2fd 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+@@ -1252,7 +1252,7 @@ public class LynxEnv {
+   }
+ 
+   protected void postUpdateSettings() {
+-    if (mIsNativeLibraryLoaded) {
++    if (mIsNativeLibraryLoaded && !BuildConfig.enable_native_renderer_only) {
+       nativeCleanExternalCache();
+       FluencySample.needCheckUpdate();
+     }
+-- 
+2.39.5

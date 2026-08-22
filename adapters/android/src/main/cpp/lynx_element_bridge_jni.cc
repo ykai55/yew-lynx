@@ -2,8 +2,8 @@
 
 #include <dlfcn.h>
 
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -14,7 +14,7 @@ namespace {
 static_assert(sizeof(LynxElementBridgeSession) <= sizeof(jlong),
               "A JNI long must be able to hold a session token");
 
-void Throw(JNIEnv* env, const char* class_name, const char* message) {
+void Throw(JNIEnv *env, const char *class_name, const char *message) {
   if (env->ExceptionCheck()) {
     return;
   }
@@ -26,8 +26,8 @@ void Throw(JNIEnv* env, const char* class_name, const char* message) {
   env->DeleteLocalRef(exception_class);
 }
 
-bool SessionFromJLong(JNIEnv* env, jlong value,
-                      LynxElementBridgeSession* output) {
+bool SessionFromJLong(JNIEnv *env, jlong value,
+                      LynxElementBridgeSession *output) {
   if (value <= 0 ||
       static_cast<uint64_t>(value) > std::numeric_limits<uint32_t>::max()) {
     Throw(env, "java/lang/IllegalArgumentException",
@@ -38,68 +38,79 @@ bool SessionFromJLong(JNIEnv* env, jlong value,
   return true;
 }
 
-void ThrowNativeStatus(JNIEnv* env, LynxNativeRendererStatus status,
-                       const char* operation) {
-  const char* class_name = "java/lang/IllegalStateException";
-  const char* detail = "unknown status";
+void ThrowNativeStatus(JNIEnv *env, LynxNativeRendererStatus status,
+                       const char *operation) {
+  const char *class_name = "java/lang/IllegalStateException";
+  const char *detail = "unknown status";
   switch (status) {
-    case LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT:
-      class_name = "java/lang/IllegalArgumentException";
-      detail = "invalid argument";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION:
-      detail = "invalid session";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_WRONG_THREAD:
-      detail = "wrong thread";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_UNSUPPORTED:
-      class_name = "java/lang/UnsupportedOperationException";
-      detail = "unsupported";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP:
-      detail = "invalid ownership";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_INVALID_LISTENER:
-      detail = "invalid listener";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_RESOURCE_EXHAUSTED:
-      class_name = "java/lang/OutOfMemoryError";
-      detail = "resource exhausted";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR:
-      detail = "host error";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_PANIC:
-      class_name = "java/lang/RuntimeException";
-      detail = "Rust panic";
-      break;
-    case LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR:
-      detail = "internal error";
-      break;
-    default:
-      break;
+  case LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT:
+    class_name = "java/lang/IllegalArgumentException";
+    detail = "invalid argument";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION:
+    detail = "invalid session";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_WRONG_THREAD:
+    detail = "wrong thread";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_UNSUPPORTED:
+    class_name = "java/lang/UnsupportedOperationException";
+    detail = "unsupported";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP:
+    detail = "invalid ownership";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_INVALID_LISTENER:
+    detail = "invalid listener";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_RESOURCE_EXHAUSTED:
+    class_name = "java/lang/OutOfMemoryError";
+    detail = "resource exhausted";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR:
+    detail = "host error";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_PANIC:
+    class_name = "java/lang/RuntimeException";
+    detail = "Rust panic";
+    break;
+  case LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR:
+    detail = "internal error";
+    break;
+  default:
+    break;
   }
   char message[128];
-  std::snprintf(message, sizeof(message), "%s failed: %s (status %u)", operation,
-                detail, status);
+  std::snprintf(message, sizeof(message), "%s failed: %s (status %u)",
+                operation, detail, status);
   Throw(env, class_name, message);
 }
 
-LynxNativeRendererGetApiFn ResolveNativeRendererApi(JNIEnv* env) {
-  void* symbol = dlsym(RTLD_DEFAULT, "lynx_native_renderer_get_api");
+LynxNativeRendererGetApiFn ResolveNativeRendererApi(JNIEnv *env) {
+  void *symbol = dlsym(RTLD_DEFAULT, "lynx_native_renderer_get_api");
 #if defined(RTLD_NOLOAD)
   if (symbol == nullptr) {
-    void* lynx = dlopen("liblynx.so", RTLD_NOW | RTLD_NOLOAD);
-    if (lynx != nullptr) {
+    const char *libraries[] = {
+        "liblynx_native_renderer.so",
+        "liblynx.so",
+    };
+    for (const char *library : libraries) {
+      void *lynx = dlopen(library, RTLD_NOW | RTLD_NOLOAD);
+      if (lynx == nullptr) {
+        continue;
+      }
       symbol = dlsym(lynx, "lynx_native_renderer_get_api");
       dlclose(lynx);
+      if (symbol != nullptr) {
+        break;
+      }
     }
   }
 #endif
   if (symbol == nullptr) {
-    Throw(env, "java/lang/UnsupportedOperationException",
-          "native mount failed: Lynx Native Renderer API export is unavailable");
+    Throw(
+        env, "java/lang/UnsupportedOperationException",
+        "native mount failed: Lynx Native Renderer API export is unavailable");
     return nullptr;
   }
 
@@ -110,9 +121,9 @@ LynxNativeRendererGetApiFn ResolveNativeRendererApi(JNIEnv* env) {
   return get_api;
 }
 
-jstring BackendName(JNIEnv* env) {
-  const char* backend = lynx_element_bridge_backend();
-  const char* marker = lynx_element_bridge_backend_marker();
+jstring BackendName(JNIEnv *env) {
+  const char *backend = lynx_element_bridge_backend();
+  const char *marker = lynx_element_bridge_backend_marker();
   static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:";
   if (backend == nullptr || marker == nullptr ||
       std::strncmp(marker, kMarkerPrefix, sizeof(kMarkerPrefix) - 1) != 0 ||
@@ -124,11 +135,12 @@ jstring BackendName(JNIEnv* env) {
   return env->NewStringUTF(backend);
 }
 
-}  // namespace
+} // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(
-    JNIEnv* env, jclass, jlong host) {
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(JNIEnv *env,
+                                                               jclass,
+                                                               jlong host) {
   if (host == 0) {
     Throw(env, "java/lang/IllegalArgumentException",
           "Lynx host token must not be zero");
@@ -155,7 +167,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
-    JNIEnv* env, jclass, jlong session, jbooleanArray consumed_out) {
+    JNIEnv *env, jclass, jlong session, jbooleanArray consumed_out) {
   if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
     Throw(env, "java/lang/IllegalArgumentException",
           "consumedOut must contain one element");
@@ -186,7 +198,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
-    JNIEnv* env, jclass, jlong session, jbooleanArray consumed_out) {
+    JNIEnv *env, jclass, jlong session, jbooleanArray consumed_out) {
   if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
     Throw(env, "java/lang/IllegalArgumentException",
           "consumedOut must contain one element");
@@ -216,7 +228,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeBackend(JNIEnv* env,
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeBackend(JNIEnv *env,
                                                                  jclass) {
   return BackendName(env);
 }

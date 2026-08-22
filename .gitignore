@@ -4,3 +4,5 @@
 /examples/android/app/.cxx/
 /examples/android/app/build/
 /target/
+__pycache__/
+*.py[cod]

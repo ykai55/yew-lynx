@@ -21,6 +21,8 @@ grep -Fq 'var rustMounted = false' "$APP_ACTIVITY"
 grep -Fq 'rendererHost?.abandon()' "$APP_ACTIVITY"
 grep -Fq 'error.addSuppressed(cleanupError)' "$APP_ACTIVITY"
 grep -Fq 'throw lifecycleFailure' "$APP_ACTIVITY"
+grep -Fq 'lynxView?.onEnterForeground()' "$APP_ACTIVITY"
+grep -Fq 'lynxView?.onEnterBackground()' "$APP_ACTIVITY"
 if grep -Eq 'renderTemplate|setEnableMTSModule|registerModule|\.lynx\.bundle|readBytes' \
     "$APP_ACTIVITY"; then
   printf 'MainActivity still references the dormant MTS/template path\n' >&2
@@ -47,10 +49,10 @@ g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
   -o "$BUILD_DIR/native/liblynx_element_bridge.so"
 
 g++ -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
-  -Wl,-soname,liblynx.so \
+  -Wl,-soname,liblynx_native_renderer.so \
   -I"$REPO_ROOT/include" \
   "$ROOT_DIR/test/cpp/mock_lynx_native_renderer.cc" \
-  -o "$BUILD_DIR/native/liblynx.so"
+  -o "$BUILD_DIR/native/liblynx_native_renderer.so"
 
 g++ -std=c++17 -Wall -Wextra -Werror -fsyntax-only \
   -I"$REPO_ROOT/include" \
