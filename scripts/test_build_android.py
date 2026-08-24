@@ -12,6 +12,13 @@ VERIFY_SCRIPT = (ROOT / "scripts" / "verify.sh").read_text()
 
 
 class BuildAndroidStaticTest(unittest.TestCase):
+    def test_verify_creates_dependency_directory_before_temporary_checkout(self):
+        create_parent = 'mkdir -p -- "$ROOT_DIR/.deps"'
+        create_temp = 'mktemp -d "$ROOT_DIR/.deps/.tools-shared-verify.XXXXXX"'
+
+        self.assertIn(create_parent, VERIFY_SCRIPT)
+        self.assertLess(VERIFY_SCRIPT.index(create_parent), VERIFY_SCRIPT.index(create_temp))
+
     def test_all_native_apk_libraries_are_required_and_all_elfs_are_inspected(self):
         for library in (
             "liblynx_element_bridge.so",

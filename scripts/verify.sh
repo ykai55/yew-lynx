@@ -22,6 +22,8 @@ readonly SCRIPTS=(
 temp_dir=""
 tools_shared_temp_dir=""
 
+mkdir -p -- "$ROOT_DIR/.deps"
+
 cleanup() {
   if [[ -n "$temp_dir" && -d "$temp_dir" ]]; then
     rm -rf -- "$temp_dir"
