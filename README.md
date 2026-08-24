@@ -27,7 +27,7 @@ Yew NativeRendererBackend       Dioxus WriteMutations
 - Lynx: `0df14207cebb060f1bed8de12b64a1119dee8f06`
 - Lynx tools_shared: `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea`
 - Yew patch base: `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`
-- Dioxus Core: `0.7.10`
+- Dioxus: `0.7.10`
 - Rust: `1.85.0`
 
 `third_party/lynx` is the audited upstream gitlink. The 15-patch
@@ -43,8 +43,10 @@ adds the host-independent native renderer used by the Yew adapter.
   listener validation, ordered `CommandBatch` mutations, opaque event payloads,
   deterministic teardown, and `HostFake`.
 - `adapters/yew/` maps patched Yew renderer calls into the core session.
-- `adapters/dioxus/` maps Dioxus 0.7.10 `WriteMutations` calls while retaining
-  Dioxus framework `Template` types inside that adapter.
+- `adapters/dioxus/` provides Lynx-native `view`/`text` RSX vocabulary and maps
+  Dioxus 0.7.10 `WriteMutations` calls into the core session.
+- `examples/dioxus-counter/` authors the component with `rsx!`; its in-memory
+  Dioxus `Template` is compile-time VDOM data, not a Lynx runtime template.
 - `crates/adapter-conformance/` compares mount, event, update, and destroy
   behavior across both frameworks.
 - `crates/element-bridge-ffi/` owns native sessions and contains panic,

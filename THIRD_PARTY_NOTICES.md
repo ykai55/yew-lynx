@@ -52,12 +52,12 @@ JavaScript runtime artifacts.
 ## Dioxus
 
 - Upstream: <https://github.com/DioxusLabs/dioxus>
-- Runtime crate: `dioxus-core` 0.7.10
+- Direct crates: `dioxus-core`, `dioxus-core-macro`, and `dioxus-signals` 0.7.10
 - License: MIT OR Apache-2.0
 - License files: <https://github.com/DioxusLabs/dioxus/tree/v0.7.10/LICENSES>
 
-The Dioxus adapter uses the renderer-neutral core API and retains Dioxus
-framework `Template` types locally.
+The Dioxus adapter uses the renderer-neutral core API and exposes a Lynx-native
+RSX vocabulary. Dioxus framework `Template` values remain in-memory VDOM data.
 
 ## PrimJS
 

@@ -9,4 +9,6 @@ publish.workspace = true
 
 [dependencies]
 dioxus-core.workspace = true
+dioxus-core-macro.workspace = true
+dioxus-signals.workspace = true
 lynx-element-bridge-core.workspace = true

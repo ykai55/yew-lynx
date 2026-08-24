@@ -11,6 +11,14 @@ use lynx_element_bridge_core::{
     Status,
 };
 
+pub mod dioxus_elements;
+
+pub mod prelude {
+    pub use crate::dioxus_elements;
+    pub use dioxus_core_macro::rsx;
+    pub use dioxus_signals;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DioxusAdapterError {
     Bridge(BridgeError),
@@ -656,9 +664,14 @@ impl WriteMutations for DioxusAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use dioxus_core::{Element, Event, VirtualDom};
     use lynx_element_bridge_core::{Command, HostFake};
 
     use super::*;
+    use crate::prelude::*;
 
     static VALUE_ATTRS: &[TemplateAttribute] = &[TemplateAttribute::Static {
         name: "id",
@@ -683,6 +696,78 @@ mod tests {
         node_paths: &[],
         attr_paths: &[],
     };
+
+    fn lynx_rsx_fixture(received_payload: Rc<RefCell<Vec<u8>>>) -> Element {
+        let count = 3;
+        rsx! {
+            view {
+                id: "fixture-root",
+                class: "fixture",
+                style: "height: 100%;",
+                text {
+                    id: "fixture-value",
+                    "Count: {count}"
+                }
+                view {
+                    id: "fixture-tap",
+                    ontap: move |event| {
+                        *received_payload.borrow_mut() = event.data.as_ref().clone();
+                    },
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rsx_authors_lynx_elements_attributes_dynamic_text_and_tap() {
+        let session = SessionId::new(6).unwrap();
+        let root = NodeId::new(1).unwrap();
+        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let received_payload = Rc::new(RefCell::new(Vec::new()));
+        let mut dom = VirtualDom::new_with_props(lynx_rsx_fixture, Rc::clone(&received_payload));
+        dom.rebuild(&mut adapter);
+
+        let mut host = HostFake::new(session, root);
+        let mounted = adapter.take_batch().unwrap();
+        let (listener, callback) = mounted
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                Command::AddEventListener {
+                    listener, callback, ..
+                } => Some((*listener, *callback)),
+                _ => None,
+            })
+            .unwrap();
+        host.apply(&mounted).unwrap();
+        let fixture = &host.snapshot().children[0];
+        assert_eq!(fixture.tag, "view");
+        assert_eq!(fixture.attributes.get("id"), Some(&"fixture-root".into()));
+        assert_eq!(fixture.attributes.get("class"), Some(&"fixture".into()));
+        assert_eq!(
+            fixture.attributes.get("style"),
+            Some(&"height: 100%;".into())
+        );
+        assert_eq!(fixture.children[0].tag, "text");
+        assert_eq!(
+            fixture.children[0].children[0].text.as_deref(),
+            Some("Count: 3")
+        );
+        assert_eq!(fixture.children[1].tag, "view");
+        assert_eq!(host.listener_count(), 1);
+
+        let event = EventMessage {
+            session,
+            listener,
+            callback,
+            content_type: "application/vnd.lynx.tap".into(),
+            payload: vec![0, 255],
+        };
+        let (target, name) = adapter.resolve_event(&event).unwrap();
+        dom.runtime()
+            .handle_event(name, Event::new(Rc::new(event.payload), true), target);
+        assert_eq!(*received_payload.borrow(), vec![0, 255]);
+    }
 
     #[test]
     fn write_mutations_lowers_lynx_templates_and_stack_operations() {

@@ -4,13 +4,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use dioxus_core::{
-    Attribute, AttributeValue, DynamicNode, Element, Event, Template, TemplateAttribute,
-    TemplateNode, VNode, VText, VirtualDom, schedule_update,
-};
+use dioxus_core::{Element, Event, VirtualDom, schedule_update};
 use lynx_element_bridge_core::{
     BridgeError, CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status,
 };
+use lynx_element_bridge_dioxus::prelude::*;
 use lynx_element_bridge_dioxus::{DioxusAdapter, DioxusAdapterError};
 
 #[allow(unsafe_code)]
@@ -20,91 +18,6 @@ pub use ffi::{
     lynx_element_bridge_backend, lynx_element_bridge_backend_marker,
     lynx_element_bridge_native_abandon_session, lynx_element_bridge_native_destroy_session,
     lynx_element_bridge_native_mount,
-};
-
-static VALUE_CHILDREN: &[TemplateNode] = &[TemplateNode::Dynamic { id: 0 }];
-static VALUE_ATTRIBUTES: &[TemplateAttribute] = &[
-    TemplateAttribute::Static {
-        name: "id",
-        value: "counter-value",
-        namespace: None,
-    },
-    TemplateAttribute::Static {
-        name: "style",
-        value: "font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;",
-        namespace: None,
-    },
-];
-static TIMER_CHILDREN: &[TemplateNode] = &[TemplateNode::Dynamic { id: 1 }];
-static TIMER_ATTRIBUTES: &[TemplateAttribute] = &[
-    TemplateAttribute::Static {
-        name: "id",
-        value: "timer-status",
-        namespace: None,
-    },
-    TemplateAttribute::Static {
-        name: "style",
-        value: "font-size: 28px; font-weight: 500; color: #5f665f; margin-bottom: 32px;",
-        namespace: None,
-    },
-];
-static BUTTON_ATTRIBUTES: &[TemplateAttribute] = &[
-    TemplateAttribute::Static {
-        name: "id",
-        value: "counter-increment",
-        namespace: None,
-    },
-    TemplateAttribute::Static {
-        name: "style",
-        value: "height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;",
-        namespace: None,
-    },
-    TemplateAttribute::Dynamic { id: 0 },
-];
-static BUTTON_CHILDREN: &[TemplateNode] = &[TemplateNode::Element {
-    tag: "text",
-    namespace: None,
-    attrs: &[TemplateAttribute::Static {
-        name: "style",
-        value: "font-size: 28px; font-weight: 600; color: #ffffff;",
-        namespace: None,
-    }],
-    children: &[TemplateNode::Text { text: "Increment" }],
-}];
-static ROOT_CHILDREN: &[TemplateNode] = &[
-    TemplateNode::Element {
-        tag: "text",
-        namespace: None,
-        attrs: VALUE_ATTRIBUTES,
-        children: VALUE_CHILDREN,
-    },
-    TemplateNode::Element {
-        tag: "text",
-        namespace: None,
-        attrs: TIMER_ATTRIBUTES,
-        children: TIMER_CHILDREN,
-    },
-    TemplateNode::Element {
-        tag: "view",
-        namespace: None,
-        attrs: BUTTON_ATTRIBUTES,
-        children: BUTTON_CHILDREN,
-    },
-];
-static ROOTS: &[TemplateNode] = &[TemplateNode::Element {
-    tag: "view",
-    namespace: None,
-    attrs: &[TemplateAttribute::Static {
-        name: "style",
-        value: "height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;",
-        namespace: None,
-    }],
-    children: ROOT_CHILDREN,
-}];
-static COUNTER_TEMPLATE: Template = Template {
-    roots: ROOTS,
-    node_paths: &[&[0, 0, 0], &[0, 1, 0]],
-    attr_paths: &[&[0, 2]],
 };
 
 pub(crate) const TIMER_CALLBACK_ID: u32 = 1;
@@ -119,29 +32,40 @@ fn counter(model: Rc<CounterModel>) -> Element {
     let schedule = schedule_update();
     model.schedule.replace(Some(Arc::clone(&schedule)));
     let listener_model = Rc::clone(&model);
-    let listener = Attribute::new(
-        "ontap",
-        AttributeValue::listener(move |_: Event<Vec<u8>>| {
-            listener_model.count.set(listener_model.count.get() + 1);
-            schedule();
-        }),
-        None,
-        false,
-    );
-    Ok(VNode::new(
-        None,
-        COUNTER_TEMPLATE,
-        vec![
-            DynamicNode::Text(VText::new(format!("Count: {}", model.count.get()))),
-            DynamicNode::Text(VText::new(if model.timer_fired.get() {
-                "Timer: fired"
-            } else {
-                "Timer: pending"
-            })),
-        ]
-        .into_boxed_slice(),
-        vec![vec![listener].into_boxed_slice()].into_boxed_slice(),
-    ))
+    let count = model.count.get();
+    let timer_status = if model.timer_fired.get() {
+        "fired"
+    } else {
+        "pending"
+    };
+
+    rsx! {
+        view {
+            style: "height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;",
+            text {
+                id: "counter-value",
+                style: "font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;",
+                "Count: {count}"
+            }
+            text {
+                id: "timer-status",
+                style: "font-size: 28px; font-weight: 500; color: #5f665f; margin-bottom: 32px;",
+                "Timer: {timer_status}"
+            }
+            view {
+                id: "counter-increment",
+                style: "height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;",
+                ontap: move |_| {
+                    listener_model.count.set(listener_model.count.get() + 1);
+                    schedule();
+                },
+                text {
+                    style: "font-size: 28px; font-weight: 600; color: #ffffff;",
+                    "Increment"
+                }
+            }
+        }
+    }
 }
 
 pub struct DioxusCounter {
@@ -242,6 +166,67 @@ mod tests {
             .unwrap();
         let mut host = HostFake::new(session, root);
         host.apply(&mounted).unwrap();
+        {
+            let snapshot = host.snapshot();
+            let screen = &snapshot.children[0];
+            assert_eq!(screen.tag, "view");
+            assert_eq!(
+                screen.attributes.get("style").map(String::as_str),
+                Some(
+                    "height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;"
+                )
+            );
+            assert_eq!(screen.children[0].tag, "text");
+            assert_eq!(
+                screen.children[0].attributes.get("id").map(String::as_str),
+                Some("counter-value")
+            );
+            assert_eq!(
+                screen.children[0]
+                    .attributes
+                    .get("style")
+                    .map(String::as_str),
+                Some("font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;")
+            );
+            assert_eq!(screen.children[1].tag, "text");
+            assert_eq!(
+                screen.children[1].attributes.get("id").map(String::as_str),
+                Some("timer-status")
+            );
+            assert_eq!(
+                screen.children[1]
+                    .attributes
+                    .get("style")
+                    .map(String::as_str),
+                Some("font-size: 28px; font-weight: 500; color: #5f665f; margin-bottom: 32px;")
+            );
+            assert_eq!(screen.children[2].tag, "view");
+            assert_eq!(
+                screen.children[2].attributes.get("id").map(String::as_str),
+                Some("counter-increment")
+            );
+            assert_eq!(
+                screen.children[2]
+                    .attributes
+                    .get("style")
+                    .map(String::as_str),
+                Some(
+                    "height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;"
+                )
+            );
+            assert_eq!(screen.children[2].children[0].tag, "text");
+            assert_eq!(
+                screen.children[2].children[0]
+                    .attributes
+                    .get("style")
+                    .map(String::as_str),
+                Some("font-size: 28px; font-weight: 600; color: #ffffff;")
+            );
+            assert_eq!(
+                screen.children[2].children[0].children[0].text.as_deref(),
+                Some("Increment")
+            );
+        }
         assert_eq!(
             host.snapshot().children[0].children[0].children[0]
                 .text

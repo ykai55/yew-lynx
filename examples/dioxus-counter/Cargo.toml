@@ -1,6 +1,6 @@
 [package]
 name = "lynx-element-bridge-dioxus-counter"
-description = "Real dioxus-core VirtualDom counter for Lynx Element Bridge"
+description = "RSX-authored dioxus-core VirtualDom counter for Lynx Element Bridge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
