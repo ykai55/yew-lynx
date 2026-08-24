@@ -1,7 +1,7 @@
 # Android native host adapter
 
 This directory connects the Rust application ABI to the native renderer host
-added by the 14-patch `patches/lynx` series (`0002-0015`). It has one Java owner
+added by the 15-patch `patches/lynx` series (`0002-0016`). It has one Java owner
 and one JNI lifecycle; there is no Java `LynxModule` or application byte-buffer
 transport.
 

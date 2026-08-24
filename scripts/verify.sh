@@ -7,7 +7,7 @@ readonly ROOT_DIR
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
-readonly LYNX_TOOLS_SHARED_SHA="bdea62f7b500026aab237b271abc7eff279a5c2d"
+readonly LYNX_TOOLS_SHARED_SHA="ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
 readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
 readonly SCRIPTS=(
   "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
@@ -111,9 +111,23 @@ verify_lynx_tools_shared_patches() {
   local -a applied_patch_files=()
   local -a patch_files=()
 
-  grep -q "commit.*$LYNX_TOOLS_SHARED_SHA" \
-    "$ROOT_DIR/third_party/lynx/dependencies/DEPS.tools_shared"
-  if [[ ! -d "$tools_shared_dir/.git" && ! -f "$tools_shared_dir/.git" ]]; then
+  if ! grep -q "commit.*$LYNX_TOOLS_SHARED_SHA" \
+      "$ROOT_DIR/third_party/lynx/dependencies/DEPS.tools_shared"; then
+    grep -q "^+.*commit.*$LYNX_TOOLS_SHARED_SHA" \
+      "$LYNX_PATCH_DIR/0016-Pin-public-tools-shared-revision.patch"
+  fi
+  if [[ -d "$tools_shared_dir/.git" || -f "$tools_shared_dir/.git" ]]; then
+    checkout_status="$(
+      git -C "$tools_shared_dir" status --porcelain=v1 --untracked-files=all
+    )"
+    [[ -z "$checkout_status" ]] || {
+      printf 'verify: Lynx tools_shared checkout has tracked or non-ignored untracked changes:\n%s\n' \
+        "$checkout_status" >&2
+      return 1
+    }
+  fi
+  if [[ ! -d "$tools_shared_dir/.git" && ! -f "$tools_shared_dir/.git" ]] \
+      || [[ "$(git -C "$tools_shared_dir" rev-parse HEAD)" != "$LYNX_TOOLS_SHARED_SHA" ]]; then
     tools_shared_temp_dir="$(mktemp -d "$ROOT_DIR/.deps/.tools-shared-verify.XXXXXX")"
     tools_shared_dir="$tools_shared_temp_dir/tools_shared"
     git clone --quiet --no-checkout \
@@ -125,9 +139,7 @@ verify_lynx_tools_shared_patches() {
       "$LYNX_TOOLS_SHARED_SHA" >&2
     return 1
   }
-  checkout_status="$(
-    git -C "$tools_shared_dir" status --porcelain=v1 --untracked-files=all
-  )"
+  checkout_status="$(git -C "$tools_shared_dir" status --porcelain=v1 --untracked-files=all)"
   [[ -z "$checkout_status" ]] || {
     printf 'verify: Lynx tools_shared checkout has tracked or non-ignored untracked changes:\n%s\n' \
       "$checkout_status" >&2

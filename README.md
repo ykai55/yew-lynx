@@ -25,13 +25,13 @@ Yew NativeRendererBackend       Dioxus WriteMutations
 ## Pinned Inputs
 
 - Lynx: `0df14207cebb060f1bed8de12b64a1119dee8f06`
-- Lynx tools_shared: `bdea62f7b500026aab237b271abc7eff279a5c2d`
+- Lynx tools_shared: `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea`
 - Yew patch base: `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`
 - Dioxus Core: `0.7.10`
 - Rust: `1.85.0`
 
-`third_party/lynx` is the audited upstream gitlink. The 14-patch
-`patches/lynx` series (`0002-0015`) adds the native renderer API, Android host
+`third_party/lynx` is the audited upstream gitlink. The 15-patch
+`patches/lynx` series (`0002-0016`) adds the native renderer API, Android host
 registry, lifecycle validation, diagnostics, event delivery, native-only Android
 product, and focused boundary tests. The pinned `patches/lynx-tools-shared`
 series makes native-only JNI registration filtering reproducible. `patches/yew`

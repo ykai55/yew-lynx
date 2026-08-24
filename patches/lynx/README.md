@@ -1,7 +1,7 @@
 # Lynx native renderer patch series
 
 This directory contains the native renderer changes applied to the pinned
-public Lynx source. The maintained series is the 14 patches `0002-0015`.
+public Lynx source. The maintained series is the 15 patches `0002-0016`.
 
 ## Base Revision
 
@@ -35,11 +35,13 @@ The patches add, in order:
 - A complete native-only Java/JNI boundary: supported renderer and shell methods
   remain linked, while SSR, runtime, template, and engine-reuse APIs reject in
   Java before intentionally omitted JNI methods can be reached.
+- A publicly reachable tools_shared pin for reproducible clean-checkout builds;
+  the unavailable child revision differed only in an iOS packaging helper.
 
 Apply patches strictly in `series` order. Other Lynx revisions require a rebase
 and complete reverification. Native-only Android builds also apply the separate
 `patches/lynx-tools-shared` series to the Lynx-pinned tools_shared checkout at
-`bdea62f7b500026aab237b271abc7eff279a5c2d` for reproducible JNI registration
+`ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` for reproducible JNI registration
 filtering.
 
 ## Android Products

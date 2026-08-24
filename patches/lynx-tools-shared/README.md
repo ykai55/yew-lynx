@@ -6,7 +6,7 @@ checkout materialized by the pinned Lynx source.
 ## Base Revision
 
 - Upstream: <https://github.com/lynx-family/tools-shared>
-- Commit: `bdea62f7b500026aab237b271abc7eff279a5c2d`
+- Commit: `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea`
 
 The patch adds a per-Java-class allowlist for native-renderer-only JNI method
 registration. Apply it only after Lynx dependency synchronization has

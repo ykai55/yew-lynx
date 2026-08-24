@@ -12,3 +12,4 @@
 0013-Restore-native-renderer-platform-events.patch
 0014-Cover-native-renderer-callback-statuses.patch
 0015-Guard-native-only-Java-APIs.patch
+0016-Pin-public-tools-shared-revision.patch

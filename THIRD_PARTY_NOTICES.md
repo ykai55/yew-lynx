@@ -33,12 +33,12 @@ Copyright (c) 2024 TikTok Inc.
 All rights reserved.
 ```
 
-The exact source is the `third_party/lynx` gitlink. The 14-patch `patches/lynx`
-series (`0002-0015`) adds the native renderer function table, Android host
+The exact source is the `third_party/lynx` gitlink. The 15-patch `patches/lynx`
+series (`0002-0016`) adds the native renderer function table, Android host
 registration, lifecycle, diagnostics, event delivery, native-only Android
 product, and tests. The native-only JNI registration filter is applied
 reproducibly to the Lynx-pinned tools_shared revision
-`bdea62f7b500026aab237b271abc7eff279a5c2d` by `patches/lynx-tools-shared`. Lynx
+`ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` by `patches/lynx-tools-shared`. Lynx
 Android modules are published only to an ignored local Maven repository.
 
 The build publishes the preserved stock coordinate

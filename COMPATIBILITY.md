@@ -7,8 +7,8 @@ the exact source revisions, native ABI, Android target, and evidence below.
 
 | Component | Revision or target | Evidence |
 | --- | --- | --- |
-| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 14-patch `0002-0015` series, public-header byte comparison, 21/21 native renderer tests |
-| Lynx tools_shared | `bdea62f7b500026aab237b271abc7eff279a5c2d` | Pinned nested checkout and clean-apply JNI-filter patch |
+| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 15-patch `0002-0016` series, public-header byte comparison, 21/21 native renderer tests |
+| Lynx tools_shared | `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` | Publicly reachable pinned nested checkout and clean-apply JNI-filter patch |
 | Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Patch identity, renderer/macro tests, adapter, native lifecycle staticlib |
 | Dioxus Core | `0.7.10` | `WriteMutations` adapter, real `VirtualDom`, native lifecycle staticlib |
 | Rust | `1.85.0` | Locked workspace format/check/test/Clippy and arm64 staticlibs |
@@ -97,7 +97,7 @@ Neither status uses allocator exhaustion or root rollback. Issue #4's
 implementation and acceptance requirements are complete, and the issue is
 closable.
 
-A Lynx pin change requires rebasing 0002-0015 and rerunning patch, header,
+A Lynx pin change requires rebasing 0002-0016 and rerunning patch, header,
 native-host, product, ELF, Android, and device verification. A tools_shared pin
 change requires rebasing and reverifying its JNI-filter patch. A Yew pin change
 requires rebasing its patch and focused tests. A Dioxus pin change requires the

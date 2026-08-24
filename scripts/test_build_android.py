@@ -9,9 +9,18 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = (ROOT / "scripts" / "build-android.sh").read_text()
 VERIFY_SCRIPT = (ROOT / "scripts" / "verify.sh").read_text()
+PUBLIC_TOOLS_SHARED_SHA = "ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
 
 
 class BuildAndroidStaticTest(unittest.TestCase):
+    def test_tools_shared_pin_is_publicly_reachable_revision(self):
+        pin_patch = ROOT / "patches/lynx/0016-Pin-public-tools-shared-revision.patch"
+
+        self.assertIn(f'LYNX_TOOLS_SHARED_SHA="{PUBLIC_TOOLS_SHARED_SHA}"', BUILD_SCRIPT)
+        self.assertIn(f'LYNX_TOOLS_SHARED_SHA="{PUBLIC_TOOLS_SHARED_SHA}"', VERIFY_SCRIPT)
+        self.assertTrue(pin_patch.is_file())
+        self.assertIn(f'+        "commit": "{PUBLIC_TOOLS_SHARED_SHA}",', pin_patch.read_text())
+
     def test_verify_creates_dependency_directory_before_temporary_checkout(self):
         create_parent = 'mkdir -p -- "$ROOT_DIR/.deps"'
         create_temp = 'mktemp -d "$ROOT_DIR/.deps/.tools-shared-verify.XXXXXX"'
