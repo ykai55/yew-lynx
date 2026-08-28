@@ -350,11 +350,11 @@ cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --locked --release \
   --package yew-lynx-counter \
   --package lynx-element-bridge-dioxus-counter
 
-printf '==> Preparing isolated patched Yew test checkout\n'
+printf '==> Preparing isolated patched Yew test source tree\n'
 temp_dir="$(mktemp -d "$ROOT_DIR/.deps/.yew-verify.XXXXXX")"
-git clone --quiet --shared --no-checkout "$YEW_SOURCE_DIR" "$temp_dir/yew"
-git -C "$temp_dir/yew" checkout --quiet --detach \
-  "$(git -C "$YEW_SOURCE_DIR" rev-parse HEAD)"
+mkdir -p -- "$temp_dir/yew"
+git -C "$YEW_SOURCE_DIR" archive --format=tar HEAD |
+  tar -xf - -C "$temp_dir/yew"
 YEW_TEST_DIR="$temp_dir/yew"
 
 printf '==> Checking patched Yew native_renderer feature\n'
