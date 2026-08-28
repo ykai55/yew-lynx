@@ -33,7 +33,7 @@ jobs:
           rustc --version
 
       - name: Install Android NDK
-        run: sdkmanager "ndk;25.2.9519653"
+        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;25.2.9519653"
 
       - name: Run repository verification
         run: ./scripts/verify.sh
