@@ -12,13 +12,14 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::{self, ThreadId};
 
 use lynx_element_bridge_core::{
-    BridgeError, CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status,
+    BridgeError, CommandBatch, EventMessage, NodeId, SessionId, Status,
 };
 
 use native_host::{
-    NATIVE_STATUS_OK, NATIVE_STATUS_PANIC, NativeBytes, NativeCallbackHandle, NativeHost,
-    NativeHostHandle, NativeListenerHandle, NativeRendererCallbacksV1, NativeRendererGetApiFn,
-    NativeRendererHandle, NativeStatus, NativeTimerHandle, NativeUtf8, status_to_native,
+    NATIVE_STATUS_OK, NATIVE_STATUS_PANIC, NATIVE_STATUS_UNSUPPORTED, NativeBytes,
+    NativeCallbackHandle, NativeHost, NativeHostHandle, NativeListenerHandle,
+    NativeRendererCallbacksV1, NativeRendererGetApiFn, NativeRendererHandle, NativeStatus,
+    NativeTimerHandle, NativeUtf8, status_to_native,
 };
 
 pub type LynxElementBridgeSession = u32;
@@ -67,32 +68,20 @@ impl From<BridgeError> for BackendError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NativeTimerRequest {
-    pub delay_millis: u64,
-    pub repeating: bool,
-    pub callback: CallbackId,
-}
-
 pub trait BridgeBackend {
-    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
-        Vec::new()
-    }
-
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError>;
-
-    fn dispatch_timer(&mut self, _: CallbackId) -> Result<CommandBatch, BackendError> {
-        Err(BackendError::recoverable(
-            Status::Unsupported,
-            "native timer dispatch is not supported by this backend",
-        ))
-    }
 
     fn destroy(self: Box<Self>, poisoned: bool) -> Result<CommandBatch, BackendError>;
 
     fn discard_pending(&mut self);
 
     fn abandon(&mut self) {}
+}
+
+pub trait BridgeBackendCandidate {
+    fn mount(&mut self, session: SessionId, root: NodeId) -> Result<CommandBatch, BackendError>;
+
+    fn activate(self: Box<Self>) -> Box<dyn BridgeBackend>;
 }
 
 struct Session {
@@ -368,15 +357,6 @@ unsafe fn native_mount_internal(
         backend.abandon();
         return Err(BackendError::from(error));
     }
-    for timer in backend.initial_native_timers() {
-        if let Err(error) =
-            native_host.create_timer(timer.delay_millis, timer.repeating, timer.callback)
-        {
-            backend.abandon();
-            return Err(BackendError::from(error));
-        }
-    }
-
     SESSIONS.with(|sessions| {
         let mut sessions = sessions.sessions.try_borrow_mut().map_err(|_| {
             BackendError::fatal(
@@ -559,74 +539,14 @@ unsafe extern "C" fn native_on_event(
     }
 }
 
-fn dispatch_native_timer(
-    session_id: LynxElementBridgeSession,
-    renderer: NativeRendererHandle,
-    timer: NativeTimerHandle,
-    callback: NativeCallbackHandle,
-) -> Result<(), BackendError> {
-    with_ready_session(session_id, |session| {
-        if session.poisoned {
-            return Err(BackendError::recoverable(
-                Status::HostError,
-                format!("session {session_id} is permanently poisoned"),
-            ));
-        }
-        let callback = session
-            .native_host
-            .timer_callback(renderer, timer, callback)
-            .map_err(|error| BackendError::recoverable(error.status, error.message))?;
-        let dispatched = session
-            .backend
-            .as_mut()
-            .ok_or_else(|| {
-                BackendError::fatal(
-                    Status::InternalError,
-                    format!("session {session_id} has no backend"),
-                )
-            })?
-            .dispatch_timer(callback);
-        let batch = match dispatched {
-            Ok(batch) => batch,
-            Err(error) => {
-                if error.poison_session {
-                    session.poison();
-                }
-                return Err(error);
-            }
-        };
-        if !batch.final_commit {
-            session.poison();
-            return Err(BackendError::fatal(
-                Status::HostError,
-                "native timer dispatch did not produce a final command batch",
-            ));
-        }
-        match session.native_host.apply(&batch) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                session.poison();
-                Err(BackendError::from(error))
-            }
-        }
-    })
-}
-
 #[allow(unsafe_code)]
 unsafe extern "C" fn native_on_timer(
-    context: *mut c_void,
-    renderer: NativeRendererHandle,
-    timer: NativeTimerHandle,
-    callback: NativeCallbackHandle,
+    _: *mut c_void,
+    _: NativeRendererHandle,
+    _: NativeTimerHandle,
+    _: NativeCallbackHandle,
 ) -> NativeStatus {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        dispatch_native_timer(callback_session(context)?, renderer, timer, callback)
-    }));
-    match result {
-        Ok(Ok(())) => NATIVE_STATUS_OK,
-        Ok(Err(error)) => status_to_native(error.status),
-        Err(_) => NATIVE_STATUS_PANIC,
-    }
+    NATIVE_STATUS_UNSUPPORTED
 }
 
 fn remove_ready_session(
@@ -710,6 +630,92 @@ pub fn native_destroy_session(
     LynxElementBridgeNativeDestroyResult {
         status,
         consumed: u32::from(consumed),
+    }
+}
+
+/// Replaces a mounted backend while retaining the acquired native renderer.
+///
+/// Candidate construction and validation happen before the active backend is destroyed. Once the
+/// old teardown batch has been applied, the native host starts a fresh command-sequence epoch.
+pub fn native_replace_backend(
+    session_id: LynxElementBridgeSession,
+    preflight_candidate: impl FnOnce() -> Result<Box<dyn BridgeBackendCandidate>, BackendError>,
+) -> NativeStatus {
+    let replaced = catch_unwind(AssertUnwindSafe(|| {
+        with_ready_session(session_id, |session| {
+            if session.poisoned {
+                return Err(BackendError::recoverable(
+                    Status::HostError,
+                    format!("session {session_id} is permanently poisoned"),
+                ));
+            }
+
+            let bridge_session = SessionId::new(session_id).map_err(BackendError::from)?;
+            let root = NodeId::new(NATIVE_BRIDGE_ROOT_ID).map_err(BackendError::from)?;
+            let mut candidate = preflight_candidate()?;
+
+            let old = session.backend.take().ok_or_else(|| {
+                BackendError::fatal(
+                    Status::InternalError,
+                    format!("session {session_id} has no backend"),
+                )
+            })?;
+            let teardown = match catch_unwind(AssertUnwindSafe(|| old.destroy(false))) {
+                Ok(Ok(batch)) => batch,
+                Ok(Err(error)) => {
+                    session.backend = Some(candidate.activate());
+                    session.poison();
+                    return Err(error);
+                }
+                Err(payload) => {
+                    session.backend = Some(candidate.activate());
+                    session.poison();
+                    return Err(BackendError::recoverable(
+                        Status::Panic,
+                        panic_message(payload.as_ref()),
+                    ));
+                }
+            };
+            if let Err(error) = session.native_host.apply(&teardown) {
+                session.backend = Some(candidate.activate());
+                session.poison();
+                return Err(BackendError::from(error));
+            }
+            if let Err(error) = session.native_host.reset_application_epoch() {
+                session.backend = Some(candidate.activate());
+                session.poison();
+                return Err(BackendError::from(error));
+            }
+
+            let initial_batch =
+                match catch_unwind(AssertUnwindSafe(|| candidate.mount(bridge_session, root))) {
+                    Ok(Ok(batch)) => batch,
+                    Ok(Err(error)) => {
+                        session.backend = Some(candidate.activate());
+                        session.poison();
+                        return Err(error);
+                    }
+                    Err(payload) => {
+                        session.backend = Some(candidate.activate());
+                        session.poison();
+                        return Err(BackendError::recoverable(
+                            Status::Panic,
+                            panic_message(payload.as_ref()),
+                        ));
+                    }
+                };
+            session.backend = Some(candidate.activate());
+            if let Err(error) = session.native_host.apply(&initial_batch) {
+                session.poison();
+                return Err(BackendError::from(error));
+            }
+            Ok(())
+        })
+    }));
+    match replaced {
+        Ok(Ok(())) => NATIVE_STATUS_OK,
+        Ok(Err(error)) => status_to_native(error.status),
+        Err(_) => NATIVE_STATUS_PANIC,
     }
 }
 

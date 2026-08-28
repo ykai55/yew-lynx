@@ -35,8 +35,9 @@ The patches add, in order:
 - A complete native-only Java/JNI boundary: supported renderer and shell methods
   remain linked, while SSR, runtime, template, and engine-reuse APIs reject in
   Java before intentionally omitted JNI methods can be reached.
-- A publicly reachable tools_shared pin for reproducible clean-checkout builds;
-  the unavailable child revision differed only in an iOS packaging helper.
+- A publicly reachable tools_shared pin in Habitat's primary `dependencies/DEPS`
+  file for reproducible clean-checkout builds; the unavailable child revision
+  differed only in an iOS packaging helper.
 
 Apply patches strictly in `series` order. Other Lynx revisions require a rebase
 and complete reverification. Native-only Android builds also apply the separate

@@ -2,6 +2,8 @@
 members = [
   "crates/element-bridge-core",
   "crates/element-bridge-ffi",
+  "crates/element-bridge-wasm-guest",
+  "crates/element-bridge-wamr-host",
   "adapters/yew",
   "adapters/dioxus",
   "crates/adapter-conformance",
@@ -25,5 +27,9 @@ dioxus-core-macro = "=0.7.10"
 dioxus-signals = "=0.7.10"
 lynx-element-bridge-core = { path = "crates/element-bridge-core" }
 lynx-element-bridge-ffi = { path = "crates/element-bridge-ffi" }
+lynx-element-bridge-wasm-guest = { path = "crates/element-bridge-wasm-guest" }
+lynx-element-bridge-wamr-host = { path = "crates/element-bridge-wamr-host" }
+postcard = { version = "=1.1.3", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.219", features = ["derive"] }
 yew = { path = ".deps/yew/packages/yew", features = ["native_renderer"] }
 lynx-element-bridge-yew = { path = "adapters/yew" }

@@ -2,8 +2,8 @@
 
 This directory connects the Rust application ABI to the native renderer host
 added by the 15-patch `patches/lynx` series (`0002-0016`). It has one Java owner
-and one JNI lifecycle; there is no Java `LynxModule` or application byte-buffer
-transport.
+and one JNI lifecycle. Native Yew/Dioxus sessions remain direct; the explicit
+`wasm-dioxus` and `wasm-yew` modes accept module bytes for WAMR mount and replacement.
 
 The app opts into
 `org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207`, which packages
@@ -20,13 +20,20 @@ transport.
 3. JNI resolves `lynx_native_renderer_get_api` from the loaded Lynx library.
 4. The selected Rust staticlib creates its framework backend and calls
    `lynx_element_bridge_native_mount`.
-5. Rust copies `LynxNativeRendererApiV1`, acquires the renderer, applies the
-   initial in-memory `CommandBatch`, and registers its timer.
-6. Lynx invokes Rust event/timer callbacks synchronously; Rust validates IDs,
-   runs the framework, and directly applies the resulting mutations.
+5. Rust copies `LynxNativeRendererApiV1`, acquires the renderer, and applies the
+   initial in-memory `CommandBatch`.
+6. Lynx invokes Rust event callbacks synchronously; Rust validates IDs, runs the
+   framework, and directly applies the resulting mutations.
 7. `destroy()` applies framework teardown and releases the renderer. If normal
    destroy fails without consuming the token, `abandon()` is the emergency
    cleanup path.
+
+In either WASM mode, `mount(host, moduleBytes)` preflights and mounts a guest,
+`replace(moduleBytes)` preflights a candidate before cutover, and `destroy()`
+tears down the guest. WAMR is statically linked; no runtime shared library is
+loaded. The Android example packages initial and `replacement-fixture` builds
+from the same framework crate and DSL source; its acceptance intent reads the
+replacement asset, whose visible initial state is `Count: 100`.
 
 Java clears its session whenever native returns `consumed=1`, including status
 failures. Wrong-thread or busy calls return `consumed=0` and retain ownership.
@@ -68,7 +75,7 @@ undefined runtime symbols and exports `lynx_native_renderer_get_api`.
 The final 2026-08-22 patch-0015 binary-native Yew and Dioxus runs both passed on
 an anonymous Xiaomi Redmi K60 Pro physical device running Android 13/API 33,
 arm64-v8a.
-Each passed fresh launch, timer, tap, recreation, force-stop/reopen, and three
+Each passed fresh launch, tap, recreation, force-stop/reopen, and three
 cycles; every functional result flag was true for both. Each recorded
 `onCreate=9`, `onDestroy=4`, `diagnostics=9`, nine selected-backend markers,
 `renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and

@@ -2,3 +2,6 @@
 	path = third_party/lynx
 	url = https://github.com/lynx-family/lynx.git
 	ignore = untracked
+[submodule "third_party/wasm-micro-runtime"]
+	path = third_party/wasm-micro-runtime
+	url = https://github.com/bytecodealliance/wasm-micro-runtime.git

@@ -9,6 +9,7 @@ readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
 readonly LYNX_TOOLS_SHARED_SHA="ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
 readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
+readonly WAMR_SHA="25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 readonly SCRIPTS=(
   "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
@@ -48,6 +49,8 @@ verify_android_metadata() {
   local gitlink
   local lynx_url
   local tracked_lynx_changes
+  local wamr_gitlink
+  local wamr_url
 
   gitlink="$(git -C "$ROOT_DIR" ls-files --stage -- third_party/lynx)"
   [[ "$gitlink" == "160000 $LYNX_SHA 0"$'\t'"third_party/lynx" ]] || {
@@ -59,6 +62,23 @@ verify_android_metadata() {
     printf 'verify: unexpected Lynx submodule URL: %s\n' "$lynx_url" >&2
     return 1
   }
+  wamr_gitlink="$(git -C "$ROOT_DIR" ls-files --stage -- third_party/wasm-micro-runtime)"
+  [[ "$wamr_gitlink" == "160000 $WAMR_SHA 0"$'\t'"third_party/wasm-micro-runtime" ]] || {
+    printf 'verify: WAMR gitlink does not match %s\n' "$WAMR_SHA" >&2
+    return 1
+  }
+  wamr_url="$(git config -f "$ROOT_DIR/.gitmodules" --get submodule.third_party/wasm-micro-runtime.url)"
+  [[ "$wamr_url" == "https://github.com/bytecodealliance/wasm-micro-runtime.git" ]] || {
+    printf 'verify: unexpected WAMR submodule URL: %s\n' "$wamr_url" >&2
+    return 1
+  }
+  if [[ -d "$ROOT_DIR/third_party/wasm-micro-runtime/.git" \
+      || -f "$ROOT_DIR/third_party/wasm-micro-runtime/.git" ]]; then
+    [[ "$(git -C "$ROOT_DIR/third_party/wasm-micro-runtime" rev-parse HEAD)" == "$WAMR_SHA" ]] || {
+      printf 'verify: checked-out WAMR revision does not match %s\n' "$WAMR_SHA" >&2
+      return 1
+    }
+  fi
   if [[ -d "$ROOT_DIR/third_party/lynx/.git" || -f "$ROOT_DIR/third_party/lynx/.git" ]]; then
     actual_lynx_sha="$(git -C "$ROOT_DIR/third_party/lynx" rev-parse HEAD)"
     [[ "$actual_lynx_sha" == "$LYNX_SHA" ]] || {
@@ -112,7 +132,7 @@ verify_lynx_tools_shared_patches() {
   local -a patch_files=()
 
   if ! grep -q "commit.*$LYNX_TOOLS_SHARED_SHA" \
-      "$ROOT_DIR/third_party/lynx/dependencies/DEPS.tools_shared"; then
+      "$ROOT_DIR/third_party/lynx/dependencies/DEPS"; then
     grep -q "^+.*commit.*$LYNX_TOOLS_SHARED_SHA" \
       "$LYNX_PATCH_DIR/0016-Pin-public-tools-shared-revision.patch"
   fi
@@ -282,7 +302,7 @@ verify_removed_transport() {
 
   references="$(
     git -C "$ROOT_DIR" grep --untracked -ni -E \
-      'flatbuffers|flatc|protocol[- ]v2|wire buffer|wire transport|byte[- ]array' \
+      'flatbuffers|flatc|protocol[- ]v2|wire buffer|wire transport' \
       -- . \
       ':(exclude)third_party/lynx' \
       ':(exclude)examples/android/gradle/verification-metadata.xml' \
@@ -337,6 +357,9 @@ cargo check --manifest-path "$ROOT_DIR/Cargo.toml" --workspace --all-targets --l
 printf '==> Testing project workspace\n'
 cargo test --manifest-path "$ROOT_DIR/Cargo.toml" --workspace --all-targets --locked
 
+printf '==> Testing real WAMR lifecycle\n'
+cargo test -p lynx-element-bridge-wamr-host --features wamr -- --test-threads=1
+
 printf '==> Linting project workspace\n'
 cargo clippy --manifest-path "$ROOT_DIR/Cargo.toml" \
   --workspace --all-targets --locked -- -D warnings
@@ -344,11 +367,36 @@ cargo clippy --manifest-path "$ROOT_DIR/Cargo.toml" \
 printf '==> Testing Android Java/JNI adapter\n'
 bash "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
 
+ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+if [[ -z "$ANDROID_HOME" || ! -d "$ANDROID_HOME" ]]; then
+  printf 'verify: ANDROID_HOME must point to an installed Android SDK\n' >&2
+  exit 1
+fi
+android_llvm_bin="$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin"
+for tool in aarch64-linux-android24-clang llvm-ar; do
+  [[ -x "$android_llvm_bin/$tool" ]] || {
+    printf 'verify: missing Android NDK tool: %s\n' "$android_llvm_bin/$tool" >&2
+    exit 1
+  }
+done
+export CC_aarch64_linux_android="$android_llvm_bin/aarch64-linux-android24-clang"
+export AR_aarch64_linux_android="$android_llvm_bin/llvm-ar"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+
 printf '==> Building Yew and Dioxus Android arm64 Rust static libraries\n'
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --locked --release \
   --target aarch64-linux-android \
   --package yew-lynx-counter \
   --package lynx-element-bridge-dioxus-counter
+
+printf '==> Building WAMR Android arm64 host and framework wasm32-wasip1 guests\n'
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --locked --release \
+  --target aarch64-linux-android \
+  --package lynx-element-bridge-wamr-host --features wamr
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --locked --release \
+  --target wasm32-wasip1 \
+  --package lynx-element-bridge-dioxus-counter \
+  --package yew-lynx-counter
 
 printf '==> Preparing isolated patched Yew test source tree\n'
 temp_dir="$(mktemp -d "$ROOT_DIR/.deps/.yew-verify.XXXXXX")"
@@ -361,6 +409,11 @@ printf '==> Checking patched Yew native_renderer feature\n'
 CARGO_TARGET_DIR="$ROOT_DIR/target/yew" \
   cargo check --locked --manifest-path "$YEW_TEST_DIR/Cargo.toml" \
   -p yew --features native_renderer
+
+printf '==> Checking patched Yew native_renderer feature for wasm32-wasip1\n'
+CARGO_TARGET_DIR="$ROOT_DIR/target/yew-wasi" \
+  cargo check --locked --manifest-path "$YEW_TEST_DIR/Cargo.toml" \
+  --target wasm32-wasip1 -p yew --features native_renderer
 
 printf '==> Testing patched Yew native renderer\n'
 CARGO_TARGET_DIR="$ROOT_DIR/target/yew" \

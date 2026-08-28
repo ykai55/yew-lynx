@@ -19,6 +19,12 @@ NATIVE_DIAGNOSTICS = (
     "Native renderer diagnostics mode=native "
     "bts_runtime=false mts_context=false template=false"
 )
+WASM_REPLACE_EXTRA = "com.yew.lynx.example.extra.REPLACE_WASM_MODULE"
+WASM_REPLACEMENT_COUNT = 100
+WASM_REPLACEMENT_ASSETS = {
+    "wasm-dioxus": "dioxus_counter_replacement.wasm",
+    "wasm-yew": "yew_counter_replacement.wasm",
+}
 REQUIRED_NATIVE_LIBRARIES = (
     "liblynx_native_renderer.so",
     "liblynx_element_bridge.so",
@@ -161,9 +167,7 @@ def find_increment_button(screen):
     if best_count * step < width // 2:
         raise RuntimeError("Increment control was not visible in the screenshot")
 
-    probe_x = best_left + (best_right - best_left) // 4
-
-    def find_edge(direction: int) -> int:
+    def find_edge(probe_x: int, direction: int) -> int:
         y = best_y
         last_match = y
         misses = 0
@@ -176,8 +180,17 @@ def find_increment_button(screen):
             y += direction
         return last_match
 
-    top = find_edge(-1)
-    bottom = find_edge(1)
+    span = best_right - best_left
+    top, bottom = max(
+        [
+            (
+                find_edge(best_left + span * numerator // 8, -1),
+                find_edge(best_left + span * numerator // 8, 1),
+            )
+            for numerator in (1, 2, 4, 6, 7)
+        ],
+        key=lambda edges: edges[1] - edges[0],
+    )
     if best_right - best_left < width // 2 or bottom - top < height // 12:
         raise RuntimeError("Detected green region does not match the Increment control")
     return best_left, top, best_right, bottom
@@ -218,30 +231,12 @@ def changed_pixels(before, after, left, top, right, bottom) -> int:
     return changed
 
 
-def changed_timer_pixels(before, after, button_bounds) -> int:
-    left, top, right, bottom = button_bounds
-    button_height = bottom - top
-    return changed_pixels(before, after, left, max(0, top - button_height), right, top)
-
-
 def changed_counter_pixels(before, after, button_bounds) -> int:
     left, top, right, bottom = button_bounds
     button_height = bottom - top
     return changed_pixels(
         before, after, left, max(0, top - 2 * button_height), right, top
     )
-
-
-def wait_for_timer_change(serial: str, screen, bounds, timeout: float = 10.0):
-    left, top, right, bottom = bounds
-    required_change = max(50, (right - left) * (bottom - top) // 5000)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        updated, updated_bounds, png = wait_for_page(serial, timeout=2.0)
-        if changed_timer_pixels(screen, updated, bounds) >= required_change:
-            return updated, updated_bounds, png
-        time.sleep(0.1)
-    raise RuntimeError("Timer region did not change before tapping Increment")
 
 
 def tap_increment(serial: str, screen, bounds):
@@ -255,6 +250,38 @@ def tap_increment(serial: str, screen, bounds):
             return updated, updated_bounds, png
         time.sleep(0.25)
     raise RuntimeError("Counter region did not change after tapping Increment")
+
+
+def replace_wasm_module(serial: str, initial_screen, count_one_screen, bounds):
+    output = shell(
+        serial,
+        "am",
+        "start",
+        "-W",
+        "--activity-single-top",
+        "-n",
+        COMPONENT,
+        "--ez",
+        WASM_REPLACE_EXTRA,
+        "true",
+    )
+    if "Status: ok" not in output:
+        raise RuntimeError(f"WASM replacement intent failed:\n{output}")
+
+    left, top, right, bottom = bounds
+    required_change = max(100, (right - left) * (bottom - top) // 5000)
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        replaced, replaced_bounds, png = wait_for_page(serial, timeout=2.0)
+        changed_from_one = changed_counter_pixels(count_one_screen, replaced, bounds)
+        changed_from_initial = changed_counter_pixels(initial_screen, replaced, bounds)
+        if changed_from_one >= required_change and changed_from_initial >= required_change:
+            return replaced, replaced_bounds, png
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"Replacement fixture did not visibly render Count: {WASM_REPLACEMENT_COUNT} "
+        "distinct from both Count: 0 and Count: 1"
+    )
 
 
 def screenshot(serial: str, output: Path) -> None:
@@ -423,7 +450,11 @@ def analyze_process_maps(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Lynx Element Bridge device acceptance")
-    parser.add_argument("--backend", choices=("yew", "dioxus"), default="yew")
+    parser.add_argument(
+        "--backend",
+        choices=("yew", "dioxus", "wasm-dioxus", "wasm-yew"),
+        default="yew",
+    )
     parser.add_argument("--serial", required=True, help="ADB serial; never written to evidence")
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -437,10 +468,11 @@ def main() -> int:
         parser.error(f"APK does not exist: {apk}")
     evidence = args.evidence_dir.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "after-timer-fired.png").unlink(missing_ok=True)
     for name in (
         "fresh-count-0.png",
-        "after-timer-fired.png",
         "after-tap-count-1.png",
+        "after-wasm-replace-count-100.png",
         "after-activity-recreation.png",
         "after-force-stop-reopen.png",
         "logcat.txt",
@@ -468,6 +500,7 @@ def main() -> int:
     try:
         launch(serial)
         screen, button, png = wait_for_page(serial)
+        initial_screen = screen
         (evidence / "fresh-count-0.png").write_bytes(png)
         fresh_maps = capture_process_maps(serial)
         (evidence / "maps-fresh.txt").write_text(fresh_maps + "\n", encoding="utf-8")
@@ -485,11 +518,15 @@ def main() -> int:
                 f"missing={fresh_missing}, forbidden={fresh_forbidden}"
             )
 
-        screen, button, png = wait_for_timer_change(serial, screen, button)
-        (evidence / "after-timer-fired.png").write_bytes(png)
-
-        _, _, png = tap_increment(serial, screen, button)
+        count_one_screen, button, png = tap_increment(serial, screen, button)
         (evidence / "after-tap-count-1.png").write_bytes(png)
+        wasm_replacement_detected = False
+        if args.backend.startswith("wasm-"):
+            screen, button, png = replace_wasm_module(
+                serial, initial_screen, count_one_screen, button
+            )
+            (evidence / "after-wasm-replace-count-100.png").write_bytes(png)
+            wasm_replacement_detected = True
         after_interaction_maps = capture_process_maps(serial)
         (evidence / "maps-after-interaction.txt").write_text(
             after_interaction_maps + "\n", encoding="utf-8"
@@ -536,10 +573,14 @@ def main() -> int:
                 f"Lifecycle evidence incomplete: onCreate={on_create_count}, "
                 f"onDestroy={on_destroy_count}"
             )
-        diagnostics_count = sum(NATIVE_DIAGNOSTICS in line for line in tag_lines)
+        expected_diagnostics = NATIVE_DIAGNOSTICS.replace(
+            "mode=native",
+            f"mode={'wasm' if args.backend.startswith('wasm-') else 'native'}",
+        )
+        diagnostics_count = sum(expected_diagnostics in line for line in tag_lines)
         if diagnostics_count != on_create_count:
             raise RuntimeError(
-                "Runtime-native diagnostics incomplete: "
+                "Runtime diagnostics incomplete: "
                 f"diagnostics={diagnostics_count}, onCreate={on_create_count}"
             )
         app_pids = {
@@ -557,16 +598,28 @@ def main() -> int:
         crash_markers = ("FATAL EXCEPTION", "Fatal signal", "native_bridge_failure")
         if any(marker in relevant_logs for marker in crash_markers):
             raise RuntimeError("Crash or native bridge failure found in logcat evidence")
-        backend_marker = f"Native renderer backend={args.backend}"
+        backend_marker = f"Native renderer backend={args.backend.removeprefix('wasm-')}"
         if backend_marker not in relevant_logs:
             raise RuntimeError(f"Expected backend identity was not logged: {backend_marker}")
+        if args.backend.startswith("wasm-"):
+            replacement_log = (
+                "WASM module replacement complete "
+                f"asset={WASM_REPLACEMENT_ASSETS[args.backend]}"
+            )
+            if replacement_log not in relevant_logs:
+                raise RuntimeError(
+                    "Expected WASM replacement asset completion was not logged: "
+                    f"{replacement_log}"
+                )
 
         mapped_forbidden_libraries = sorted(
             set(fresh_forbidden) | set(after_interaction_forbidden)
         )
         summary = {
             "backend": args.backend,
-            "renderer_mode": "native",
+            "renderer_mode": (
+                "wasm" if args.backend.startswith("wasm-") else "native"
+            ),
             "bts_runtime": False,
             "mts_context": False,
             "template": False,
@@ -578,8 +631,12 @@ def main() -> int:
             "activity_on_create_count": on_create_count,
             "activity_on_destroy_count": on_destroy_count,
             "fresh_page_detected": True,
-            "timer_visual_change_detected": True,
             "tap_visual_change_detected": True,
+            "wasm_replacement_expected_count": (
+                WASM_REPLACEMENT_COUNT if args.backend.startswith("wasm-") else None
+            ),
+            "wasm_replacement_asset": WASM_REPLACEMENT_ASSETS.get(args.backend),
+            "wasm_replacement_candidate_detected": wasm_replacement_detected,
             "activity_recreation_page_detected": True,
             "force_stop_reopen_page_detected": True,
             "proc_maps_checked": True,

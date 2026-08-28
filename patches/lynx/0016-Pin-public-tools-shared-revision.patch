@@ -4,17 +4,17 @@ Date: Mon, 24 Aug 2026 13:15:00 +0800
 Subject: [PATCH 16/16] Pin public tools shared revision
 
 The previously referenced tools-shared commit is not available from the public
-GitHub repository. Pin its public parent; the omitted child only changes an iOS
-packaging helper and is unrelated to the Android native renderer build.
+GitHub repository. Pin its public parent in Habitat's primary dependencies file;
+the omitted child only changes an iOS packaging helper and is unrelated to the
+Android native renderer build.
 ---
- dependencies/DEPS.tools_shared | 2 +-
+ dependencies/DEPS | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/dependencies/DEPS.tools_shared b/dependencies/DEPS.tools_shared
-index 9f15448..c6e559b 100644
---- a/dependencies/DEPS.tools_shared
-+++ b/dependencies/DEPS.tools_shared
-@@ -7,7 +7,7 @@ deps = {
+diff --git a/dependencies/DEPS b/dependencies/DEPS
+--- a/dependencies/DEPS
++++ b/dependencies/DEPS
+@@ -376,7 +376,7 @@ deps = {
      "./tools_shared": {
          "type": "git",
          "url": "https://github.com/lynx-family/tools-shared.git",
@@ -22,6 +22,6 @@ index 9f15448..c6e559b 100644
 +        "commit": "ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea",
          "ignore_in_git": True,
      },
-     'buildtools/checkstyle/checkstyle.jar':{
+     'buildtools/doxygen': {
 -- 
 2.39.5

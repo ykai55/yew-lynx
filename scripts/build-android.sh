@@ -13,6 +13,8 @@ readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
 readonly LYNX_TOOLS_SHARED_PATCH_SERIES="$LYNX_TOOLS_SHARED_PATCH_DIR/series"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_TOOLS_SHARED_SHA="ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
+readonly WAMR_SOURCE_DIR="$ROOT_DIR/third_party/wasm-micro-runtime"
+readonly WAMR_SHA="25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 readonly LYNX_VERSION="0.0.1-0df14207"
 readonly HAB_EXECUTABLE="$ROOT_DIR/.deps/android/hab/hab.pex"
 readonly PRIMJS_REPOSITORY="$ROOT_DIR/.deps/android/primjs-maven"
@@ -128,16 +130,19 @@ apply_lynx_tools_shared_patches() {
 trap restore_lynx_source EXIT
 
 usage() {
-  printf 'Usage: %s [--backend yew|dioxus] [--clean] [--offline]\n' "${0##*/}"
+  printf 'Usage: %s [--backend yew|dioxus|wasm-dioxus|wasm-yew] [--clean] [--offline]\n' "${0##*/}"
 }
 
 remove_generated_android_outputs() {
   rm -rf -- \
     "$ROOT_DIR/.deps/android" \
     "$ROOT_DIR/target/android-libs" \
+    "$ROOT_DIR/target/android-assets" \
     "$ROOT_DIR/target/android-build" \
     "$ROOT_DIR/target/android-cxx" \
+    "$ROOT_DIR/target/wasm-guests" \
     "$ROOT_DIR/target/aarch64-linux-android/release" \
+    "$ROOT_DIR/target/wasm32-wasip1/release" \
     "$ANDROID_PROJECT/.gradle" \
     "$ANDROID_PROJECT/build" \
     "$ANDROID_PROJECT/app/.cxx" \
@@ -159,6 +164,7 @@ calculate_cache_key() {
       .gitmodules Cargo.lock Cargo.toml rust-toolchain.toml include \
       adapters/android android \
       crates examples/android examples/counter examples/dioxus-counter \
+      third_party/wasm-micro-runtime \
       patches/lynx patches/lynx-tools-shared patches/yew \
       scripts/bootstrap-yew.sh scripts/build-android.sh scripts/prepare-hab.sh \
       scripts/prepare-primjs.sh scripts/publish-lynx-maven.sh \
@@ -176,7 +182,7 @@ while (($#)); do
     --backend)
       shift
       if (($# == 0)); then
-        printf -- '--backend requires yew or dioxus\n' >&2
+        printf -- '--backend requires yew, dioxus, wasm-dioxus, or wasm-yew\n' >&2
         exit 2
       fi
       backend="$1"
@@ -204,7 +210,7 @@ while (($#)); do
 done
 
 case "$backend" in
-  yew|dioxus) ;;
+  yew|dioxus|wasm-dioxus|wasm-yew) ;;
   *)
     printf 'Unsupported backend: %s\n' "$backend" >&2
     usage >&2
@@ -217,18 +223,51 @@ readonly APK="$ROOT_DIR/.deps/android/apks/lynx-element-bridge-$backend.apk"
 readonly EVIDENCE="$ROOT_DIR/.deps/android/build-evidence-$backend.txt"
 readonly CACHE_KEY_FILE="$ROOT_DIR/.deps/android/build-inputs-$backend.sha256"
 readonly STAGED_RUST_ARCHIVE="$ROOT_DIR/target/android-libs/$backend/arm64-v8a/liblynx_element_bridge_backend.a"
-if [[ "$backend" == yew ]]; then
-  RUST_PACKAGE=yew-lynx-counter
-  EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:yew
-  OTHER_BACKEND_MARKER=lynx-element-bridge-backend:dioxus
-else
-  RUST_PACKAGE=lynx-element-bridge-dioxus-counter
-  EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:dioxus
-  OTHER_BACKEND_MARKER=lynx-element-bridge-backend:yew
-fi
+case "$backend" in
+  yew)
+    RUST_PACKAGE=yew-lynx-counter
+    EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:yew
+    FORBIDDEN_BACKEND_MARKERS=(
+      lynx-element-bridge-backend:dioxus
+      lynx-element-bridge-backend:wasm-dioxus
+      lynx-element-bridge-backend:wasm-yew)
+    ;;
+  dioxus)
+    RUST_PACKAGE=lynx-element-bridge-dioxus-counter
+    EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:dioxus
+    FORBIDDEN_BACKEND_MARKERS=(
+      lynx-element-bridge-backend:yew
+      lynx-element-bridge-backend:wasm-dioxus
+      lynx-element-bridge-backend:wasm-yew)
+    ;;
+  wasm-dioxus)
+    RUST_PACKAGE=lynx-element-bridge-wamr-host
+    EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:wasm-dioxus
+    FORBIDDEN_BACKEND_MARKERS=(
+      lynx-element-bridge-backend:yew
+      lynx-element-bridge-backend:dioxus
+      lynx-element-bridge-backend:wasm-yew)
+    WASM_ASSET=dioxus_counter.wasm
+    WASM_REPLACEMENT_ASSET=dioxus_counter_replacement.wasm
+    ;;
+  wasm-yew)
+    RUST_PACKAGE=lynx-element-bridge-wamr-host
+    EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:wasm-yew
+    FORBIDDEN_BACKEND_MARKERS=(
+      lynx-element-bridge-backend:yew
+      lynx-element-bridge-backend:dioxus
+      lynx-element-bridge-backend:wasm-dioxus)
+    WASM_ASSET=yew_counter.wasm
+    WASM_REPLACEMENT_ASSET=yew_counter_replacement.wasm
+    ;;
+esac
 readonly RUST_PACKAGE
 readonly EXPECTED_BACKEND_MARKER
-readonly OTHER_BACKEND_MARKER
+readonly FORBIDDEN_BACKEND_MARKERS
+WASM_ASSET=${WASM_ASSET:-}
+readonly WASM_ASSET
+WASM_REPLACEMENT_ASSET=${WASM_REPLACEMENT_ASSET:-}
+readonly WASM_REPLACEMENT_ASSET
 
 [[ -f "$LYNX_PATCH_SERIES" ]] || {
   printf 'Missing Lynx patch series: %s\n' "$LYNX_PATCH_SERIES" >&2
@@ -318,9 +357,18 @@ if ((offline)); then
     printf -- '--offline requires the prepared patched Yew checkout\n' >&2
     exit 1
   fi
+  if [[ "$backend" == wasm-* \
+      && ! -d "$WAMR_SOURCE_DIR/.git" && ! -f "$WAMR_SOURCE_DIR/.git" ]]; then
+    printf -- '--offline WASM backends require the initialized WAMR submodule\n' >&2
+    exit 1
+  fi
 else
   printf '==> Initializing pinned Lynx submodule\n'
   git -C "$ROOT_DIR" submodule update --init --recursive -- third_party/lynx
+  if [[ "$backend" == wasm-* ]]; then
+    printf '==> Initializing pinned WAMR submodule\n'
+    git -C "$ROOT_DIR" submodule update --init -- third_party/wasm-micro-runtime
+  fi
 fi
 
 if [[ ! -d "$LYNX_SOURCE_DIR/.git" && ! -f "$LYNX_SOURCE_DIR/.git" ]]; then
@@ -341,6 +389,14 @@ if [[ -n "$tracked_lynx_changes" ]]; then
   printf 'Pinned Lynx submodule has tracked source changes:\n%s\n' \
     "$tracked_lynx_changes" >&2
   exit 1
+fi
+if [[ "$backend" == wasm-* ]]; then
+  actual_wamr_sha="$(git -C "$WAMR_SOURCE_DIR" rev-parse HEAD)"
+  if [[ "$actual_wamr_sha" != "$WAMR_SHA" ]]; then
+    printf 'WAMR submodule mismatch: expected %s, got %s\n' \
+      "$WAMR_SHA" "$actual_wamr_sha" >&2
+    exit 1
+  fi
 fi
 for patch_file in "${LYNX_PATCH_FILES[@]}"; do
   if ! git -C "$LYNX_SOURCE_DIR" apply --check "$patch_file"; then
@@ -379,12 +435,18 @@ for component in \
   "ndk/21.1.6352462/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
   "ndk/21.1.6352462/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
   "ndk/25.2.9519653/build/cmake/android.toolchain.cmake" \
+  "ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
+  "ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
   "cmake/3.22.1/bin/cmake"; do
   if [[ ! -e "$ANDROID_HOME/$component" ]]; then
     printf 'Missing Android SDK component: %s\n' "$ANDROID_HOME/$component" >&2
     exit 1
   fi
 done
+android_llvm_bin="$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin"
+export CC_aarch64_linux_android="$android_llvm_bin/aarch64-linux-android24-clang"
+export AR_aarch64_linux_android="$android_llvm_bin/llvm-ar"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
 
 if ((clean)); then
   printf '==> Removing generated Android integration outputs\n'
@@ -540,7 +602,7 @@ if ! grep -Fq "org.lynxsdk.lynx:lynx-native-renderer:$LYNX_VERSION" \
   printf 'Android app graph is missing the native renderer product\n' >&2
   exit 1
 fi
-if grep -Eiq 'org\.lynxsdk\.lynx:(lynx|lynx-jssdk|primjs|primjsWasm|v8so):|(^|[^[:alnum:]_])(wasm|v8)([^[:alnum:]_]|$)' \
+if grep -Eiq 'org\.lynxsdk\.lynx:(lynx|lynx-jssdk|primjs|primjsWasm|v8so):|(^|[^[:alnum:]_])v8([^[:alnum:]_]|$)' \
     <<<"$app_dependency_graph"; then
   printf 'Android app graph contains a forbidden stock runtime dependency\n' >&2
   exit 1
@@ -586,6 +648,19 @@ if grep -q '\.lynx\.bundle$' <<<"$apk_entries"; then
   printf 'Native-only APK unexpectedly contains a Lynx template bundle\n' >&2
   exit 1
 fi
+if [[ "$backend" == wasm-* ]]; then
+  for wasm_asset in "$WASM_ASSET" "$WASM_REPLACEMENT_ASSET"; do
+    if ! grep -Fq "assets/$wasm_asset" <<<"$apk_entries"; then
+      printf '%s APK is missing assets/%s\n' "$backend" "$wasm_asset" >&2
+      exit 1
+    fi
+  done
+else
+  if grep -Eq '^assets/.*\.wasm$' <<<"$apk_entries"; then
+    printf 'Native APK unexpectedly contains a WebAssembly guest\n' >&2
+    exit 1
+  fi
+fi
 
 elf_inspect_dir="$(mktemp -d "$ROOT_DIR/.deps/android/.elf-check.XXXXXX")"
 llvm_bin="$ANDROID_HOME/ndk/21.1.6352462/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -627,11 +702,13 @@ if ! grep -Fq "$EXPECTED_BACKEND_MARKER" <<<"$backend_strings"; then
     "$EXPECTED_BACKEND_MARKER" >&2
   exit 1
 fi
-if grep -Fq "$OTHER_BACKEND_MARKER" <<<"$backend_strings"; then
-  printf 'APK native library contains marker for the unselected backend: %s\n' \
-    "$OTHER_BACKEND_MARKER" >&2
-  exit 1
-fi
+for forbidden_marker in "${FORBIDDEN_BACKEND_MARKERS[@]}"; do
+  if grep -Fq "$forbidden_marker" <<<"$backend_strings"; then
+    printf 'APK native library contains marker for an unselected backend: %s\n' \
+      "$forbidden_marker" >&2
+    exit 1
+  fi
+done
 
 mkdir -p -- "$(dirname -- "$EVIDENCE")"
 cat >"$EVIDENCE" <<EOF
@@ -641,6 +718,7 @@ backend_marker=$EXPECTED_BACKEND_MARKER
 rust_package=$RUST_PACKAGE
 lynx_sha=$LYNX_SHA
 lynx_version=$LYNX_VERSION
+wamr_sha=$WAMR_SHA
 lynx_patches_sha256=$(sha256sum "${LYNX_PATCH_FILES[@]}" | cut -d ' ' -f 1 | sha256sum | cut -d ' ' -f 1)
 hab_lock_sha256=$(sha256sum "$ROOT_DIR/android/hab.lock" | cut -d ' ' -f 1)
 primjs_lock_sha256=$(sha256sum "$ROOT_DIR/android/primjs.lock" | cut -d ' ' -f 1)
@@ -654,6 +732,8 @@ lynx_android_ndk=21.1.6352462
 app_android_ndk=25.2.9519653
 android_platform=33
 rust_archive_sha256=$(sha256sum "$STAGED_RUST_ARCHIVE" | cut -d ' ' -f 1)
+wasm_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_ASSET" | sha256sum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
+wasm_replacement_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_REPLACEMENT_ASSET" | sha256sum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
 apk_sha256=$(sha256sum "$APK" | cut -d ' ' -f 1)
 apk=$APK
 android_input_cache_key=$cache_key

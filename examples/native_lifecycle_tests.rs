@@ -4,16 +4,13 @@ use std::ffi::{CStr, c_void};
 use std::mem;
 use std::ptr;
 
-use lynx_element_bridge_core::{CallbackId, CommandBatch, EventMessage, SessionId, Status};
 use lynx_element_bridge_ffi::native_host::{
     NATIVE_RENDERER_ABI_VERSION, NATIVE_STATUS_HOST_ERROR, NATIVE_STATUS_INVALID_ARGUMENT,
-    NATIVE_STATUS_INVALID_LISTENER, NATIVE_STATUS_INVALID_OWNERSHIP, NATIVE_STATUS_INVALID_SESSION,
-    NATIVE_STATUS_OK, NATIVE_STATUS_PANIC, NATIVE_STATUS_WRONG_THREAD, NativeBytes,
-    NativeCallbackHandle, NativeHostHandle, NativeListenerHandle, NativeNodeHandle,
-    NativeRendererApiV1, NativeRendererCallbacksV1, NativeRendererHandle, NativeStatus,
-    NativeTimerHandle, NativeUtf8,
+    NATIVE_STATUS_INVALID_LISTENER, NATIVE_STATUS_INVALID_SESSION, NATIVE_STATUS_OK,
+    NATIVE_STATUS_UNSUPPORTED, NATIVE_STATUS_WRONG_THREAD, NativeBytes, NativeCallbackHandle,
+    NativeHostHandle, NativeListenerHandle, NativeNodeHandle, NativeRendererApiV1,
+    NativeRendererCallbacksV1, NativeRendererHandle, NativeStatus, NativeTimerHandle, NativeUtf8,
 };
-use lynx_element_bridge_ffi::{BackendError, BridgeBackend, NativeTimerRequest};
 
 use super::{
     lynx_element_bridge_backend, lynx_element_bridge_native_abandon_session,
@@ -36,25 +33,15 @@ enum Call {
     },
     RemoveListener,
     Flush,
-    CreateTimer {
-        delay_millis: u64,
-        repeating: bool,
-        callback: NativeCallbackHandle,
-        timer: NativeTimerHandle,
-    },
-    CancelTimer(NativeTimerHandle),
 }
 
 struct Recorder {
     callbacks: Option<NativeRendererCallbacksV1>,
     registrations: HashMap<NativeListenerHandle, (NativeCallbackHandle, Vec<u8>)>,
-    timers: HashMap<NativeTimerHandle, (NativeCallbackHandle, bool)>,
     calls: Vec<Call>,
     next_node: NativeNodeHandle,
-    next_timer: NativeTimerHandle,
     failure: Option<&'static str>,
     reenter_on_flush: bool,
-    reenter_timer_on_flush: bool,
     nested_status: Option<NativeStatus>,
 }
 
@@ -63,13 +50,10 @@ impl Default for Recorder {
         Self {
             callbacks: None,
             registrations: HashMap::new(),
-            timers: HashMap::new(),
             calls: Vec::new(),
             next_node: 200,
-            next_timer: 300,
             failure: None,
             reenter_on_flush: false,
-            reenter_timer_on_flush: false,
             nested_status: None,
         }
     }
@@ -164,7 +148,6 @@ unsafe extern "C" fn record_release(renderer: NativeRendererHandle) -> NativeSta
     if renderer != RENDERER {
         return NATIVE_STATUS_INVALID_SESSION;
     }
-    RECORDER.with(|recorder| recorder.borrow_mut().timers.clear());
     record("release", Call::Release)
 }
 
@@ -312,44 +295,24 @@ unsafe extern "C" fn record_flush(renderer: NativeRendererHandle) -> NativeStatu
         recorder.calls.push(Call::Flush);
         if recorder.reenter_on_flush {
             recorder.reenter_on_flush = false;
-            recorder.callbacks.map(|callbacks| (callbacks, None))
-        } else if recorder.reenter_timer_on_flush {
-            recorder.reenter_timer_on_flush = false;
-            let timer = recorder
-                .timers
-                .iter()
-                .next()
-                .map(|(timer, (callback, _))| (*timer, *callback));
-            recorder.callbacks.map(|callbacks| (callbacks, timer))
+            recorder.callbacks
         } else {
             None
         }
     });
-    if let Some((callback_table, timer)) = reentry {
-        let nested_status = if let Some((timer, callback)) = timer {
-            // SAFETY: The copied callback table remains valid synchronously.
-            unsafe {
-                callback_table.on_timer.expect("timer callback")(
-                    callback_table.context,
-                    RENDERER,
-                    timer,
-                    callback,
-                )
-            }
-        } else {
-            let (listener, callback, name) = registration();
-            // SAFETY: The copied callback table and borrowed spans remain valid synchronously.
-            unsafe {
-                callback_table.on_event.expect("event callback")(
-                    callback_table.context,
-                    RENDERER,
-                    listener,
-                    callback,
-                    utf8(&name),
-                    utf8(b"application/vnd.lynx.tap"),
-                    bytes(&[]),
-                )
-            }
+    if let Some(callback_table) = reentry {
+        let (listener, callback, name) = registration();
+        // SAFETY: The copied callback table and borrowed spans remain valid synchronously.
+        let nested_status = unsafe {
+            callback_table.on_event.expect("event callback")(
+                callback_table.context,
+                RENDERER,
+                listener,
+                callback,
+                utf8(&name),
+                utf8(b"application/vnd.lynx.tap"),
+                bytes(&[]),
+            )
         };
         RECORDER.with(|recorder| recorder.borrow_mut().nested_status = Some(nested_status));
     }
@@ -357,50 +320,20 @@ unsafe extern "C" fn record_flush(renderer: NativeRendererHandle) -> NativeStatu
 }
 
 unsafe extern "C" fn record_create_timer(
-    renderer: NativeRendererHandle,
-    delay_millis: u64,
-    repeating: u32,
-    callback: NativeCallbackHandle,
-    timer: *mut NativeTimerHandle,
+    _: NativeRendererHandle,
+    _: u64,
+    _: u32,
+    _: NativeCallbackHandle,
+    _: *mut NativeTimerHandle,
 ) -> NativeStatus {
-    if renderer != RENDERER || timer.is_null() || callback == 0 || repeating > 1 {
-        return NATIVE_STATUS_INVALID_ARGUMENT;
-    }
-    let timer_handle = RECORDER.with(|recorder| {
-        let mut recorder = recorder.borrow_mut();
-        let timer = recorder.next_timer;
-        recorder.next_timer += 1;
-        recorder.timers.insert(timer, (callback, repeating != 0));
-        recorder.calls.push(Call::CreateTimer {
-            delay_millis,
-            repeating: repeating != 0,
-            callback,
-            timer,
-        });
-        timer
-    });
-    let timer_status = status("create_timer");
-    if timer_status == NATIVE_STATUS_OK {
-        // SAFETY: The null output case was rejected above.
-        unsafe { *timer = timer_handle };
-    }
-    timer_status
+    NATIVE_STATUS_UNSUPPORTED
 }
 
 unsafe extern "C" fn record_cancel_timer(
-    renderer: NativeRendererHandle,
-    timer: NativeTimerHandle,
+    _: NativeRendererHandle,
+    _: NativeTimerHandle,
 ) -> NativeStatus {
-    if renderer != RENDERER {
-        return NATIVE_STATUS_INVALID_SESSION;
-    }
-    let owned = RECORDER.with(|recorder| recorder.borrow_mut().timers.remove(&timer).is_some());
-    let status = record("cancel_timer", Call::CancelTimer(timer));
-    if owned {
-        status
-    } else {
-        NATIVE_STATUS_INVALID_OWNERSHIP
-    }
+    NATIVE_STATUS_UNSUPPORTED
 }
 
 fn utf8(value: &[u8]) -> NativeUtf8 {
@@ -438,18 +371,6 @@ fn registration() -> (NativeListenerHandle, NativeCallbackHandle, Vec<u8>) {
     })
 }
 
-fn timer_registration() -> (NativeTimerHandle, NativeCallbackHandle, bool) {
-    RECORDER.with(|recorder| {
-        let recorder = recorder.borrow();
-        let (timer, (callback, repeating)) = recorder
-            .timers
-            .iter()
-            .next()
-            .expect("timer was not registered");
-        (*timer, *callback, *repeating)
-    })
-}
-
 fn mount() -> lynx_element_bridge_ffi::LynxElementBridgeNativeMountResult {
     reset();
     // SAFETY: The recording resolver and table implement the production ABI for this test.
@@ -482,48 +403,8 @@ unsafe fn send_event(
     }
 }
 
-unsafe fn send_timer(
-    callback_table: NativeRendererCallbacksV1,
-    context: *mut c_void,
-    renderer: NativeRendererHandle,
-    timer: NativeTimerHandle,
-    callback: NativeCallbackHandle,
-) -> NativeStatus {
-    // SAFETY: The caller keeps the captured function table and session context live.
-    unsafe { callback_table.on_timer.expect("timer callback")(context, renderer, timer, callback) }
-}
-
-unsafe fn fire_timer(
-    callback_table: NativeRendererCallbacksV1,
-    timer: NativeTimerHandle,
-    callback: NativeCallbackHandle,
-) -> NativeStatus {
-    let repeating = RECORDER.with(|recorder| {
-        recorder
-            .borrow()
-            .timers
-            .get(&timer)
-            .map(|(_, repeating)| *repeating)
-            .expect("timer was not registered")
-    });
-    // SAFETY: The captured callback table, context, and timer identity remain live synchronously.
-    let status = unsafe {
-        send_timer(
-            callback_table,
-            callback_table.context,
-            RENDERER,
-            timer,
-            callback,
-        )
-    };
-    if !repeating || status != NATIVE_STATUS_OK {
-        RECORDER.with(|recorder| recorder.borrow_mut().timers.remove(&timer));
-    }
-    status
-}
-
 #[test]
-fn native_mount_timer_event_and_destroy_apply_batches_through_the_function_table() {
+fn native_mount_event_and_destroy_apply_batches_through_the_function_table() {
     // SAFETY: The backend identity points to static NUL-terminated storage.
     let backend = unsafe { CStr::from_ptr(lynx_element_bridge_backend()) }
         .to_str()
@@ -537,56 +418,13 @@ fn native_mount_timer_event_and_destroy_apply_batches_through_the_function_table
     let mounted = mount();
     assert_eq!(mounted.status, NATIVE_STATUS_OK);
     assert_ne!(mounted.session, 0);
-    assert!(calls().contains(&Call::Text(b"Count: 0".to_vec())));
-    assert!(calls().contains(&Call::Text(b"Timer: pending".to_vec())));
+    assert!(calls().contains(&Call::Text(
+        format!("Count: {}", crate::INITIAL_COUNT).into_bytes()
+    )));
     assert!(calls().contains(&Call::Mutation));
     let mounted_calls = calls();
-    let flush = mounted_calls
-        .iter()
-        .position(|call| *call == Call::Flush)
-        .expect("initial render was not flushed");
-    let create_timer = mounted_calls
-        .iter()
-        .position(|call| matches!(call, Call::CreateTimer { .. }))
-        .expect("initial timer was not registered");
-    assert!(flush < create_timer);
+    assert!(mounted_calls.contains(&Call::Flush));
     let callback_table = callbacks();
-    let (timer, timer_callback, repeating) = timer_registration();
-    assert!(!repeating);
-
-    clear_calls();
-    // SAFETY: The captured timer identity and callback context remain live synchronously.
-    let timer_status = unsafe {
-        send_timer(
-            callback_table,
-            callback_table.context,
-            RENDERER,
-            timer,
-            timer_callback,
-        )
-    };
-    assert_eq!(timer_status, NATIVE_STATUS_OK);
-    assert!(calls().contains(&Call::Text(b"Timer: fired".to_vec())));
-    assert!(!calls().contains(&Call::Text(b"Count: 1".to_vec())));
-    assert_eq!(
-        calls().iter().filter(|call| **call == Call::Flush).count(),
-        1
-    );
-    assert_eq!(calls().last(), Some(&Call::Flush));
-
-    clear_calls();
-    // SAFETY: The callback data is readable, but the one-shot timer is now stale.
-    let stale_timer = unsafe {
-        send_timer(
-            callback_table,
-            callback_table.context,
-            RENDERER,
-            timer,
-            timer_callback,
-        )
-    };
-    assert_eq!(stale_timer, NATIVE_STATUS_INVALID_ARGUMENT);
-    assert!(calls().is_empty());
 
     let (listener, callback, name) = registration();
     clear_calls();
@@ -604,7 +442,9 @@ fn native_mount_timer_event_and_destroy_apply_batches_through_the_function_table
         )
     };
     assert_eq!(event_status, NATIVE_STATUS_OK);
-    assert!(calls().contains(&Call::Text(b"Count: 1".to_vec())));
+    assert!(calls().contains(&Call::Text(
+        format!("Count: {}", crate::INITIAL_COUNT + 1).into_bytes()
+    )));
     assert_eq!(calls().last(), Some(&Call::Flush));
 
     clear_calls();
@@ -614,11 +454,6 @@ fn native_mount_timer_event_and_destroy_apply_batches_through_the_function_table
     assert!(calls().contains(&Call::RemoveListener));
     assert!(calls().contains(&Call::Mutation));
     assert!(calls().contains(&Call::Flush));
-    assert!(
-        !calls()
-            .iter()
-            .any(|call| matches!(call, Call::CancelTimer(_)))
-    );
     assert_eq!(calls().last(), Some(&Call::Release));
 
     // SAFETY: The callback data remains readable, but the consumed context is now stale.
@@ -638,60 +473,22 @@ fn native_mount_timer_event_and_destroy_apply_batches_through_the_function_table
 }
 
 #[test]
-fn native_timer_rejects_foreign_or_mismatched_identities_without_framework_mutation() {
+fn native_timer_callback_is_an_unsupported_abi_shim() {
     let mounted = mount();
     let callback_table = callbacks();
-    let (timer, callback, _) = timer_registration();
     clear_calls();
 
-    // SAFETY: Each call uses ordinary callback identity data and a live function table.
+    // SAFETY: The ABI requires a non-null timer callback, but framework timers are unsupported.
     let rejected = unsafe {
-        [
-            send_timer(callback_table, ptr::null_mut(), RENDERER, timer, callback),
-            send_timer(
-                callback_table,
-                callback_table.context,
-                RENDERER + 1,
-                timer,
-                callback,
-            ),
-            send_timer(
-                callback_table,
-                callback_table.context,
-                RENDERER,
-                timer + 1,
-                callback,
-            ),
-            send_timer(
-                callback_table,
-                callback_table.context,
-                RENDERER,
-                timer,
-                callback + 1,
-            ),
-        ]
+        callback_table.on_timer.expect("timer rejection shim")(
+            callback_table.context,
+            RENDERER,
+            300,
+            1,
+        )
     };
-    assert_eq!(rejected[0], NATIVE_STATUS_INVALID_SESSION);
-    assert_eq!(rejected[1], NATIVE_STATUS_INVALID_SESSION);
-    assert_eq!(rejected[2], NATIVE_STATUS_INVALID_ARGUMENT);
-    assert_eq!(rejected[3], NATIVE_STATUS_INVALID_ARGUMENT);
+    assert_eq!(rejected, NATIVE_STATUS_UNSUPPORTED);
     assert!(calls().is_empty());
-
-    // A callback mismatch must not consume the valid one-shot registration.
-    // SAFETY: The exact captured timer identity remains live.
-    assert_eq!(
-        unsafe {
-            send_timer(
-                callback_table,
-                callback_table.context,
-                RENDERER,
-                timer,
-                callback,
-            )
-        },
-        NATIVE_STATUS_OK
-    );
-    assert!(calls().contains(&Call::Text(b"Timer: fired".to_vec())));
     assert_eq!(
         lynx_element_bridge_native_destroy_session(mounted.session).status,
         NATIVE_STATUS_OK
@@ -843,7 +640,9 @@ fn native_event_rejects_identity_and_span_errors_without_framework_mutation() {
         },
         NATIVE_STATUS_OK
     );
-    assert!(calls().contains(&Call::Text(b"Count: 1".to_vec())));
+    assert!(calls().contains(&Call::Text(
+        format!("Count: {}", crate::INITIAL_COUNT + 1).into_bytes()
+    )));
     assert_eq!(
         lynx_element_bridge_native_destroy_session(mounted.session).status,
         NATIVE_STATUS_OK
@@ -856,10 +655,8 @@ fn native_destroy_preserves_owner_thread_and_consumption_semantics() {
     let session = mounted.session;
     let callback_table = callbacks();
     let event_callback = callback_table.on_event.expect("event callback");
-    let timer_callback = callback_table.on_timer.expect("timer callback");
     let context = callback_table.context as usize;
     let (listener, callback, name) = registration();
-    let (timer, timer_callback_id, _) = timer_registration();
     let wrong_thread_event = std::thread::spawn(move || {
         let content_type = b"application/vnd.lynx.tap";
         // SAFETY: The spans are local to this synchronous call; owner validation rejects it.
@@ -879,14 +676,6 @@ fn native_destroy_preserves_owner_thread_and_consumption_semantics() {
     .unwrap();
     assert_eq!(wrong_thread_event, NATIVE_STATUS_WRONG_THREAD);
 
-    let wrong_thread_timer = std::thread::spawn(move || {
-        // SAFETY: Owner validation rejects the live callback identity before dispatch.
-        unsafe { timer_callback(context as *mut c_void, RENDERER, timer, timer_callback_id) }
-    })
-    .join()
-    .unwrap();
-    assert_eq!(wrong_thread_timer, NATIVE_STATUS_WRONG_THREAD);
-
     let wrong_thread = std::thread::spawn(move || {
         let result = lynx_element_bridge_native_destroy_session(session);
         (result.status, result.consumed)
@@ -902,11 +691,6 @@ fn native_destroy_preserves_owner_thread_and_consumption_semantics() {
         (NATIVE_STATUS_OK, 1)
     );
     let destroyed_calls = calls();
-    assert!(
-        !destroyed_calls
-            .iter()
-            .any(|call| matches!(call, Call::CancelTimer(_)))
-    );
     assert_eq!(destroyed_calls.last(), Some(&Call::Release));
     assert_eq!(
         destroyed_calls
@@ -1049,7 +833,7 @@ fn native_abandon_does_not_retry_a_failed_host_release() {
 }
 
 #[test]
-fn reentrant_event_and_timer_callbacks_fail_as_busy() {
+fn reentrant_event_callbacks_fail_as_busy() {
     let mounted = mount();
     let callback_table = callbacks();
     let (listener, callback, name) = registration();
@@ -1075,28 +859,6 @@ fn reentrant_event_and_timer_callbacks_fail_as_busy() {
         Some(NATIVE_STATUS_HOST_ERROR)
     );
 
-    let (timer, timer_callback, _) = timer_registration();
-    clear_calls();
-    RECORDER.with(|recorder| {
-        let mut recorder = recorder.borrow_mut();
-        recorder.nested_status = None;
-        recorder.reenter_timer_on_flush = true;
-    });
-    // SAFETY: The exact captured timer identity remains live for this synchronous callback.
-    let outer_timer = unsafe {
-        send_timer(
-            callback_table,
-            callback_table.context,
-            RENDERER,
-            timer,
-            timer_callback,
-        )
-    };
-    assert_eq!(outer_timer, NATIVE_STATUS_OK);
-    assert_eq!(
-        RECORDER.with(|recorder| recorder.borrow().nested_status),
-        Some(NATIVE_STATUS_HOST_ERROR)
-    );
     assert_eq!(
         calls().iter().filter(|call| **call == Call::Flush).count(),
         1
@@ -1154,181 +916,6 @@ fn native_host_failure_poisons_the_session_but_destroy_still_releases_once() {
     assert_eq!(calls(), vec![Call::Release]);
 }
 
-struct FailingRepeatingTimerBackend {
-    session: SessionId,
-}
-
-impl BridgeBackend for FailingRepeatingTimerBackend {
-    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
-        vec![NativeTimerRequest {
-            delay_millis: 1,
-            repeating: true,
-            callback: CallbackId::new(91).unwrap(),
-        }]
-    }
-
-    fn dispatch_event(&mut self, _: EventMessage) -> Result<CommandBatch, BackendError> {
-        Err(BackendError::recoverable(
-            Status::Unsupported,
-            "events are not used by this test backend",
-        ))
-    }
-
-    fn dispatch_timer(&mut self, _: CallbackId) -> Result<CommandBatch, BackendError> {
-        Err(BackendError::recoverable(
-            Status::HostError,
-            "repeating timer callback failed",
-        ))
-    }
-
-    fn destroy(self: Box<Self>, _: bool) -> Result<CommandBatch, BackendError> {
-        Ok(CommandBatch {
-            session: self.session,
-            sequence: 1,
-            commands: Vec::new(),
-            final_commit: true,
-        })
-    }
-
-    fn discard_pending(&mut self) {}
-}
-
-#[test]
-fn retired_repeating_timer_does_not_block_native_host_release() {
-    reset();
-    // SAFETY: The recording function table implements the native renderer ABI for this test.
-    let mounted = unsafe {
-        lynx_element_bridge_ffi::native_mount(Some(get_api), HOST, |session, _| {
-            Ok((
-                Box::new(FailingRepeatingTimerBackend { session }),
-                CommandBatch {
-                    session,
-                    sequence: 0,
-                    commands: Vec::new(),
-                    final_commit: true,
-                },
-            ))
-        })
-    };
-    assert_eq!(mounted.status, NATIVE_STATUS_OK);
-    let callback_table = callbacks();
-    let (timer, callback, repeating) = timer_registration();
-    assert!(repeating);
-
-    // SAFETY: This simulates the native renderer firing and retiring a repeating timer whose
-    // Rust callback returns non-OK.
-    assert_eq!(
-        unsafe { fire_timer(callback_table, timer, callback) },
-        NATIVE_STATUS_HOST_ERROR
-    );
-    clear_calls();
-
-    let destroyed = lynx_element_bridge_ffi::native_destroy_session(mounted.session);
-    assert_eq!(
-        (destroyed.status, destroyed.consumed),
-        (NATIVE_STATUS_OK, 1)
-    );
-    assert!(
-        !calls()
-            .iter()
-            .any(|call| matches!(call, Call::CancelTimer(_)))
-    );
-    assert_eq!(
-        calls()
-            .iter()
-            .filter(|call| **call == Call::Release)
-            .count(),
-        1
-    );
-    assert_eq!(calls().last(), Some(&Call::Release));
-}
-
-struct PanickingTimerBackend {
-    session: SessionId,
-}
-
-impl BridgeBackend for PanickingTimerBackend {
-    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
-        vec![NativeTimerRequest {
-            delay_millis: 1,
-            repeating: false,
-            callback: CallbackId::new(91).unwrap(),
-        }]
-    }
-
-    fn dispatch_event(&mut self, _: EventMessage) -> Result<CommandBatch, BackendError> {
-        Err(BackendError::recoverable(
-            Status::Unsupported,
-            "events are not used by this test backend",
-        ))
-    }
-
-    fn dispatch_timer(&mut self, _: CallbackId) -> Result<CommandBatch, BackendError> {
-        panic!("contained timer panic")
-    }
-
-    fn destroy(self: Box<Self>, _: bool) -> Result<CommandBatch, BackendError> {
-        Ok(CommandBatch {
-            session: self.session,
-            sequence: 1,
-            commands: Vec::new(),
-            final_commit: true,
-        })
-    }
-
-    fn discard_pending(&mut self) {}
-}
-
-#[test]
-fn native_timer_panics_are_contained_and_poison_the_session() {
-    reset();
-    // SAFETY: The recording function table implements the native renderer ABI for this test.
-    let mounted = unsafe {
-        lynx_element_bridge_ffi::native_mount(Some(get_api), HOST, |session, _| {
-            Ok((
-                Box::new(PanickingTimerBackend { session }),
-                CommandBatch {
-                    session,
-                    sequence: 0,
-                    commands: Vec::new(),
-                    final_commit: true,
-                },
-            ))
-        })
-    };
-    assert_eq!(mounted.status, NATIVE_STATUS_OK);
-    let callback_table = callbacks();
-    let (timer, callback, _) = timer_registration();
-
-    // SAFETY: The captured one-shot timer identity remains live for this callback.
-    let panicked = unsafe {
-        send_timer(
-            callback_table,
-            callback_table.context,
-            RENDERER,
-            timer,
-            callback,
-        )
-    };
-    assert_eq!(panicked, NATIVE_STATUS_PANIC);
-    // SAFETY: The callback data is valid but the session is permanently poisoned.
-    let poisoned = unsafe {
-        send_timer(
-            callback_table,
-            callback_table.context,
-            RENDERER,
-            timer,
-            callback,
-        )
-    };
-    assert_eq!(poisoned, NATIVE_STATUS_HOST_ERROR);
-
-    let destroyed = lynx_element_bridge_ffi::native_destroy_session(mounted.session);
-    assert_eq!(destroyed.status, NATIVE_STATUS_HOST_ERROR);
-    assert_eq!(destroyed.consumed, 1);
-    assert_eq!(calls().last(), Some(&Call::Release));
-}
-
 #[test]
 fn native_mount_rejects_missing_inputs_without_acquiring() {
     reset();
@@ -1352,26 +939,6 @@ fn native_mount_failure_does_not_publish_a_session_and_releases_the_renderer() {
     let mounted = unsafe { lynx_element_bridge_native_mount(Some(get_api), HOST) };
     assert_eq!(mounted.status, NATIVE_STATUS_HOST_ERROR);
     assert_eq!(mounted.session, 0);
-    assert_eq!(calls().last(), Some(&Call::Release));
-    assert_eq!(
-        calls()
-            .iter()
-            .filter(|call| **call == Call::Release)
-            .count(),
-        1
-    );
-
-    reset();
-    RECORDER.with(|recorder| recorder.borrow_mut().failure = Some("create_timer"));
-    // SAFETY: The recording resolver and table implement the production ABI for this test.
-    let mounted = unsafe { lynx_element_bridge_native_mount(Some(get_api), HOST) };
-    assert_eq!(mounted.status, NATIVE_STATUS_HOST_ERROR);
-    assert_eq!(mounted.session, 0);
-    assert!(
-        calls()
-            .iter()
-            .any(|call| matches!(call, Call::CreateTimer { .. }))
-    );
     assert_eq!(calls().last(), Some(&Call::Release));
     assert_eq!(
         calls()

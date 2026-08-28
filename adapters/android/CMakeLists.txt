@@ -12,8 +12,9 @@ endif()
 if(NOT ANDROID_ABI)
   message(FATAL_ERROR "The Lynx Element Bridge JNI must be built with the Android NDK")
 endif()
-if(NOT LYNX_ELEMENT_BRIDGE_BACKEND MATCHES "^(yew|dioxus)$")
-  message(FATAL_ERROR "LYNX_ELEMENT_BRIDGE_BACKEND must be yew or dioxus")
+if(NOT LYNX_ELEMENT_BRIDGE_BACKEND MATCHES "^(yew|dioxus|wasm-(dioxus|yew))$")
+  message(FATAL_ERROR
+      "LYNX_ELEMENT_BRIDGE_BACKEND must be yew, dioxus, wasm-dioxus, or wasm-yew")
 endif()
 
 add_library(lynx_element_bridge_backend STATIC IMPORTED)
@@ -29,6 +30,14 @@ add_library(lynx_element_bridge SHARED
 target_include_directories(lynx_element_bridge PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 target_compile_features(lynx_element_bridge PRIVATE cxx_std_17)
+if(LYNX_ELEMENT_BRIDGE_BACKEND MATCHES "^wasm-")
+  string(REGEX REPLACE "^wasm-" "" wamr_backend_name
+    "${LYNX_ELEMENT_BRIDGE_BACKEND}")
+  target_compile_definitions(lynx_element_bridge PRIVATE
+    LYNX_ELEMENT_BRIDGE_WAMR=1
+    LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME="${wamr_backend_name}"
+    LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_MARKER="lynx-element-bridge-backend:${LYNX_ELEMENT_BRIDGE_BACKEND}")
+endif()
 target_compile_options(lynx_element_bridge PRIVATE
   -Wall
   -Wextra

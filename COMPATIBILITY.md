@@ -46,10 +46,15 @@ version:
 | `org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207` | `liblynx_native_renderer.so` | Opt-in native renderer product used by the example app |
 
 The native product and app dependency graphs exclude stock `lynx`, Quick and
-PrimJS, NAPI, Wasm, V8, and LynxJSSDK. The APK excludes `liblynx.so`, runtime
-engine libraries, and `assets/lynx_core.js`. ELF inspection rejects forbidden
-runtime `DT_NEEDED` entries and undefined runtime symbols, and requires the
-public `lynx_native_renderer_get_api` export. PrimJS preparation is
+PrimJS, NAPI, V8, LynxJSSDK, and standalone Wasm runtime artifacts. The APK
+excludes `liblynx.so`, runtime engine shared libraries, and `assets/lynx_core.js`.
+The `wasm-dioxus` and `wasm-yew` modes may statically embed pinned WAMR and
+package initial and `replacement-fixture` builds of their generated
+`wasm32-wasip1` guest; native modes may not. Both builds reuse the framework's
+single business crate and DSL source, with no state migration. Neither guest
+enables a browser DOM renderer or adds timer dispatch. ELF inspection rejects forbidden runtime
+`DT_NEEDED` entries and undefined runtime symbols, and requires the public
+`lynx_native_renderer_get_api` export. PrimJS preparation is
 retained solely to reproducibly build and test the stock artifact; it is not a
 native product or application dependency.
 
@@ -64,8 +69,8 @@ acceptance flow on 2026-08-22:
 - Repeated cycles: 3
 - Yew totals: `onCreate=9`, `onDestroy=4`, `diagnostics=9`, selected backend 9
 - Dioxus totals: `onCreate=9`, `onDestroy=4`, `diagnostics=9`, selected backend 9
-- Functional result flags: all true (fresh launch, timer visual change, tap
-  visual change, activity recreation, and force-stop/reopen) for both backends
+- Functional result flags: all true (fresh launch, tap visual change, activity
+  recreation, and force-stop/reopen) for both backends
 - Diagnostics: `renderer_mode=native`, `bts_runtime=false`,
   `mts_context=false`, `template=false`
 - Process maps: `proc_maps_checked=true`; all five required libraries mapped
@@ -78,7 +83,7 @@ acceptance flow on 2026-08-22:
 | Yew | `121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d` | `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final` |
 | Dioxus | `008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc` | `.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final` |
 
-Each evidence directory contains nine files: five screenshots, `logcat.txt`,
+The current acceptance flow writes eight files: four screenshots, `logcat.txt`,
 `maps-fresh.txt`, `maps-after-interaction.txt`, and `summary.json`.
 
 ## Limits

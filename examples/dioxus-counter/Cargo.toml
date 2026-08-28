@@ -9,10 +9,21 @@ repository.workspace = true
 publish.workspace = true
 
 [lib]
-crate-type = ["staticlib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+replacement-fixture = []
 
 [dependencies]
 dioxus-core.workspace = true
 lynx-element-bridge-core.workspace = true
-lynx-element-bridge-ffi.workspace = true
 lynx-element-bridge-dioxus = { path = "../../adapters/dioxus" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lynx-element-bridge-ffi.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+lynx-element-bridge-wasm-guest.workspace = true
+
+[dev-dependencies]
+lynx-element-bridge-wasm-guest.workspace = true

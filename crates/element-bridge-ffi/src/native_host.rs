@@ -177,6 +177,7 @@ struct NativeRendererApiHeader {
 #[derive(Clone)]
 struct ListenerMapping {
     node: NodeId,
+    listener: ListenerId,
     callback: CallbackId,
     name: String,
 }
@@ -194,7 +195,8 @@ pub struct NativeHost {
     root: NodeId,
     owner: ThreadId,
     nodes: HashMap<NodeId, NativeNodeHandle>,
-    listeners: HashMap<ListenerId, ListenerMapping>,
+    listeners: HashMap<NativeListenerHandle, ListenerMapping>,
+    next_native_listener: Option<NativeListenerHandle>,
     timers: HashMap<NativeTimerHandle, TimerMapping>,
     last_sequence: Option<u32>,
     poisoned: bool,
@@ -324,6 +326,7 @@ impl NativeHost {
             owner: thread::current().id(),
             nodes: HashMap::from([(root, native_root)]),
             listeners: HashMap::new(),
+            next_native_listener: Some(1),
             timers: HashMap::new(),
             last_sequence: None,
             poisoned: false,
@@ -368,6 +371,25 @@ impl NativeHost {
         Ok(())
     }
 
+    /// Starts a fresh application lifecycle on the acquired renderer.
+    ///
+    /// The previous application must have removed everything it owned first.
+    pub fn reset_application_epoch(&mut self) -> Result<(), BridgeError> {
+        self.ensure_usable()?;
+        if self.nodes.len() != 1
+            || !self.nodes.contains_key(&self.root)
+            || !self.listeners.is_empty()
+            || !self.timers.is_empty()
+        {
+            return Err(BridgeError::new(
+                Status::InvalidOwnership,
+                "cannot reset native application epoch while application resources remain",
+            ));
+        }
+        self.last_sequence = None;
+        Ok(())
+    }
+
     pub fn event_message(
         &self,
         renderer: NativeRendererHandle,
@@ -378,24 +400,23 @@ impl NativeHost {
         payload: Vec<u8>,
     ) -> Result<EventMessage, BridgeError> {
         self.validate_renderer(renderer)?;
-        let listener = ListenerId::new(listener)?;
         let callback = CallbackId::new(callback)?;
         let mapping = self.listeners.get(&listener).ok_or_else(|| {
             BridgeError::new(
                 Status::InvalidListener,
-                format!("invalid or stale native listener {}", listener.get()),
+                format!("invalid or stale native listener {listener}"),
             )
         })?;
         if mapping.callback != callback || mapping.name != name {
             return Err(BridgeError::new(
                 Status::InvalidListener,
-                format!("native listener {} identity does not match", listener.get()),
+                format!("native listener {listener} identity does not match"),
             ));
         }
         Ok(EventMessage {
             session: self.session,
-            listener,
-            callback,
+            listener: mapping.listener,
+            callback: mapping.callback,
             content_type,
             payload,
         })
@@ -611,28 +632,40 @@ impl NativeHost {
                 callback,
                 name,
             } => {
-                if self.listeners.contains_key(listener) {
+                if self
+                    .listeners
+                    .values()
+                    .any(|mapping| mapping.listener == *listener)
+                {
                     return Err(BridgeError::new(
                         Status::InvalidListener,
                         format!("native listener {} already exists", listener.get()),
                     ));
                 }
                 let native_node = self.native_node(*node)?;
+                let native_listener = self.next_native_listener.ok_or_else(|| {
+                    BridgeError::new(
+                        Status::ResourceExhausted,
+                        "native listener handle space is exhausted",
+                    )
+                })?;
+                self.next_native_listener = native_listener.checked_add(1);
                 // SAFETY: The name is borrowed only for the call and all IDs are nonzero.
                 let status = unsafe {
                     self.api.add_event_listener.expect("validated function")(
                         renderer,
                         native_node,
-                        listener.get(),
+                        native_listener,
                         callback.get(),
                         NativeUtf8::from_str(name),
                     )
                 };
                 self.require_host_success(status, "add_event_listener")?;
                 self.listeners.insert(
-                    *listener,
+                    native_listener,
                     ListenerMapping {
                         node: *node,
+                        listener: *listener,
                         callback: *callback,
                         name: name.clone(),
                     },
@@ -644,31 +677,35 @@ impl NativeHost {
                 callback,
                 name,
             } => {
-                let mapping = self.listeners.get(listener).cloned().ok_or_else(|| {
-                    BridgeError::new(
-                        Status::InvalidListener,
-                        format!("invalid or stale native listener {}", listener.get()),
-                    )
-                })?;
-                if mapping.node != *node || mapping.callback != *callback || mapping.name != *name {
-                    return Err(BridgeError::new(
-                        Status::InvalidListener,
-                        format!("native listener {} identity does not match", listener.get()),
-                    ));
-                }
+                let (native_listener, _) = self
+                    .listeners
+                    .iter()
+                    .find(|(_, mapping)| {
+                        mapping.node == *node
+                            && mapping.listener == *listener
+                            && mapping.callback == *callback
+                            && mapping.name == *name
+                    })
+                    .ok_or_else(|| {
+                        BridgeError::new(
+                            Status::InvalidListener,
+                            format!("native listener {} identity does not match", listener.get()),
+                        )
+                    })?;
+                let native_listener = *native_listener;
                 let native_node = self.native_node(*node)?;
                 // SAFETY: The exact registered listener identity is borrowed for this call.
                 let status = unsafe {
                     self.api.remove_event_listener.expect("validated function")(
                         renderer,
                         native_node,
-                        listener.get(),
+                        native_listener,
                         callback.get(),
                         NativeUtf8::from_str(name),
                     )
                 };
                 self.require_host_success(status, "remove_event_listener")?;
-                self.listeners.remove(listener);
+                self.listeners.remove(&native_listener);
             }
         }
         Ok(())
@@ -1334,8 +1371,8 @@ mod tests {
                 ),
                 Call::InsertBefore(TEST_RENDERER, TEST_ROOT, 200, 0),
                 Call::InsertBefore(TEST_RENDERER, 200, 201, 0),
-                Call::AddListener(TEST_RENDERER, 200, 4, 5, b"ta\0p".to_vec()),
-                Call::RemoveListener(TEST_RENDERER, 200, 4, 5, b"ta\0p".to_vec()),
+                Call::AddListener(TEST_RENDERER, 200, 1, 5, b"ta\0p".to_vec()),
+                Call::RemoveListener(TEST_RENDERER, 200, 1, 5, b"ta\0p".to_vec()),
                 Call::RemoveChild(TEST_RENDERER, 200, 201),
                 Call::DestroyNode(TEST_RENDERER, 201),
                 Call::RemoveChild(TEST_RENDERER, TEST_ROOT, 200),
@@ -1355,6 +1392,178 @@ mod tests {
         assert!(calls().is_empty());
         host.apply(&batch(1, 2, Vec::new(), true)).unwrap();
         assert_eq!(calls(), vec![Call::Flush(TEST_RENDERER)]);
+        host.release().unwrap();
+    }
+
+    #[test]
+    fn resets_sequence_only_after_application_resources_are_gone() {
+        let mut host = recording_host(1, 1);
+        host.apply(&batch(1, 5, Vec::new(), false)).unwrap();
+        host.reset_application_epoch().unwrap();
+        host.apply(&batch(1, 1, Vec::new(), false)).unwrap();
+
+        host.apply(&batch(
+            1,
+            2,
+            vec![Command::CreateElement {
+                node: NodeId::new(2).unwrap(),
+                tag: "view".into(),
+            }],
+            false,
+        ))
+        .unwrap();
+        assert_eq!(
+            error_status(host.reset_application_epoch()),
+            Status::InvalidOwnership
+        );
+        host.release().unwrap();
+    }
+
+    #[test]
+    fn application_epoch_reset_does_not_reuse_native_listener_handles() {
+        let mut host = recording_host(1, 1);
+        let node = NodeId::new(2).unwrap();
+        let listener = ListenerId::new(1).unwrap();
+        let callback = CallbackId::new(1).unwrap();
+        host.apply(&batch(
+            1,
+            1,
+            vec![
+                Command::CreateElement {
+                    node,
+                    tag: "view".into(),
+                },
+                Command::AddEventListener {
+                    node,
+                    listener,
+                    callback,
+                    name: "tap".into(),
+                },
+            ],
+            false,
+        ))
+        .unwrap();
+        assert!(
+            host.event_message(
+                TEST_RENDERER,
+                1,
+                callback.get(),
+                "tap",
+                String::new(),
+                Vec::new(),
+            )
+            .is_ok()
+        );
+
+        host.apply(&batch(
+            1,
+            2,
+            vec![
+                Command::RemoveEventListener {
+                    node,
+                    listener,
+                    callback,
+                    name: "tap".into(),
+                },
+                Command::DestroyNode { node },
+            ],
+            false,
+        ))
+        .unwrap();
+        host.reset_application_epoch().unwrap();
+        clear_calls();
+
+        host.apply(&batch(
+            1,
+            1,
+            vec![
+                Command::CreateElement {
+                    node,
+                    tag: "view".into(),
+                },
+                Command::AddEventListener {
+                    node,
+                    listener,
+                    callback,
+                    name: "tap".into(),
+                },
+            ],
+            false,
+        ))
+        .unwrap();
+
+        assert!(matches!(
+            calls().as_slice(),
+            [
+                Call::CreateElement(_, _, _),
+                Call::AddListener(_, _, 2, 1, _)
+            ]
+        ));
+        assert_eq!(
+            error_status(host.event_message(
+                TEST_RENDERER,
+                1,
+                callback.get(),
+                "tap",
+                String::new(),
+                Vec::new(),
+            )),
+            Status::InvalidListener
+        );
+        let event = host
+            .event_message(
+                TEST_RENDERER,
+                2,
+                callback.get(),
+                "tap",
+                String::new(),
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(event.listener, listener);
+        host.release().unwrap();
+    }
+
+    #[test]
+    fn reports_native_listener_handle_exhaustion_without_reusing_handles() {
+        let mut host = recording_host(1, 1);
+        host.next_native_listener = Some(u32::MAX);
+        let node = NodeId::new(2).unwrap();
+        host.apply(&batch(
+            1,
+            1,
+            vec![
+                Command::CreateElement {
+                    node,
+                    tag: "view".into(),
+                },
+                Command::AddEventListener {
+                    node,
+                    listener: ListenerId::new(1).unwrap(),
+                    callback: CallbackId::new(1).unwrap(),
+                    name: "tap".into(),
+                },
+            ],
+            false,
+        ))
+        .unwrap();
+        clear_calls();
+
+        assert_eq!(
+            error_status(host.apply(&batch(
+                1,
+                2,
+                vec![Command::AddEventListener {
+                    node,
+                    listener: ListenerId::new(2).unwrap(),
+                    callback: CallbackId::new(2).unwrap(),
+                    name: "tap".into(),
+                }],
+                false,
+            ))),
+            Status::ResourceExhausted
+        );
+        assert!(calls().is_empty());
         host.release().unwrap();
     }
 
@@ -1590,7 +1799,7 @@ mod tests {
             vec![Call::RemoveListener(
                 TEST_RENDERER,
                 200,
-                listener.get(),
+                1,
                 callback.get(),
                 b"tap".to_vec()
             )]

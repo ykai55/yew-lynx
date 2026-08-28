@@ -5,26 +5,36 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dioxus_core::{Element, Event, VirtualDom, schedule_update};
-use lynx_element_bridge_core::{
-    BridgeError, CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status,
-};
+#[cfg(any(target_arch = "wasm32", test))]
+use lynx_element_bridge_core::{BridgeError, Status};
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId};
 use lynx_element_bridge_dioxus::prelude::*;
 use lynx_element_bridge_dioxus::{DioxusAdapter, DioxusAdapterError};
+#[cfg(any(target_arch = "wasm32", test))]
+use lynx_element_bridge_wasm_guest::{GuestApplication, MountRequest};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_code)]
 mod ffi;
 
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)]
+mod wasm;
+
+#[cfg(not(feature = "replacement-fixture"))]
+const INITIAL_COUNT: u32 = 0;
+#[cfg(feature = "replacement-fixture")]
+const INITIAL_COUNT: u32 = 100;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use ffi::{
     lynx_element_bridge_backend, lynx_element_bridge_backend_marker,
     lynx_element_bridge_native_abandon_session, lynx_element_bridge_native_destroy_session,
     lynx_element_bridge_native_mount,
 };
 
-pub(crate) const TIMER_CALLBACK_ID: u32 = 1;
-
 struct CounterModel {
     count: Cell<u32>,
-    timer_fired: Cell<bool>,
     schedule: RefCell<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -33,12 +43,6 @@ fn counter(model: Rc<CounterModel>) -> Element {
     model.schedule.replace(Some(Arc::clone(&schedule)));
     let listener_model = Rc::clone(&model);
     let count = model.count.get();
-    let timer_status = if model.timer_fired.get() {
-        "fired"
-    } else {
-        "pending"
-    };
-
     rsx! {
         view {
             style: "height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;",
@@ -46,11 +50,6 @@ fn counter(model: Rc<CounterModel>) -> Element {
                 id: "counter-value",
                 style: "font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;",
                 "Count: {count}"
-            }
-            text {
-                id: "timer-status",
-                style: "font-size: 28px; font-weight: 500; color: #5f665f; margin-bottom: 32px;",
-                "Timer: {timer_status}"
             }
             view {
                 id: "counter-increment",
@@ -71,7 +70,6 @@ fn counter(model: Rc<CounterModel>) -> Element {
 pub struct DioxusCounter {
     dom: VirtualDom,
     adapter: DioxusAdapter,
-    model: Rc<CounterModel>,
 }
 
 impl DioxusCounter {
@@ -81,21 +79,13 @@ impl DioxusCounter {
     ) -> Result<(Self, CommandBatch), DioxusAdapterError> {
         let mut adapter = DioxusAdapter::new(session, root)?;
         let model = Rc::new(CounterModel {
-            count: Cell::new(0),
-            timer_fired: Cell::new(false),
+            count: Cell::new(INITIAL_COUNT),
             schedule: RefCell::new(None),
         });
         let mut dom = VirtualDom::new_with_props(counter, Rc::clone(&model));
         dom.rebuild(&mut adapter);
         let batch = adapter.take_batch()?;
-        Ok((
-            Self {
-                dom,
-                adapter,
-                model,
-            },
-            batch,
-        ))
+        Ok((Self { dom, adapter }, batch))
     }
 
     pub fn dispatch(&mut self, event: EventMessage) -> Result<CommandBatch, DioxusAdapterError> {
@@ -107,32 +97,6 @@ impl DioxusCounter {
         self.adapter.take_batch()
     }
 
-    pub fn dispatch_timer(
-        &mut self,
-        callback: CallbackId,
-    ) -> Result<CommandBatch, DioxusAdapterError> {
-        if callback.get() != TIMER_CALLBACK_ID {
-            return Err(BridgeError::new(
-                Status::InvalidArgument,
-                "Dioxus timer callback identity does not match",
-            )
-            .into());
-        }
-        self.model.timer_fired.set(true);
-        let schedule = self
-            .model
-            .schedule
-            .borrow()
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                BridgeError::new(Status::InternalError, "Dioxus counter has no scheduler")
-            })?;
-        schedule();
-        self.dom.render_immediate(&mut self.adapter);
-        self.adapter.take_batch()
-    }
-
     pub fn discard_pending(&mut self) {
         self.adapter.discard_pending();
     }
@@ -140,6 +104,40 @@ impl DioxusCounter {
     pub fn destroy(mut self) -> Result<CommandBatch, DioxusAdapterError> {
         drop(self.dom);
         self.adapter.destroy()
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl GuestApplication for DioxusCounter {
+    fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
+        DioxusCounter::mount(request.session, request.root).map_err(guest_error)
+    }
+
+    fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BridgeError> {
+        self.dispatch(event).map_err(guest_error)
+    }
+
+    fn destroy(self) -> Result<CommandBatch, BridgeError> {
+        DioxusCounter::destroy(self).map_err(guest_error)
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn guest_error(error: DioxusAdapterError) -> BridgeError {
+    match error {
+        DioxusAdapterError::Bridge(error) => error,
+        DioxusAdapterError::InvalidListener(_) | DioxusAdapterError::EventMismatch { .. } => {
+            BridgeError::new(Status::InvalidListener, error.to_string())
+        }
+        DioxusAdapterError::CallbackExhausted => {
+            BridgeError::new(Status::ResourceExhausted, error.to_string())
+        }
+        DioxusAdapterError::InvalidElement(_)
+        | DioxusAdapterError::InvalidStack(_)
+        | DioxusAdapterError::InvalidTemplatePath(_)
+        | DioxusAdapterError::UnsupportedAttribute => {
+            BridgeError::new(Status::HostError, error.to_string())
+        }
     }
 }
 
@@ -188,25 +186,13 @@ mod tests {
                     .map(String::as_str),
                 Some("font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;")
             );
-            assert_eq!(screen.children[1].tag, "text");
+            assert_eq!(screen.children[1].tag, "view");
             assert_eq!(
                 screen.children[1].attributes.get("id").map(String::as_str),
-                Some("timer-status")
-            );
-            assert_eq!(
-                screen.children[1]
-                    .attributes
-                    .get("style")
-                    .map(String::as_str),
-                Some("font-size: 28px; font-weight: 500; color: #5f665f; margin-bottom: 32px;")
-            );
-            assert_eq!(screen.children[2].tag, "view");
-            assert_eq!(
-                screen.children[2].attributes.get("id").map(String::as_str),
                 Some("counter-increment")
             );
             assert_eq!(
-                screen.children[2]
+                screen.children[1]
                     .attributes
                     .get("style")
                     .map(String::as_str),
@@ -214,16 +200,16 @@ mod tests {
                     "height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;"
                 )
             );
-            assert_eq!(screen.children[2].children[0].tag, "text");
+            assert_eq!(screen.children[1].children[0].tag, "text");
             assert_eq!(
-                screen.children[2].children[0]
+                screen.children[1].children[0]
                     .attributes
                     .get("style")
                     .map(String::as_str),
                 Some("font-size: 28px; font-weight: 600; color: #ffffff;")
             );
             assert_eq!(
-                screen.children[2].children[0].children[0].text.as_deref(),
+                screen.children[1].children[0].children[0].text.as_deref(),
                 Some("Increment")
             );
         }
@@ -231,30 +217,8 @@ mod tests {
             host.snapshot().children[0].children[0].children[0]
                 .text
                 .as_deref(),
-            Some("Count: 0")
+            Some(format!("Count: {INITIAL_COUNT}").as_str())
         );
-        assert_eq!(
-            host.snapshot().children[0].children[1].children[0]
-                .text
-                .as_deref(),
-            Some("Timer: pending")
-        );
-
-        let timer_update = counter.dispatch_timer(CallbackId::new(1).unwrap()).unwrap();
-        host.apply(&timer_update).unwrap();
-        assert_eq!(
-            host.snapshot().children[0].children[0].children[0]
-                .text
-                .as_deref(),
-            Some("Count: 0")
-        );
-        assert_eq!(
-            host.snapshot().children[0].children[1].children[0]
-                .text
-                .as_deref(),
-            Some("Timer: fired")
-        );
-
         let updated = counter
             .dispatch(EventMessage {
                 session,
@@ -269,7 +233,7 @@ mod tests {
             host.snapshot().children[0].children[0].children[0]
                 .text
                 .as_deref(),
-            Some("Count: 1")
+            Some(format!("Count: {}", INITIAL_COUNT + 1).as_str())
         );
 
         let mismatch = counter.dispatch(EventMessage {
@@ -297,7 +261,7 @@ mod tests {
             host.snapshot().children[0].children[0].children[0]
                 .text
                 .as_deref(),
-            Some("Count: 2")
+            Some(format!("Count: {}", INITIAL_COUNT + 2).as_str())
         );
 
         let destroyed = counter.destroy().unwrap();
@@ -333,7 +297,11 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(unsafe_code)]
 #[path = "../../native_lifecycle_tests.rs"]
 mod native_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "../wasm_guest_lifecycle_tests.rs"]
+mod wasm_guest_lifecycle_tests;

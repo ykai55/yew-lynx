@@ -1,16 +1,44 @@
-From fd56d6b558e5113972b2403d22085c5d62be5cef Mon Sep 17 00:00:00 2001
+From 77213185902102a6882135ddfbbfa5bea4624cd9 Mon Sep 17 00:00:00 2001
 From: ykai55 <ykai55@users.noreply.github.com>
 Date: Tue, 18 Aug 2026 23:24:01 +0800
 Subject: [PATCH] Add experimental Yew native renderer
 
 Add an opt-in, renderer-neutral backend for mounting a top-level Yew component
-on native targets. Support text, tags, lists, attributes, form values, and tap
-callbacks while rejecting unsupported VNode output before host mutation.
+on native targets and wasm32-wasip1. Support text, tags, lists, attributes,
+form values, and tap callbacks while rejecting unsupported VNode output before
+host mutation.
 
 Define strict direct-parent teardown, scheduler reentrancy protection,
 owner-thread callbacks, explicit emergency abandonment, and panic-unwind
 cleanup with regression coverage.
 ---
+ Cargo.lock                                    |   1 +
+ packages/yew-macro/Cargo.toml                 |   4 +
+ packages/yew-macro/src/props/element.rs       |   2 +
+ packages/yew-macro/src/props/prop.rs          |  11 +-
+ .../html-element-ontap-attribute.rs           |   3 +
+ .../html_macro/html-element-ontap-listener.rs |  83 ++
+ packages/yew-macro/tests/html_macro_test.rs   |   4 +
+ packages/yew/Cargo.toml                       |  13 +-
+ packages/yew/src/html/component/lifecycle.rs  | 131 ++-
+ packages/yew/src/html/component/mod.rs        |   4 +-
+ packages/yew/src/html/component/scope.rs      |  79 +-
+ packages/yew/src/html/listener/events.rs      |  51 +
+ packages/yew/src/html/mod.rs                  |  32 +-
+ packages/yew/src/lib.rs                       |  17 +
+ packages/yew/src/native_bundle.rs             | 286 ++++++
+ packages/yew/src/native_renderer.rs           | 868 ++++++++++++++++++
+ packages/yew/src/scheduler.rs                 |  60 +-
+ packages/yew/src/suspense/component.rs        |  16 +-
+ packages/yew/src/suspense/mod.rs              |   2 +-
+ packages/yew/src/virtual_dom/listeners.rs     |   5 +
+ packages/yew/src/virtual_dom/vtag.rs          |  11 +-
+ 21 files changed, 1626 insertions(+), 57 deletions(-)
+ create mode 100644 packages/yew-macro/tests/html_macro/html-element-ontap-attribute.rs
+ create mode 100644 packages/yew-macro/tests/html_macro/html-element-ontap-listener.rs
+ create mode 100644 packages/yew/src/native_bundle.rs
+ create mode 100644 packages/yew/src/native_renderer.rs
+
 diff --git a/Cargo.lock b/Cargo.lock
 index 61fdace..ee5ce63 100644
 --- a/Cargo.lock
@@ -187,17 +215,43 @@ index 2a67e3e..76960af 100644
  }
  
 diff --git a/packages/yew/Cargo.toml b/packages/yew/Cargo.toml
-index bcf4bcf..91d840d 100644
+index bcf4bcf..e9c0c9c 100644
 --- a/packages/yew/Cargo.toml
 +++ b/packages/yew/Cargo.toml
-@@ -103,6 +103,7 @@ features = [
+@@ -17,8 +17,8 @@ readme = "../../README.md"
+ rust-version.workspace = true
+ 
+ [dependencies]
+-console_error_panic_hook = "0.1"
+-gloo.workspace = true
++console_error_panic_hook = { version = "0.1", optional = true }
++gloo = { workspace = true, optional = true }
+ indexmap = { version = "2.14", features = ["std"] }
+ js-sys.workspace = true
+ slab = "0.4"
+@@ -35,8 +35,8 @@ tracing = "0.1.44"
+ tokise = "0.3"
+ rustversion.workspace = true
+ 
+-[target.'cfg(target_arch = "wasm32")'.dependencies]
+-wasm-bindgen-futures.workspace = true
++[target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
++wasm-bindgen-futures = { workspace = true, optional = true }
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ # We still need tokio as we have docs linked to it.
+@@ -102,8 +102,9 @@ features = [
+ 
  [features]
  ssr = ["dep:html-escape", "dep:base64ct", "dep:bincode"]
- csr = []
+-csr = []
+-hydration = ["csr", "dep:bincode"]
++csr = ["dep:console_error_panic_hook", "dep:gloo"]
 +native_renderer = ["yew-macro/native_renderer"]
- hydration = ["csr", "dep:bincode"]
++hydration = ["csr", "dep:bincode", "dep:wasm-bindgen-futures"]
  not_browser_env = []
  default = []
+ test = []
 diff --git a/packages/yew/src/html/component/lifecycle.rs b/packages/yew/src/html/component/lifecycle.rs
 index 4452cbb..15caed0 100644
 --- a/packages/yew/src/html/component/lifecycle.rs
@@ -767,7 +821,7 @@ index 622fed4..62b72f8 100644
      pub fn get(&self) -> Option<Node> {
          let inner = self.0.borrow();
 diff --git a/packages/yew/src/lib.rs b/packages/yew/src/lib.rs
-index 677d61b..61476da 100644
+index 677d61b..d8f4bcd 100644
 --- a/packages/yew/src/lib.rs
 +++ b/packages/yew/src/lib.rs
 @@ -26,6 +26,8 @@
@@ -779,13 +833,10 @@ index 677d61b..61476da 100644
  //!
  //! ## Example
  //!
-@@ -83,6 +85,16 @@
+@@ -83,6 +85,13 @@
  #![recursion_limit = "512"]
  extern crate self as yew;
  
-+#[cfg(all(feature = "native_renderer", target_arch = "wasm32", not(documenting)))]
-+compile_error!("the `native_renderer` feature is supported only on native targets");
-+
 +#[cfg(all(
 +    feature = "native_renderer",
 +    any(feature = "csr", feature = "hydration"),
@@ -796,7 +847,7 @@ index 677d61b..61476da 100644
  /// This macro provides a convenient way to create [`Classes`].
  ///
  /// The macro takes a list of items similar to the [`vec!`] macro and returns a [`Classes`]
-@@ -276,6 +288,10 @@ pub mod context;
+@@ -276,6 +285,10 @@ pub mod context;
  mod dom_bundle;
  pub mod functional;
  pub mod html;
@@ -807,7 +858,7 @@ index 677d61b..61476da 100644
  pub mod platform;
  pub mod scheduler;
  mod sealed;
-@@ -284,6 +300,8 @@ mod server_renderer;
+@@ -284,6 +297,8 @@ mod server_renderer;
  pub mod suspense;
  pub mod utils;
  pub mod virtual_dom;
@@ -816,7 +867,7 @@ index 677d61b..61476da 100644
  #[cfg(feature = "ssr")]
  pub use server_renderer::*;
  
-@@ -336,6 +354,8 @@ pub mod prelude {
+@@ -336,6 +351,8 @@ pub mod prelude {
          NodeRef, Properties, create_portal,
      };
      pub use crate::macros::{classes, html, html_nested};
@@ -2201,4 +2252,4 @@ index 18cd215..dbfe5b5 100644
              Default::default(),
              Default::default(),
 -- 
-2.43.0
+2.39.5

@@ -1,6 +1,7 @@
 package com.yew.lynx.example
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -41,7 +42,14 @@ class MainActivity : Activity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 ),
             )
-            val backend = rendererHost.mount(hostToken)
+            val backend = if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) {
+                rendererHost.mount(
+                    hostToken,
+                    readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET),
+                )
+            } else {
+                rendererHost.mount(hostToken)
+            }
             rustMounted = true
             lynxView = view
             nativeRendererHost = rendererHost
@@ -49,7 +57,7 @@ class MainActivity : Activity() {
             Log.i(TAG, "Native renderer backend=$backend")
             Log.i(
                 TAG,
-                "Native renderer diagnostics mode=native bts_runtime=false mts_context=false template=false",
+                "Native renderer diagnostics mode=${if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) "wasm" else "native"} bts_runtime=false mts_context=false template=false",
             )
         } catch (error: Throwable) {
             lynxView = null
@@ -138,6 +146,22 @@ class MainActivity : Activity() {
         Log.i(TAG, "MainActivity onDestroy complete")
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (
+            BuildConfig.LYNX_ELEMENT_BRIDGE_WASM &&
+                intent.getBooleanExtra(EXTRA_REPLACE_WASM_MODULE, false)
+        ) {
+            replaceWasmModule(
+                readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET),
+            )
+            Log.i(
+                TAG,
+                "WASM module replacement complete asset=${BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET}",
+            )
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         lynxView?.onEnterForeground()
@@ -148,7 +172,19 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
+    /** Test hook for replacing the active module without download or persistence behavior. */
+    fun replaceWasmModule(moduleBytes: ByteArray) {
+        check(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) { "App is not built in a WASM mode" }
+        nativeRendererHost?.replace(moduleBytes)
+            ?: error("WAMR session is not mounted")
+    }
+
+    private fun readWasmAsset(assetName: String): ByteArray =
+        assets.open(assetName).use { it.readBytes() }
+
     private companion object {
         const val TAG = "LynxElementBridge"
+        const val EXTRA_REPLACE_WASM_MODULE =
+            "com.yew.lynx.example.extra.REPLACE_WASM_MODULE"
     }
 }

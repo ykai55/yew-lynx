@@ -1,37 +1,21 @@
-use lynx_element_bridge_core::{CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status};
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId, Status};
 use lynx_element_bridge_dioxus::DioxusAdapterError;
 use lynx_element_bridge_ffi::native_host::{NativeHostHandle, NativeRendererGetApiFn};
 use lynx_element_bridge_ffi::{
     BackendError, BridgeBackend, LynxElementBridgeNativeDestroyResult,
-    LynxElementBridgeNativeMountResult, LynxElementBridgeSession, NativeTimerRequest,
+    LynxElementBridgeNativeMountResult, LynxElementBridgeSession,
 };
 
-use crate::{DioxusCounter, TIMER_CALLBACK_ID};
+use crate::DioxusCounter;
 
 struct DioxusBackend(Option<DioxusCounter>);
 
 impl BridgeBackend for DioxusBackend {
-    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
-        vec![NativeTimerRequest {
-            delay_millis: 1_500,
-            repeating: false,
-            callback: CallbackId::new(TIMER_CALLBACK_ID).expect("timer callback ID is nonzero"),
-        }]
-    }
-
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError> {
         self.0
             .as_mut()
             .ok_or_else(|| BackendError::fatal(Status::InternalError, "Dioxus backend is empty"))?
             .dispatch(event)
-            .map_err(adapter_error)
-    }
-
-    fn dispatch_timer(&mut self, callback: CallbackId) -> Result<CommandBatch, BackendError> {
-        self.0
-            .as_mut()
-            .ok_or_else(|| BackendError::fatal(Status::InternalError, "Dioxus backend is empty"))?
-            .dispatch_timer(callback)
             .map_err(adapter_error)
     }
 

@@ -23,7 +23,16 @@ grep -Fq 'error.addSuppressed(cleanupError)' "$APP_ACTIVITY"
 grep -Fq 'throw lifecycleFailure' "$APP_ACTIVITY"
 grep -Fq 'lynxView?.onEnterForeground()' "$APP_ACTIVITY"
 grep -Fq 'lynxView?.onEnterBackground()' "$APP_ACTIVITY"
-if grep -Eq 'renderTemplate|setEnableMTSModule|registerModule|\.lynx\.bundle|readBytes' \
+grep -Fq 'readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET)' "$APP_ACTIVITY"
+grep -Fq 'nativeRendererHost?.replace(moduleBytes)' "$APP_ACTIVITY"
+grep -Fq 'readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET)' "$APP_ACTIVITY"
+grep -Fq 'assets.open(assetName)' "$APP_ACTIVITY"
+grep -Fq 'wasm-dioxus' "$APP_GRADLE"
+grep -Fq 'assets.srcDir(generatedAssetsDirectory)' "$APP_GRADLE"
+grep -Fq 'replacement-fixture' "$APP_GRADLE"
+grep -Fq 'buildInitialWasmGuest' "$APP_GRADLE"
+grep -Fq 'buildReplacementWasmGuest' "$APP_GRADLE"
+if grep -Eq 'renderTemplate|setEnableMTSModule|registerModule|\.lynx\.bundle' \
     "$APP_ACTIVITY"; then
   printf 'MainActivity still references the dormant MTS/template path\n' >&2
   exit 1
@@ -69,6 +78,8 @@ java -Djava.library.path="$BUILD_DIR/native" \
 mock_symbols="$(nm -D --defined-only "$BUILD_DIR/native/liblynx_element_bridge.so")"
 for symbol in \
   Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount \
+  Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMountWasm \
+  Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeReplaceWasm \
   Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession \
   Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession \
   Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeBackend; do

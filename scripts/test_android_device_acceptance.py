@@ -185,6 +185,83 @@ class AndroidDeviceAcceptanceTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             acceptance.analyze_process_maps("not a maps line", {})
 
+    def test_increment_button_uses_intact_edge_when_text_cuts_center_probes(self):
+        width = height = 400
+        pixels = bytearray(bytes([255, 255, 255, 255]) * width * height)
+        green = bytes([50, 110, 80, 255])
+        for y in range(100, 301):
+            for x in range(50, 351):
+                pixels[(y * width + x) * 4 : (y * width + x + 1) * 4] = green
+        for y in range(129, 272):
+            for x in range(120, 281):
+                pixels[(y * width + x) * 4 : (y * width + x + 1) * 4] = bytes(
+                    [255, 255, 255, 255]
+                )
+
+        self.assertEqual(
+            acceptance.find_increment_button((width, height, bytes(pixels))),
+            (50, 100, 350, 300),
+        )
+
+    def test_wasm_replacement_requires_candidate_distinct_from_both_prior_states(self):
+        initial = (100, 100, bytes([0, 0, 0, 255]) * 10_000)
+        count_one_pixels = bytearray(initial[2])
+        for y in range(20, 40, 2):
+            for x in range(10, 90, 2):
+                count_one_pixels[(y * 100 + x) * 4] = 255
+        count_one = (100, 100, bytes(count_one_pixels))
+        replacement_pixels = bytearray(initial[2])
+        for y in range(20, 40, 2):
+            for x in range(10, 90, 2):
+                replacement_pixels[(y * 100 + x) * 4 + 1] = 255
+        replacement = (100, 100, bytes(replacement_pixels))
+        png = b"replacement screenshot"
+
+        with mock.patch.object(
+            acceptance, "shell", return_value="Status: ok"
+        ) as shell, mock.patch.object(
+            acceptance,
+            "wait_for_page",
+            return_value=(replacement, (10, 40, 90, 80), png),
+        ):
+            replaced = acceptance.replace_wasm_module(
+                "serial", initial, count_one, (10, 40, 90, 80)
+            )
+
+        self.assertEqual(replaced, (replacement, (10, 40, 90, 80), png))
+        shell.assert_called_once_with(
+            "serial",
+            "am",
+            "start",
+            "-W",
+            "--activity-single-top",
+            "-n",
+            acceptance.COMPONENT,
+            "--ez",
+            acceptance.WASM_REPLACE_EXTRA,
+            "true",
+        )
+
+    def test_wasm_replacement_rejects_the_initial_fixture(self):
+        initial = (100, 100, bytes([0, 0, 0, 255]) * 10_000)
+        count_one_pixels = bytearray(initial[2])
+        for y in range(20, 40, 2):
+            for x in range(10, 90, 2):
+                count_one_pixels[(y * 100 + x) * 4] = 255
+
+        with mock.patch.object(
+            acceptance, "shell", return_value="Status: ok"
+        ), mock.patch.object(
+            acceptance,
+            "wait_for_page",
+            return_value=(initial, (10, 40, 90, 80), b"initial screenshot"),
+        ), mock.patch.object(
+            acceptance.time, "monotonic", side_effect=[0.0, 31.0]
+        ), self.assertRaisesRegex(RuntimeError, "Count: 100"):
+            acceptance.replace_wasm_module(
+                "serial", initial, (100, 100, bytes(count_one_pixels)), (10, 40, 90, 80)
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

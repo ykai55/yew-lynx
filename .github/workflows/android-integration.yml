@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [yew, dioxus]
+        backend: [yew, dioxus, wasm-dioxus, wasm-yew]
 
     steps:
       - name: Check out repository and Lynx submodule
@@ -40,8 +40,12 @@ jobs:
       - name: Install Rust
         run: |
           rustup toolchain install 1.85.0 --profile minimal \
-            --target aarch64-linux-android
+            --target aarch64-linux-android,wasm32-wasip1
           rustup default 1.85.0
+
+      - name: Run real WAMR lifecycle tests
+        if: matrix.backend == 'wasm-dioxus'
+        run: cargo test -p lynx-element-bridge-wamr-host --features wamr -- --test-threads=1
 
       - name: Install Android toolchains
         run: |
