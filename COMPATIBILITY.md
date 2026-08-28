@@ -1,120 +1,104 @@
 # Compatibility and support status
 
-This experimental preview implements and builds an ordinary stock OSS Lynx
-Android path. Its compatibility claim stops at the exact source, dependency,
-APK, and single-device evidence listed here.
+Lynx Element Bridge is an experimental preview. Its support claim is limited to
+the exact source revisions, native ABI, Android target, and evidence below.
 
-## Compatibility matrix
+## Matrix
 
-| Component | Revision or target | Status | Evidence |
-| --- | --- | --- | --- |
-| Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Exact patch base only | Bootstrap validates patch identities; focused renderer and macro tests run against the patched checkout |
-| Yew at another revision | Unpinned | Not evaluated | Rebase and rerun all checks before changing the pin |
-| Rust | 1.85.0 | Repository verification toolchain | `rust-toolchain.toml`, locked workspace checks, tests, formatting, and clippy |
-| Protocol | Version 1 | Implemented for the documented mutation and lifecycle surface | Rust protocol/backend tests, counter C ABI tests, MTS broker tests, and Android schema tests |
-| Template toolchain | `esbuild` 0.25.9 and `@lynx-js/tasm` 0.0.51 | Exact npm development dependencies | `npm ci`; build emits and decodes the bundle as context-type 1/LepusNG |
-| OSS Lynx APIs | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Audited source target for the ordinary MTS/Fiber route | Pinned upstream citations and [`docs/oss-lynx-gap.md`](docs/oss-lynx-gap.md) |
-| Android adapter | Public `LynxModule` plus JNI | Source, mock, and real arm64 NDK link verified | Java lifecycle/schema checks, JNI round trip, host C ABI smoke test, and packaged `libyew_lynx_bridge.so` |
-| Standalone APK | API 24+, `arm64-v8a` only | Built against locally published AARs from the exact Lynx pin | Online assembly, offline reassembly, strict dependency verification, APK content checks |
-| Physical device | Android 15 / API 35, `arm64-v8a` | One Dora acceptance run only | `Count: 0`, tap to `Count: 1`, recreation/reset, and repeated lifecycle screenshots/logs |
+| Component | Revision or target | Evidence |
+| --- | --- | --- |
+| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 15-patch `0002-0016` series, public-header byte comparison, 21/21 native renderer tests |
+| Lynx tools_shared | `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` | Publicly reachable pinned nested checkout and clean-apply JNI-filter patch |
+| Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Patch identity, renderer/macro tests, adapter, native lifecycle staticlib |
+| Dioxus | `0.7.10` | Lynx-native RSX vocabulary, real `VirtualDom`, `WriteMutations` adapter, native lifecycle staticlib |
+| Rust | `1.85.0` | Locked workspace format/check/test/Clippy and arm64 staticlibs |
+| Android app | API 24+, tested arm64-v8a | Native Java/JNI lifecycle, both real staticlib links, dependency/APK/ELF and process-map checks |
+| Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, release |
 
-## Implemented route
+## Runtime Contract
 
-```text
-Yew native_renderer patch
-  -> Rust protocol-v1 recorder and counter staticlib
-  -> Android LynxModule + JNI UTF-8 byte[]
-  -> synchronous MTS module proxy
-  -> public typed Fiber Element globals
-  -> ordinary LepusNG/Fiber bundle
-  -> stock renderer
-```
+- `CommandBatch` is an ordered in-memory `Vec<Command>` mutation boundary.
+- Sessions, nodes, listeners, callbacks, and native handles are nonzero opaque
+  IDs scoped to one session.
+- Session operations, function-table calls, and callbacks stay synchronous on
+  the mounting thread; wrong-thread and reentrant calls are rejected.
+- Session tree ownership and exact listener identity are validated before each
+  mutation.
+- Native event content type and payload bytes remain opaque to the bridge.
+- Host application is ordered and does not promise rollback after a partial
+  native failure; such a failure poisons the session.
+- Normal destroy removes framework state and then releases the native renderer.
+  Abandon skips application teardown and exists only for emergency cleanup.
+- Android registration rejects a host with an active BTS runtime, MTS context,
+  or template lifecycle.
 
-The pinned Lynx revision declares the
-[Fiber Element globals](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/js_libraries/type-element-api/types/element-api.d.ts),
-registers them for Fiber and registers `lynx.module()` in the
-[LepusNG renderer bindings](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/core/runtime/lepusng/bindings/renderer_ng.cc).
-The same revision's public
-[`Lynx` TypeScript interface](https://github.com/lynx-family/lynx/blob/0df14207cebb060f1bed8de12b64a1119dee8f06/js_libraries/types/types/main-thread/lynx.d.ts)
-does not declare `module()`. This project therefore treats it as pinned stock
-implementation behavior, not a stable declared TypeScript contract.
+There is no serialized application command/result channel, runtime capability
+negotiation, Java module transport, or template-bundle application path.
 
-The exact Lynx source checkout is included as `third_party/lynx`; no Lynx patch
-is applied. The route does not bind hidden Lynx C++ symbols, and direct JNI
-calls to those symbols remain unsupported.
+## Android Artifact Contract
 
-## Verified behavior
+The stock and native products are deliberately separate at the same pinned
+version:
 
-| Layer | Evidence and boundary |
-| --- | --- |
-| Patched Yew | Top-level component, text/tags/lists, initial attributes, synchronous `rendered` and destroy lifecycle, direct-parent teardown, one `ontap` update, selected pre-mutation rejection, and unwind cleanup for a panicking destroy callback |
-| Rust adapter | Exact protocol envelopes, JavaScript-safe IDs, ownership validation, one final flush, no-op flush, tap dispatch, stale listener handling, poisoned sessions, and C ABI buffer ownership |
-| Counter staticlib | Initial `Count: 0`, one tap update to `Count: 1`, explicit cleanup, same-thread enforcement, and stale-session rejection in host tests |
-| MTS broker | Exact JSON/schema validation before host mutation, public Fiber operation mapping, listener ownership, initial flush suppression, explicit destroy fallback, reload/removal lifecycle, and cache/SSR rejection against mocks |
-| Template build | Bundled MTS shell plus N-API and forced-WASM codec builds, each decoded as `context-type` 1 and `is-lepusng-binary: true` |
-| Android adapter | Public-module shape, synchronous string calls, UTF-8 `byte[]` JNI transport, one live session, remount after `destroySession()`, permanent module teardown, JNI allocation/cleanup paths against mocks, a real host C/staticlib ABI smoke test, and an Android arm64 archive build |
-| Standalone Android | Six local stock Lynx AARs, real Rust/JNI shared-library link, ordinary bundle asset load, arm64-only APK, online/offline app assembly, physical-device tap and lifecycle evidence |
+| Maven coordinate | Shared library | Contract |
+| --- | --- | --- |
+| `org.lynxsdk.lynx:lynx:0.0.1-0df14207` | `liblynx.so` | Preserved stock JavaScript/template product, built and published without a behavior change |
+| `org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207` | `liblynx_native_renderer.so` | Opt-in native renderer product used by the example app |
 
-This evidence does not establish other Lynx revisions, Android versions,
-devices, ABIs, accessibility conformance, performance, or production support.
+The native product and app dependency graphs exclude stock `lynx`, Quick and
+PrimJS, NAPI, Wasm, V8, and LynxJSSDK. The APK excludes `liblynx.so`, runtime
+engine libraries, and `assets/lynx_core.js`. ELF inspection rejects forbidden
+runtime `DT_NEEDED` entries and undefined runtime symbols, and requires the
+public `lynx_native_renderer_get_api` export. PrimJS preparation is
+retained solely to reproducibly build and test the stock artifact; it is not a
+native product or application dependency.
 
-## Protocol and lifecycle contract
+## Final Device Evidence
 
-- Node, listener, root, and session IDs are positive and no greater than
-  `9007199254740991`. Root and listener IDs pass through MTS and Java as decimal
-  strings, avoiding lossy JavaScript number conversion at the Java boundary.
-- Success and failure envelopes are exact and reject unknown fields. Every
-  success response, including a no-op, has exactly one final `flush`. A failure
-  normally has no operations; destroy alone may return a validated partial
-  cleanup sequence ending in one flush.
-- Initial mount validates the final flush but suppresses its execution because
-  Lynx's enclosing render pipeline flushes after `__RenderPage` returns. Event,
-  update remount, explicit batch, and destroy paths retain their flush boundary.
-- Protocol v1 supports `tap` only. Event payloads, propagation data,
-  asynchronous calls, nested dispatch, and reentrant broker operations are out
-  of scope.
-- Raw text must be attached directly beneath a `<text>` element for this Lynx
-  adapter. This is stricter than Yew's generic native renderer contract.
-- A module instance owns at most one live Rust session. Every call is
-  synchronous and must execute on the mounting thread.
-- Cached `initPage` roots, nonempty cache data, and SSR hydration are rejected.
-  Reload destroys then remounts; component removal destroys and allows a later
-  fresh mount.
-- Teardown is explicit through broker/module lifecycle paths. Dropping a Rust
-  application handle or exiting its owner thread does not perform host cleanup.
-- A new `NativeRenderer::render()` call is rejected while Yew's scheduler is
-  already running. `NativeAppHandle::destroy(&mut self)` returns a busy error in
-  the same state without consuming the handle, so teardown can be retried.
-  Owner-thread exit abandons local Rust state to break cycles, but still cannot
-  remove host nodes or callbacks.
-- Rust catches unwind panics at exported C boundaries, but `panic = "abort"`
-  cannot be contained. Backend panics during unwind can still abort, so backend
-  operations and callbacks must be non-panicking.
+Both frameworks passed the final patch-0015 binary-native physical-device
+acceptance flow on 2026-08-22:
 
-## Yew renderer boundary
+- Device: anonymous Xiaomi Redmi K60 Pro physical device
+- OS: Android 13, API 33
+- ABI: arm64-v8a
+- Repeated cycles: 3
+- Yew totals: `onCreate=9`, `onDestroy=4`, `diagnostics=9`, selected backend 9
+- Dioxus totals: `onCreate=9`, `onDestroy=4`, `diagnostics=9`, selected backend 9
+- Functional result flags: all true (fresh launch, timer visual change, tap
+  visual change, activity recreation, and force-stop/reopen) for both backends
+- Diagnostics: `renderer_mode=native`, `bts_runtime=false`,
+  `mts_context=false`, `template=false`
+- Process maps: `proc_maps_checked=true`; all five required libraries mapped
+  after fresh launch and interaction, forbidden library set empty, and
+  Quick/NAPI/Wasm/V8 flags false
+- Crash markers: 0 per run
 
-The current patch intentionally supports only a top-level component with
-`VNode::VText`, authored `VNode::VTag`, source-order `VNode::VList`, initial
-attributes/`value`/`checked`, and `ontap`. Nested components, explicit
-`NodeRef`, keys, portals, suspense, browser references, raw HTML, other events,
-and fine-grained in-place text or attribute updates are not supported.
+| Backend | APK SHA-256 | Evidence path |
+| --- | --- | --- |
+| Yew | `121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d` | `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final` |
+| Dioxus | `008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc` | `.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final` |
 
-See [`patches/yew/README.md`](patches/yew/README.md) for the exact API and test
-commands.
+Each evidence directory contains nine files: five screenshots, `logcat.txt`,
+`maps-fresh.txt`, `maps-after-interaction.txt`, and `summary.json`.
 
-## Android host boundary
+## Limits
 
-The included host enables MTS modules, registers one `YewLynxModule` per
-runtime, cross-compiles and packages the Rust archive through the JNI shared
-library, loads the generated bundle through a normal `LynxView`, keeps calls on
-the UI owner thread, and explicitly destroys the view. The claim applies only
-to the pinned Lynx revision, locked dependencies, arm64 APK, and recorded
-Android 15 device run.
+No claim is made for other Lynx, Yew, or Dioxus revisions; Android ABIs other
+than arm64-v8a; Android API levels outside the declared app range; iOS, Harmony,
+desktop, or web; accessibility; performance; asynchronous Dioxus scheduling; or
+production use.
 
-## Changing a pin
+The 21 `NativeRendererApiTest` cases pass (21/21). They use no private test peer
+or helper, and release behavior is tested through the production function table.
+All 11 public statuses cross the production boundary. `RESOURCE_EXHAUSTED` and
+`INTERNAL_ERROR` are returned by real repeating timer callbacks through the
+function table, after which production task-runner behavior cancels each timer.
+Neither status uses allocator exhaustion or root rollback. Issue #4's
+implementation and acceptance requirements are complete, and the issue is
+closable.
 
-A Yew revision change requires rebasing `patches/yew/series`, validating patch
-identity from a clean checkout, and rerunning `scripts/verify.sh`. A Lynx
-revision change requires a new audit of the public Fiber globals, LepusNG module
-binding, Android module APIs, MTS opt-in, and template compatibility. A newer
-revision must not be assumed compatible.
+A Lynx pin change requires rebasing 0002-0016 and rerunning patch, header,
+native-host, product, ELF, Android, and device verification. A tools_shared pin
+change requires rebasing and reverifying its JNI-filter patch. A Yew pin change
+requires rebasing its patch and focused tests. A Dioxus pin change requires the
+real `VirtualDom` and cross-framework conformance suites.

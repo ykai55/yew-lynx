@@ -1,0 +1,55 @@
+From 9c54b4712b7840374b25835ce5bd26abc9e72572 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 08:05:00 +0800
+Subject: [PATCH 1/1] Add native-renderer-only JNI method filter
+
+Allow generated JNI registration arrays to exclude runtime-only methods.
+---
+ jni_generator/generate_and_register_jni_files.py | 3 +++
+ jni_generator/jni_generator.py                   | 9 ++++++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/jni_generator/generate_and_register_jni_files.py b/jni_generator/generate_and_register_jni_files.py
+index 7e0f076..7c748d1 100755
+--- a/jni_generator/generate_and_register_jni_files.py
++++ b/jni_generator/generate_and_register_jni_files.py
+@@ -555,6 +555,9 @@ def generate_files(root_path, jni_configs_file, use_base_jni_utils_header):
+ 
+             # generate jni
+             options = Options(use_base_jni_utils_header)
++            options.native_renderer_only_methods = input.get(
++                "native_renderer_only_methods", []
++            )
+             print(jni_file_path)
+             GenerateJNIHeader(java_file_full_path, jni_file_path, options)
+             # generate register method header file
+diff --git a/jni_generator/jni_generator.py b/jni_generator/jni_generator.py
+index 9140460..2ab351e 100755
+--- a/jni_generator/jni_generator.py
++++ b/jni_generator/jni_generator.py
+@@ -966,7 +966,13 @@ jmethodID g_${JAVA_CLASS}_${METHOD_ID_VAR_NAME} = NULL;"""
+             if native.java_class_name == clazz or (
+                 not native.java_class_name and clazz == self.class_name
+             ):
+-                ret += [self.GetKMethodArrayEntry(native)]
++                entry = self.GetKMethodArrayEntry(native)
++                if (
++                    self.options.native_renderer_only_methods
++                    and native.name not in self.options.native_renderer_only_methods
++                ):
++                    entry = "#if !ENABLE_NATIVE_RENDERER_ONLY\n%s\n#endif" % entry
++                ret += [entry]
+         return "\n".join(ret)
+ 
+     def SubstituteNativeMethods(self, template):
+@@ -1629,6 +1635,7 @@ class Options(object):
+         self.optimize_generation = True
+         self.namespace = ""
+         self.use_base_jni_utils_header = use_base_jni_utils_header
++        self.native_renderer_only_methods = []
+ 
+ 
+ def parse_args(args):
+-- 
+2.39.5
+

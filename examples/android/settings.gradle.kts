@@ -6,5 +6,5 @@ pluginManagement {
     }
 }
 
-rootProject.name = "YewLynxAndroid"
+rootProject.name = "LynxElementBridgeAndroid"
 include(":app")

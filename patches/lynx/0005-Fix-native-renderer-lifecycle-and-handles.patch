@@ -1,0 +1,1185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 19:50:50 +0800
+Subject: [PATCH 5/5] Fix native renderer lifecycle and handles
+
+Make resource handles process-unique until exhaustion, make acquire and
+release transactional, restore page state during teardown, contain callback
+failures, and reject Android engine rebuilds while a native host is active.
+
+---
+diff --git a/core/renderer/dom/element_manager.cc b/core/renderer/dom/element_manager.cc
+index 9349240050b094ee9706f9a674426b8578b05801..ecdc9c676226aff28c670a0c1b53f8db02377a49 100644
+--- a/core/renderer/dom/element_manager.cc
++++ b/core/renderer/dom/element_manager.cc
+@@ -1160,9 +1160,9 @@ void ElementManager::UpdateTouchPseudoStatus(bool value) {
+ void ElementManager::SetConfig(const std::shared_ptr<PageConfig> &config) {
+   config_ = config;
+ 
+-  SetEnableOptPushStyleToBundle(config_->GetEnableOptPushStyleToBundle());
+   // Apply pagewise configs
+   if (config_) {
++    SetEnableOptPushStyleToBundle(config_->GetEnableOptPushStyleToBundle());
+     layout_configs_ = config_->GetLayoutConfigs();
+     painting_context()->SetEnableVsyncAlignedFlush(
+         config_->GetEnableVsyncAlignedFlush());
+diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
+index bd4b3c67a5a4dff34bc3b76ef1b25b14f6e01bf8..e951ea6160a8d159bf46d8db7de6fe4287c071b2 100644
+--- a/core/renderer/native_renderer.cc
++++ b/core/renderer/native_renderer.cc
+@@ -5,6 +5,7 @@
+ #include "core/renderer/native_renderer.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstdint>
+ #include <limits>
+ #include <memory>
+@@ -56,6 +57,7 @@ constexpr Status kInvalidListener =
+ constexpr Status kResourceExhausted =
+     LYNX_NATIVE_RENDERER_STATUS_RESOURCE_EXHAUSTED;
+ constexpr Status kHostError = LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR;
++constexpr Status kInternalError = LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR;
+ #if defined(__cpp_exceptions)
+ constexpr Status kPanic = LYNX_NATIVE_RENDERER_STATUS_PANIC;
+ #endif
+@@ -130,104 +132,80 @@ std::string ToString(LynxNativeUtf8 value) {
+   return std::string(reinterpret_cast<const char*>(value.data), value.len);
+ }
+ 
+-uint16_t NextGeneration(uint16_t generation) {
++uint32_t NextGeneration(uint32_t generation) {
+   ++generation;
+   return generation == 0 ? 1 : generation;
+ }
+ 
+-uint32_t NextGeneration(uint32_t generation) {
+-  ++generation;
+-  return generation == 0 ? 1 : generation;
++uint32_t AllocateResourceHandle() {
++  static std::atomic<uint32_t> next_handle{1};
++  uint32_t handle = next_handle.load(std::memory_order_relaxed);
++  while (handle != 0) {
++    const uint32_t following =
++        handle == std::numeric_limits<uint32_t>::max() ? 0 : handle + 1;
++    if (next_handle.compare_exchange_weak(handle, following,
++                                          std::memory_order_relaxed)) {
++      return handle;
++    }
++  }
++  return 0;
+ }
+ 
+ template <typename T>
+ class ScopedTable {
+  public:
+   Status Insert(T value, uint32_t* handle) {
+-    for (size_t i = 0; i < slots_.size(); ++i) {
+-      if (!slots_[i].value.has_value()) {
+-        slots_[i].value.emplace(std::move(value));
+-        *handle = Encode(i, slots_[i].generation);
+-        return kOk;
+-      }
+-    }
+-    if (slots_.size() >= std::numeric_limits<uint16_t>::max()) {
++    const uint32_t allocated = AllocateResourceHandle();
++    if (allocated == 0) {
+       return kResourceExhausted;
+     }
+-    slots_.emplace_back();
+-    slots_.back().value.emplace(std::move(value));
+-    *handle = Encode(slots_.size() - 1, slots_.back().generation);
++    if (!values_.emplace(allocated, std::move(value)).second) {
++      return kInternalError;
++    }
++    *handle = allocated;
+     return kOk;
+   }
+ 
+   T* Get(uint32_t handle) {
+-    size_t index = 0;
+-    uint16_t generation = 0;
+-    if (!Decode(handle, &index, &generation)) {
+-      return nullptr;
+-    }
+-    Slot& slot = slots_[index];
+-    if (slot.generation != generation || !slot.value.has_value()) {
+-      return nullptr;
+-    }
+-    return &*slot.value;
++    auto iterator = values_.find(handle);
++    return iterator == values_.end() ? nullptr : &iterator->second;
+   }
+ 
+   std::optional<T> Take(uint32_t handle) {
+-    size_t index = 0;
+-    uint16_t generation = 0;
+-    if (!Decode(handle, &index, &generation)) {
+-      return std::nullopt;
+-    }
+-    Slot& slot = slots_[index];
+-    if (slot.generation != generation || !slot.value.has_value()) {
++    auto iterator = values_.find(handle);
++    if (iterator == values_.end()) {
+       return std::nullopt;
+     }
+-    std::optional<T> result(std::move(slot.value));
+-    slot.value.reset();
+-    slot.generation = NextGeneration(slot.generation);
++    std::optional<T> result(std::move(iterator->second));
++    values_.erase(iterator);
+     return result;
+   }
+ 
+   template <typename Predicate>
+   std::vector<T> TakeWhere(Predicate&& predicate) {
+     std::vector<T> result;
+-    for (Slot& slot : slots_) {
+-      if (slot.value.has_value() && predicate(*slot.value)) {
+-        result.emplace_back(std::move(*slot.value));
+-        slot.value.reset();
+-        slot.generation = NextGeneration(slot.generation);
++    for (auto iterator = values_.begin(); iterator != values_.end();) {
++      if (predicate(iterator->second)) {
++        result.emplace_back(std::move(iterator->second));
++        iterator = values_.erase(iterator);
++      } else {
++        ++iterator;
+       }
+     }
+     return result;
+   }
+ 
+-  std::vector<T> TakeAll() {
+-    return TakeWhere([](const T&) { return true; });
+-  }
+-
+- private:
+-  struct Slot {
+-    uint16_t generation{1};
+-    std::optional<T> value;
+-  };
+-
+-  static uint32_t Encode(size_t index, uint16_t generation) {
+-    return (static_cast<uint32_t>(generation) << 16) |
+-           static_cast<uint32_t>(index + 1);
+-  }
+-
+-  bool Decode(uint32_t handle, size_t* index, uint16_t* generation) const {
+-    const uint16_t encoded_index = static_cast<uint16_t>(handle);
+-    *generation = static_cast<uint16_t>(handle >> 16);
+-    if (encoded_index == 0 || *generation == 0) {
+-      return false;
++  template <typename Function>
++  void ForEach(Function&& function) {
++    for (auto& pair : values_) {
++      function(pair.second);
+     }
+-    *index = static_cast<size_t>(encoded_index - 1);
+-    return *index < slots_.size();
+   }
+ 
+-  std::vector<Slot> slots_;
++  void Clear() { values_.clear(); }
++
++ private:
++  std::unordered_map<uint32_t, T> values_;
+ };
+ 
+ class HostRegistry {
+@@ -272,6 +250,16 @@ class HostRegistry {
+            slot->owner == std::this_thread::get_id();
+   }
+ 
++  bool Contains(TemplateAssembler* tasm) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    for (const Slot& slot : slots_) {
++      if (slot.tasm == tasm) {
++        return true;
++      }
++    }
++    return false;
++  }
++
+   Status Reserve(LynxNativeHostHandle handle, TemplateAssembler** tasm) {
+     if (handle == 0) {
+       return kInvalidArgument;
+@@ -292,12 +280,19 @@ class HostRegistry {
+     return kOk;
+   }
+ 
+-  void Release(LynxNativeHostHandle handle) {
+-    std::lock_guard<std::mutex> lock(mutex_);
+-    Slot* slot = GetLocked(handle);
+-    if (slot != nullptr) {
+-      slot->acquired = false;
++  void Release(LynxNativeHostHandle handle) noexcept {
++#if defined(__cpp_exceptions)
++    try {
++#endif
++      std::lock_guard<std::mutex> lock(mutex_);
++      Slot* slot = GetLocked(handle);
++      if (slot != nullptr) {
++        slot->acquired = false;
++      }
++#if defined(__cpp_exceptions)
++    } catch (...) {
+     }
++#endif
+   }
+ 
+  private:
+@@ -366,8 +361,7 @@ class RendererRegistry {
+     return slot == nullptr ? nullptr : slot->session;
+   }
+ 
+-  std::vector<std::shared_ptr<Session>> GetForHost(
+-      LynxNativeHostHandle host) {
++  std::vector<std::shared_ptr<Session>> GetForHost(LynxNativeHostHandle host) {
+     std::lock_guard<std::mutex> lock(mutex_);
+     std::vector<std::shared_ptr<Session>> sessions;
+     for (const Slot& slot : slots_) {
+@@ -437,7 +431,7 @@ class NativeEventListener final : public event::EventListener {
+         session_(std::move(session)),
+         listener_(listener) {}
+ 
+-  void Invoke(fml::RefPtr<event::Event> event) override;
++  void Invoke(fml::RefPtr<event::Event> event) noexcept override;
+   bool Matches(EventListener* listener) override { return listener == this; }
+ 
+  private:
+@@ -458,16 +452,20 @@ class Session final : public std::enable_shared_from_this<Session> {
+     if (tasm_ == nullptr || tasm_->page_proxy() == nullptr) {
+       return kHostError;
+     }
++    manager_ = tasm_->page_proxy()->element_manager().get();
++    if (manager_ == nullptr || manager_->catalyzer() == nullptr ||
++        manager_->root() != nullptr || manager_->GetPageElement() != nullptr ||
++        manager_->catalyzer()->get_root() != nullptr) {
++      return kHostError;
++    }
++
++    previous_page_config_ = tasm_->GetPageConfig();
+     auto config = std::make_shared<PageConfig>();
+     config->SetEnableFiberArch(true);
+     config->SetEnableEventHandleRefactor(true);
++    page_config_replaced_ = true;
+     tasm_->SetPageConfig(config);
+     tasm_->SetPageConfigClient();
+-    manager_ = tasm_->page_proxy()->element_manager().get();
+-    if (manager_ == nullptr || manager_->root() != nullptr ||
+-        manager_->GetPageElement() != nullptr) {
+-      return kHostError;
+-    }
+     owner_runner_ = tasm_->GetLepusTimedTaskRunner();
+     root_ = manager_->CreateFiberPage(base::String("native-renderer"), 0);
+     if (root_ == nullptr) {
+@@ -488,7 +486,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+   LynxNativeRendererHandle renderer_handle() const { return renderer_; }
+ 
+   bool CanReleaseSynchronously() const {
+-    return CheckThread() == kOk && dispatch_depth_ == 0;
++    return CheckThread() == kOk && active_ && dispatch_depth_ == 0;
+   }
+ 
+   Status CheckThread() const {
+@@ -891,7 +889,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+     return kOk;
+   }
+ 
+-  Status BeginRelease() {
++  Status PrepareRelease() {
+     Status status = CheckThread();
+     if (status != kOk) {
+       return status;
+@@ -900,71 +898,90 @@ class Session final : public std::enable_shared_from_this<Session> {
+       return kInvalidSession;
+     }
+ 
++    if (release_options_ == nullptr) {
++      release_options_ = std::make_shared<PipelineOptions>();
++      release_options_->pipeline_origin = "native_renderer_release";
++    }
++    return kOk;
++  }
++
++  void CommitRelease() noexcept {
+     active_ = false;
+     callbacks_ = {};
+     for (auto& pair : listeners_) {
+       pair.second.listener->set_removed(true);
+     }
+-    std::vector<TimerEntry> timers = timers_.TakeAll();
+     if (timer_manager_ != nullptr) {
+-      for (const TimerEntry& timer : timers) {
+-        timer_manager_->StopTask(timer.native_timer);
+-      }
++      timers_.ForEach([this](const TimerEntry& timer) {
++#if defined(__cpp_exceptions)
++        try {
++#endif
++          timer_manager_->StopTask(timer.native_timer);
++#if defined(__cpp_exceptions)
++        } catch (...) {
++        }
++#endif
++      });
+     }
++    timers_.Clear();
+ 
+     if (dispatch_depth_ != 0) {
+       ScheduleCleanup();
+     } else {
+       FinalizeRelease();
+     }
+-    return kOk;
+   }
+ 
+   void DispatchEvent(LynxNativeListenerHandle listener_handle,
+-                     const fml::RefPtr<event::Event>& event) {
+-    if (!active_ || owner_ != std::this_thread::get_id() ||
+-        callbacks_.on_event == nullptr) {
+-      return;
+-    }
+-    auto iterator = listeners_.find(listener_handle);
+-    if (iterator == listeners_.end() || iterator->second.listener->removed()) {
+-      return;
+-    }
+-
+-    const ListenerEntry entry = iterator->second;
+-    const LynxNativeRendererCallbacksV1 callbacks = callbacks_;
+-    std::string event_name = event->type();
+-    std::string content_type;
+-    std::string payload;
++                     const fml::RefPtr<event::Event>& event) noexcept {
+ #if defined(__cpp_exceptions)
+     try {
+ #endif
++      if (!active_ || owner_ != std::this_thread::get_id() ||
++          callbacks_.on_event == nullptr) {
++        return;
++      }
++      auto iterator = listeners_.find(listener_handle);
++      if (iterator == listeners_.end() ||
++          iterator->second.listener->removed()) {
++        return;
++      }
++
++      const ListenerEntry entry = iterator->second;
++      const LynxNativeRendererCallbacksV1 callbacks = callbacks_;
++      std::string event_name = event->type();
++      std::string content_type;
++      std::string payload;
+       if (!event->detail().IsEmpty()) {
+         content_type = "application/json";
+         payload = lepus::lepusValueToJSONString(event->detail());
+       }
++
++      ++dispatch_depth_;
+ #if defined(__cpp_exceptions)
+-    } catch (...) {
+-      return;
+-    }
++      try {
+ #endif
+-
+-    ++dispatch_depth_;
++        callbacks.on_event(
++            callbacks.context, renderer_, entry.listener_handle, entry.callback,
++            {reinterpret_cast<const uint8_t*>(event_name.data()),
++             event_name.size()},
++            {reinterpret_cast<const uint8_t*>(content_type.data()),
++             content_type.size()},
++            {reinterpret_cast<const uint8_t*>(payload.data()), payload.size()});
+ #if defined(__cpp_exceptions)
+-    try {
++      } catch (...) {
++      }
+ #endif
+-      callbacks.on_event(
+-          callbacks.context, renderer_, entry.listener_handle, entry.callback,
+-          {reinterpret_cast<const uint8_t*>(event_name.data()),
+-           event_name.size()},
+-          {reinterpret_cast<const uint8_t*>(content_type.data()),
+-           content_type.size()},
+-          {reinterpret_cast<const uint8_t*>(payload.data()), payload.size()});
++      EndDispatch();
+ #if defined(__cpp_exceptions)
+     } catch (...) {
+     }
+ #endif
+-    --dispatch_depth_;
++  }
++
++  void RollbackInitialize() noexcept {
++    ClearRootState(false);
++    RestorePageConfig();
+   }
+ 
+  private:
+@@ -1032,62 +1049,147 @@ class Session final : public std::enable_shared_from_this<Session> {
+     }
+ 
+     const LynxNativeRendererCallbacksV1 callbacks = callbacks_;
++    Status callback_status = kOk;
+     ++dispatch_depth_;
+ #if defined(__cpp_exceptions)
+     try {
+ #endif
+-      callbacks.on_timer(callbacks.context, renderer_, timer_handle,
+-                         entry.callback);
++      callback_status = callbacks.on_timer(callbacks.context, renderer_,
++                                           timer_handle, entry.callback);
+ #if defined(__cpp_exceptions)
+     } catch (...) {
++      callback_status = kPanic;
+     }
+ #endif
++    if (entry.repeating && callback_status != kOk) {
++      std::optional<TimerEntry> failed_timer = timers_.Take(timer_handle);
++      if (failed_timer.has_value() && timer_manager_ != nullptr) {
++        timer_manager_->StopTask(failed_timer->native_timer);
++      }
++    }
++    EndDispatch();
++  }
++
++  void EndDispatch() noexcept {
+     --dispatch_depth_;
++    if (dispatch_depth_ != 0) {
++      return;
++    }
++    if (active_) {
++      deferred_nodes_.clear();
++    } else if (!cleanup_scheduled_) {
++      FinalizeRelease();
++    }
+   }
+ 
+-  void ScheduleCleanup() {
++  void ScheduleCleanup() noexcept {
+     if (cleanup_scheduled_) {
+       return;
+     }
+     cleanup_scheduled_ = true;
+-    owner_runner_->PostTask([self = shared_from_this()]() {
+-      self->cleanup_scheduled_ = false;
+-      self->deferred_nodes_.clear();
+-      if (!self->active_) {
+-        self->FinalizeRelease();
++#if defined(__cpp_exceptions)
++    try {
++#endif
++      owner_runner_->PostTask([self = shared_from_this()]() {
++        self->cleanup_scheduled_ = false;
++        self->deferred_nodes_.clear();
++        if (!self->active_) {
++          self->FinalizeRelease();
++        }
++      });
++#if defined(__cpp_exceptions)
++    } catch (...) {
++      cleanup_scheduled_ = false;
++    }
++#endif
++  }
++
++  void ClearRootState(bool flush) noexcept {
++    fml::RefPtr<PageElement> page = root_;
++    if (page == nullptr && manager_ != nullptr) {
++      page = manager_->GetPageElementRef();
++    }
++    if (manager_ != nullptr && page != nullptr) {
++      if (manager_->root() == page.get()) {
++        manager_->SetRoot(nullptr);
++      }
++      if (manager_->catalyzer() != nullptr &&
++          manager_->catalyzer()->get_root() == page.get()) {
++        manager_->catalyzer()->set_root(nullptr);
++      }
++      if (manager_->GetPageElement() == page.get()) {
++        manager_->SetFiberPageElement(nullptr);
++        page->set_will_destroy(false);
++      }
++    }
++    nodes_.Clear();
++    root_ = nullptr;
++    deferred_nodes_.clear();
++    page = nullptr;
++
++    if (flush && manager_ != nullptr && release_options_ != nullptr) {
++#if defined(__cpp_exceptions)
++      try {
++#endif
++        manager_->painting_context()->FinishTasmOperation(release_options_);
++#if defined(__cpp_exceptions)
++      } catch (...) {
+       }
+-    });
++      try {
++#endif
++        manager_->painting_context()->FinishLayoutOperation(release_options_);
++#if defined(__cpp_exceptions)
++      } catch (...) {
++      }
++      try {
++#endif
++        manager_->painting_context()->Flush();
++#if defined(__cpp_exceptions)
++      } catch (...) {
++      }
++#endif
++    }
+   }
+ 
+-  void FinalizeRelease() {
++  void RestorePageConfig() noexcept {
++    if (!page_config_replaced_ || tasm_ == nullptr) {
++      return;
++    }
++#if defined(__cpp_exceptions)
++    try {
++#endif
++      tasm_->SetPageConfig(previous_page_config_);
++      tasm_->SetPageConfigClient();
++#if defined(__cpp_exceptions)
++    } catch (...) {
++    }
++#endif
++    page_config_replaced_ = false;
++    previous_page_config_.reset();
++  }
++
++  void FinalizeRelease() noexcept {
+     if (finalized_) {
+       return;
+     }
+     finalized_ = true;
+ 
+-    for (auto& pair : listeners_) {
+-      ListenerEntry& entry = pair.second;
+-      entry.listener->set_removed(true);
+-      entry.node->RemoveEventListener(entry.name, entry.listener);
++#if defined(__cpp_exceptions)
++    try {
++#endif
++      for (auto& pair : listeners_) {
++        ListenerEntry& entry = pair.second;
++        entry.listener->set_removed(true);
++        entry.node->RemoveEventListener(entry.name, entry.listener);
++      }
++#if defined(__cpp_exceptions)
++    } catch (...) {
+     }
++#endif
+     listeners_.clear();
+     timer_manager_.reset();
+-
+-    {
+-      std::vector<fml::RefPtr<Element>> nodes = nodes_.TakeAll();
+-      if (manager_ != nullptr && root_ != nullptr) {
+-        if (manager_->root() == root_.get()) {
+-          manager_->SetRoot(nullptr);
+-        }
+-        if (manager_->GetPageElement() == root_.get()) {
+-          manager_->SetFiberPageElement(nullptr);
+-          root_->set_will_destroy(false);
+-        }
+-      }
+-      root_ = nullptr;
+-      deferred_nodes_.clear();
+-    }
+-
++    ClearRootState(true);
++    RestorePageConfig();
+     Hosts().Release(host_);
+   }
+ 
+@@ -1098,6 +1200,8 @@ class Session final : public std::enable_shared_from_this<Session> {
+   LynxNativeRendererCallbacksV1 callbacks_{};
+   std::thread::id owner_;
+   fml::RefPtr<fml::TaskRunner> owner_runner_;
++  std::shared_ptr<PageConfig> previous_page_config_;
++  std::shared_ptr<PipelineOptions> release_options_;
+   fml::RefPtr<PageElement> root_;
+   LynxNativeNodeHandle root_handle_{0};
+   ScopedTable<fml::RefPtr<Element>> nodes_;
+@@ -1107,16 +1211,46 @@ class Session final : public std::enable_shared_from_this<Session> {
+   std::vector<fml::RefPtr<Element>> deferred_nodes_;
+   size_t dispatch_depth_{0};
+   bool active_{true};
++  bool page_config_replaced_{false};
+   bool cleanup_scheduled_{false};
+   bool finalized_{false};
+ };
+ 
+-void NativeEventListener::Invoke(fml::RefPtr<event::Event> event) {
+-  if (auto session = session_.lock()) {
+-    session->DispatchEvent(listener_, event);
++void NativeEventListener::Invoke(fml::RefPtr<event::Event> event) noexcept {
++#if defined(__cpp_exceptions)
++  try {
++#endif
++    if (auto session = session_.lock()) {
++      session->DispatchEvent(listener_, event);
++    }
++#if defined(__cpp_exceptions)
++  } catch (...) {
+   }
++#endif
+ }
+ 
++class AcquireRollback {
++ public:
++  AcquireRollback(LynxNativeHostHandle host, std::shared_ptr<Session>& session)
++      : host_(host), session_(session) {}
++
++  ~AcquireRollback() {
++    if (!committed_) {
++      if (session_ != nullptr) {
++        session_->RollbackInitialize();
++      }
++      Hosts().Release(host_);
++    }
++  }
++
++  void Commit() { committed_ = true; }
++
++ private:
++  LynxNativeHostHandle host_;
++  std::shared_ptr<Session>& session_;
++  bool committed_{false};
++};
++
+ std::shared_ptr<Session> FindSession(LynxNativeRendererHandle renderer) {
+   return renderer == 0 ? nullptr : Renderers().Get(renderer);
+ }
+@@ -1135,19 +1269,20 @@ Status Acquire(LynxNativeHostHandle host,
+     if (status != kOk) {
+       return status;
+     }
+-    auto session = std::make_shared<Session>(host, tasm, *callbacks);
++    std::shared_ptr<Session> session;
++    AcquireRollback rollback(host, session);
++    session = std::make_shared<Session>(host, tasm, *callbacks);
+     status = session->Initialize();
+     if (status != kOk) {
+-      session->BeginRelease();
+       return status;
+     }
+     LynxNativeRendererHandle handle = Renderers().Insert(host, session);
+     if (handle == 0) {
+-      session->BeginRelease();
+       return kResourceExhausted;
+     }
+     session->set_renderer_handle(handle);
+     *renderer = handle;
++    rollback.Commit();
+     return kOk;
+   });
+ }
+@@ -1162,10 +1297,15 @@ Status Release(LynxNativeRendererHandle renderer) {
+     if (status != kOk) {
+       return status;
+     }
++    status = session->PrepareRelease();
++    if (status != kOk) {
++      return status;
++    }
+     if (!Renderers().Remove(renderer, session)) {
+       return kInvalidSession;
+     }
+-    return session->BeginRelease();
++    session->CommitRelease();
++    return kOk;
+   });
+ }
+ 
+@@ -1333,6 +1473,18 @@ bool UnregisterNativeRendererHost(LynxNativeHostHandle host,
+ #endif
+ }
+ 
++bool HasNativeRendererHost(TemplateAssembler* tasm) {
++#if defined(__cpp_exceptions)
++  try {
++#endif
++    return tasm != nullptr && Hosts().Contains(tasm);
++#if defined(__cpp_exceptions)
++  } catch (...) {
++    return true;
++  }
++#endif
++}
++
+ bool DestroyNativeRendererHost(LynxNativeHostHandle host,
+                                TemplateAssembler* expected_tasm) {
+ #if defined(__cpp_exceptions)
+@@ -1349,10 +1501,15 @@ bool DestroyNativeRendererHost(LynxNativeHostHandle host,
+       }
+     }
+     for (const auto& session : sessions) {
+-      if (!Renderers().Remove(session->renderer_handle(), session) ||
+-          session->BeginRelease() != kOk) {
++      if (session->PrepareRelease() != kOk) {
++        return false;
++      }
++    }
++    for (const auto& session : sessions) {
++      if (!Renderers().Remove(session->renderer_handle(), session)) {
+         return false;
+       }
++      session->CommitRelease();
+     }
+     return Hosts().Unregister(host);
+ #if defined(__cpp_exceptions)
+diff --git a/core/renderer/native_renderer.h b/core/renderer/native_renderer.h
+index 7aecb8f52e07c7ed762d15616d647bf65fbfb08a..f724af93ad545d40e7ed54d2f12907bfc99eaa51 100644
+--- a/core/renderer/native_renderer.h
++++ b/core/renderer/native_renderer.h
+@@ -18,6 +18,7 @@ LynxNativeHostHandle RegisterNativeRendererHost(TemplateAssembler* tasm);
+ bool UnregisterNativeRendererHost(LynxNativeHostHandle host);
+ bool UnregisterNativeRendererHost(LynxNativeHostHandle host,
+                                   TemplateAssembler* expected_tasm);
++bool HasNativeRendererHost(TemplateAssembler* tasm);
+ // Host teardown invalidates the token and any outstanding renderer before
+ // |expected_tasm| is destroyed.
+ bool DestroyNativeRendererHost(LynxNativeHostHandle host,
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index 1074888069c2af1f3f51c1a799989d00aa33b609..a3bf3db5209ec53a6d09d405c0a751212819ecae 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -4,7 +4,9 @@
+ 
+ #include "core/renderer/native_renderer.h"
+ 
++#include <any>
+ #include <memory>
++#include <stdexcept>
+ #include <string>
+ #include <thread>
+ 
+@@ -12,8 +14,8 @@
+ #include "core/event/event.h"
+ #include "core/event/event_dispatcher.h"
+ #include "core/renderer/dom/fiber/raw_text_element.h"
+-#include "core/renderer/dom/testing/fiber_element_test.h"
+ #include "core/renderer/tasm/react/testing/mock_painting_context.h"
++#undef private
+ #include "core/shell/testing/mock_tasm_delegate.h"
+ #include "third_party/googletest/googletest/include/gtest/gtest.h"
+ 
+@@ -33,6 +35,8 @@ struct CallbackState {
+   int timer_count{0};
+   bool release_from_event{false};
+   bool release_from_timer{false};
++  bool throw_from_event{false};
++  LynxNativeRendererStatus timer_status{LYNX_NATIVE_RENDERER_STATUS_OK};
+   LynxNativeRendererStatus release_status{
+       LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR};
+   std::string event_name;
+@@ -56,6 +60,11 @@ LynxNativeRendererStatus OnEvent(void* context,
+   if (state->release_from_event) {
+     state->release_status = state->api->release(renderer);
+   }
++#if defined(__cpp_exceptions)
++  if (state->throw_from_event) {
++    throw std::runtime_error("native event callback failed");
++  }
++#endif
+   return LYNX_NATIVE_RENDERER_STATUS_OK;
+ }
+ 
+@@ -68,7 +77,7 @@ LynxNativeRendererStatus OnTimer(void* context,
+   if (state->release_from_timer) {
+     state->release_status = state->api->release(renderer);
+   }
+-  return LYNX_NATIVE_RENDERER_STATUS_OK;
++  return state->timer_status;
+ }
+ 
+ class RunnerTasmDelegate : public test::MockTasmDelegate {
+@@ -90,8 +99,10 @@ class NativeRendererHarness {
+       : loop_(fml::MessageLoop::EnsureInitializedForCurrentThread()),
+         delegate_(loop_.GetTaskRunner()) {
+     LynxEnvConfig env(1080, 1920, 1.f, 1.f);
+-    auto manager = std::make_unique<ElementManager>(
+-        std::make_unique<MockPaintingContext>(), &delegate_, env);
++    auto painting_context = std::make_unique<MockPaintingContext>();
++    painting_context_ = painting_context.get();
++    auto manager = std::make_unique<ElementManager>(std::move(painting_context),
++                                                    &delegate_, env);
+     manager_ = manager.get();
+     tasm_ = std::make_unique<TemplateAssembler>(delegate_, std::move(manager),
+                                                 &delegate_, 0);
+@@ -103,7 +114,8 @@ class NativeRendererHarness {
+   }
+ 
+   fml::MessageLoop& loop_;
+-  RunnerTasmDelegate delegate_;
++  ::testing::NiceMock<RunnerTasmDelegate> delegate_;
++  MockPaintingContext* painting_context_{nullptr};
+   ElementManager* manager_{nullptr};
+   std::unique_ptr<TemplateAssembler> tasm_;
+ };
+@@ -117,12 +129,13 @@ TEST(NativeRendererApiTest, NegotiatesOnlyV1) {
+   EXPECT_EQ(api->struct_size, sizeof(LynxNativeRendererApiV1));
+ }
+ 
+-TEST_P(FiberElementTest, NativeRendererMutatesFiberTreeThroughFunctionTable) {
++TEST(NativeRendererApiTest, MutatesFiberTreeThroughFunctionTable) {
++  NativeRendererHarness harness;
+   const auto* api = lynx_native_renderer_get_api(1);
+   ASSERT_NE(api, nullptr);
+   CallbackState callback_state{api};
+   LynxNativeRendererCallbacksV1 callbacks{&callback_state, &OnEvent, &OnTimer};
+-  LynxNativeHostHandle host = RegisterNativeRendererHost(tasm.get());
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
+   ASSERT_NE(host, 0u);
+ 
+   LynxNativeRendererHandle renderer = 0;
+@@ -162,9 +175,9 @@ TEST_P(FiberElementTest, NativeRendererMutatesFiberTreeThroughFunctionTable) {
+             LYNX_NATIVE_RENDERER_STATUS_OK);
+   ASSERT_EQ(api->insert_before(renderer, first, raw_text, 0),
+             LYNX_NATIVE_RENDERER_STATUS_OK);
+-  ASSERT_EQ(manager->root()->GetChildCount(), 2u);
+-  EXPECT_EQ(manager->root()->GetChildAt(0)->GetTag().str(), "text");
+-  Element* first_element = manager->root()->GetChildAt(1);
++  ASSERT_EQ(harness.manager_->root()->GetChildCount(), 2u);
++  EXPECT_EQ(harness.manager_->root()->GetChildAt(0)->GetTag().str(), "text");
++  Element* first_element = harness.manager_->root()->GetChildAt(1);
+   EXPECT_EQ(first_element->GetIdSelector().str(), "hero");
+   ASSERT_EQ(first_element->classes().size(), 2u);
+   EXPECT_EQ(first_element->GetRawInlineStyles().str(), "width:10px");
+@@ -174,7 +187,11 @@ TEST_P(FiberElementTest, NativeRendererMutatesFiberTreeThroughFunctionTable) {
+                 .StdString(),
+             "42");
+   auto* raw = static_cast<RawTextElement*>(first_element->GetChildAt(0));
+-  EXPECT_EQ(raw->content().str(), "after");
++  EXPECT_EQ(raw->data_model()
++                ->attributes()
++                .at(base::String(RawTextElement::kTextAttr))
++                .StdString(),
++            "after");
+ 
+   EXPECT_EQ(api->destroy_node(renderer, first),
+             LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
+@@ -297,6 +314,205 @@ TEST(NativeRendererApiTest, TimerCancellationAndReleaseAreReentrantSafe) {
+   EXPECT_TRUE(UnregisterNativeRendererHost(host));
+ }
+ 
++TEST(NativeRendererApiTest, ResourceHandlesDoNotAliasAcrossRenderers) {
++  NativeRendererHarness first_harness;
++  NativeRendererHarness second_harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState first_state{api};
++  CallbackState second_state{api};
++  LynxNativeRendererCallbacksV1 first_callbacks{&first_state, &OnEvent,
++                                                &OnTimer};
++  LynxNativeRendererCallbacksV1 second_callbacks{&second_state, &OnEvent,
++                                                 &OnTimer};
++  LynxNativeHostHandle first_host =
++      RegisterNativeRendererHost(first_harness.tasm_.get());
++  LynxNativeHostHandle second_host =
++      RegisterNativeRendererHost(second_harness.tasm_.get());
++  ASSERT_NE(first_host, 0u);
++  ASSERT_NE(second_host, 0u);
++
++  LynxNativeRendererHandle first_renderer = 0;
++  LynxNativeRendererHandle second_renderer = 0;
++  ASSERT_EQ(api->acquire(first_host, &first_callbacks, &first_renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->acquire(second_host, &second_callbacks, &second_renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle first_root = 0;
++  LynxNativeNodeHandle second_root = 0;
++  ASSERT_EQ(api->get_root(first_renderer, &first_root),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->get_root(second_renderer, &second_root),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_NE(first_root, second_root);
++  EXPECT_EQ(api->set_attribute(second_renderer, first_root, Utf8("id"),
++                               Utf8("foreign")),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
++
++  LynxNativeTimerHandle first_timer = 0;
++  LynxNativeTimerHandle second_timer = 0;
++  ASSERT_EQ(api->create_timer(first_renderer, 60000, 0, 1, &first_timer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->create_timer(second_renderer, 60000, 0, 2, &second_timer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_NE(first_timer, second_timer);
++  EXPECT_EQ(api->cancel_timer(second_renderer, first_timer),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
++  EXPECT_EQ(api->cancel_timer(first_renderer, first_timer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->cancel_timer(second_renderer, second_timer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  EXPECT_EQ(api->release(first_renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->release(second_renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(first_host));
++  EXPECT_TRUE(UnregisterNativeRendererHost(second_host));
++}
++
++TEST(NativeRendererApiTest, NodeHandlesDoNotAliasAfterGenerationWrap) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  LynxNativeNodeHandle stale = 0;
++  ASSERT_EQ(api->create_element(renderer, Utf8("view"), &stale),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->destroy_node(renderer, stale), LYNX_NATIVE_RENDERER_STATUS_OK);
++  for (size_t i = 0; i < 65534; ++i) {
++    LynxNativeNodeHandle node = 0;
++    ASSERT_EQ(api->create_element(renderer, Utf8("view"), &node),
++              LYNX_NATIVE_RENDERER_STATUS_OK);
++    ASSERT_EQ(api->destroy_node(renderer, node),
++              LYNX_NATIVE_RENDERER_STATUS_OK);
++  }
++  LynxNativeNodeHandle current = 0;
++  ASSERT_EQ(api->create_element(renderer, Utf8("view"), &current),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_NE(stale, current);
++  EXPECT_EQ(api->set_attribute(renderer, stale, Utf8("id"), Utf8("stale")),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
++  EXPECT_EQ(api->destroy_node(renderer, current),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest, ReleaseClearsRootsFlushesAndAllowsReacquire) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_NE(harness.manager_->root(), nullptr);
++  ASSERT_NE(harness.manager_->GetPageElement(), nullptr);
++  ASSERT_NE(harness.manager_->catalyzer()->get_root(), nullptr);
++  harness.painting_context_->ResetFlushFlag();
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(harness.manager_->root(), nullptr);
++  EXPECT_EQ(harness.manager_->GetPageElement(), nullptr);
++  EXPECT_EQ(harness.manager_->catalyzer()->get_root(), nullptr);
++  EXPECT_TRUE(harness.painting_context_->HasFlushed());
++
++  LynxNativeRendererHandle reacquired = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &reacquired),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->release(reacquired), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest,
++     FailedAcquirePreservesPageConfigAndReleasesHostReservation) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  auto original_config = harness.tasm_->GetPageConfig();
++  ASSERT_NE(harness.manager_->CreateFiberPage(base::String("existing"), 0),
++            nullptr);
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++
++  LynxNativeRendererHandle renderer = 0;
++  EXPECT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR);
++  EXPECT_EQ(renderer, 0u);
++  EXPECT_EQ(harness.tasm_->GetPageConfig(), original_config);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest, EventCallbackExceptionDoesNotEscapeDispatcher) {
++#if defined(__cpp_exceptions)
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  state.throw_from_event = true;
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle root = 0;
++  ASSERT_EQ(api->get_root(renderer, &root), LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->add_event_listener(renderer, root, 9, 10, Utf8("tap")),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  auto event = fml::MakeRefCounted<event::Event>(
++      "tap", event::Event::EventType::kCustomEvent, event::Event::Capture::kNo,
++      event::Event::Bubbles::kNo, event::Event::Cancelable::kNo,
++      event::Event::ComposedMode::kScoped);
++
++  EXPECT_NO_THROW(
++      event::EventDispatcher::DispatchEvent(*harness.manager_->root(), event));
++  EXPECT_EQ(state.event_count, 1);
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++#endif
++}
++
++TEST(NativeRendererApiTest, RepeatingTimerStopsAfterCallbackFailure) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  state.timer_status = LYNX_NATIVE_RENDERER_STATUS_PANIC;
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeTimerHandle timer = 0;
++  ASSERT_EQ(api->create_timer(renderer, 0, 1, 31, &timer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  harness.loop_.RunExpiredTasksNow();
++  harness.loop_.RunExpiredTasksNow();
++  EXPECT_EQ(state.timer_count, 1);
++  EXPECT_EQ(api->cancel_timer(renderer, timer),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest, RegisteredHostBlocksNativeEngineRebuild) {
++  NativeRendererHarness harness;
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  EXPECT_TRUE(HasNativeRendererHost(harness.tasm_.get()));
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++  EXPECT_FALSE(HasNativeRendererHost(harness.tasm_.get()));
++}
++
+ TEST(NativeRendererApiTest, HostDestructionInvalidatesOutstandingRenderer) {
+   NativeRendererHarness harness;
+   const auto* api = lynx_native_renderer_get_api(1);
+diff --git a/core/renderer/template_assembler.cc b/core/renderer/template_assembler.cc
+index a62c6bf423339a617fab0551d6d415ac99572b82..083724372e5f414d7b6e87a2f7e1620dbc9f18dc 100644
+--- a/core/renderer/template_assembler.cc
++++ b/core/renderer/template_assembler.cc
+@@ -1581,9 +1581,8 @@ bool TemplateAssembler::BuildComponentEntryInternal(
+ 
+ void TemplateAssembler::SetPageConfig(
+     const std::shared_ptr<PageConfig>& config) {
++  page_config_ = config;
+   if (config) {
+-    page_config_ = config;
+-
+     page_config_->DecodePageConfigFromJsonStringWhileUndefined(
+         platform_config_json_string_);
+     // pass page config to android/iOS side after VM->Execute()
+diff --git a/core/renderer/template_assembler.h b/core/renderer/template_assembler.h
+index 356be72cd0f3b5f619a6204314d2b6ee69255db8..13fcb9202d3e67518fa8360140d06609259c6097 100644
+--- a/core/renderer/template_assembler.h
++++ b/core/renderer/template_assembler.h
+@@ -544,7 +544,8 @@ class TemplateAssembler final : public TemplateEntryHolder,
+     if (page_proxy_.element_manager()) {
+       // If IsFragmentLayerRenderModeOn() == true, we should enable new fixed
+       // default.
+-      if (page_proxy_.element_manager()->IsFragmentLayerRenderModeOn()) {
++      if (page_config_ &&
++          page_proxy_.element_manager()->IsFragmentLayerRenderModeOn()) {
+         page_config_->SetEnableFixedNew(true);
+       }
+ 
+diff --git a/core/shell/android/lynx_template_render_android.cc b/core/shell/android/lynx_template_render_android.cc
+index 2bf4bde233026a17324263d7b77f6f12bfb53995..358937a7a60e22e75e06df5940988212f67bf2a6 100644
+--- a/core/shell/android/lynx_template_render_android.cc
++++ b/core/shell/android/lynx_template_render_android.cc
+@@ -410,6 +410,13 @@ void RebuildLynxEngine(JNIEnv* env, jclass jcaller, jlong ptr, jlong lifecycle,
+   if (!AtomicLifecycle::TryLock(lifecycle_ptr)) {
+     return;
+   }
++  auto* shell = reinterpret_cast<LynxShell*>(ptr);
++  if (shell == nullptr ||
++      (shell->CanRunOnTasmThreadNow() &&
++       lynx::tasm::HasNativeRendererHost(shell->GetTasm()))) {
++    AtomicLifecycle::TryFree(lifecycle_ptr);
++    return;
++  }
+   auto* ui_delegate =
+       reinterpret_cast<lynx::tasm::UIDelegate*>(ui_delegate_ptr);
+   std::unique_ptr<lynx::pub::LynxNativeModuleManager> native_module_manager;
+@@ -420,7 +427,7 @@ void RebuildLynxEngine(JNIEnv* env, jclass jcaller, jlong ptr, jlong lifecycle,
+         std::make_shared<lynx::runtime::js::ModuleFactoryAndroid>(
+             env, module_factory));
+   }
+-  reinterpret_cast<LynxShell*>(ptr)->RebuildLynxEngine(
++  shell->RebuildLynxEngine(
+       ui_delegate->CreateLayoutContext(), ui_delegate->CreatePaintingContext(),
+       std::make_unique<lynx::shell::TasmPlatformInvokerAndroid>(
+           env, tasm_platform_invoker, ui_delegate),
+diff --git a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..7cb4dee723aee18001232e17e1fb77041f1344b1
+--- /dev/null
++++ b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Lynx Authors. All rights reserved.
++// Licensed under the Apache License Version 2.0 that can be found in the
++// LICENSE file in the root directory of this source tree.
++
++package com.lynx.tasm;
++
++import static org.junit.Assert.fail;
++
++import org.junit.Test;
++
++public class LynxTemplateRenderNativeRendererTest {
++  @Test
++  public void engineRebuildRejectsRegisteredNativeRendererHost() {
++    try {
++      LynxTemplateRender.checkNativeRendererHostForEngineRebuild(1);
++      fail("Expected rebuild guard to reject a registered native renderer host");
++    } catch (IllegalStateException expected) {
++      // Expected.
++    }
++  }
++
++  @Test
++  public void engineRebuildAllowsMissingNativeRendererHost() {
++    LynxTemplateRender.checkNativeRendererHostForEngineRebuild(0);
++  }
++}
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index dcf15eeabb4ae38c12e698d023334d5a451ba89d..35250d345af4a02bb61d4e52a3206899e614d83e 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -3266,6 +3266,13 @@ public class LynxTemplateRender
+     return false;
+   }
+ 
++  static void checkNativeRendererHostForEngineRebuild(long nativeRendererHost) {
++    if (nativeRendererHost != 0) {
++      throw new IllegalStateException(
++          "Native renderer host must be unregistered before rebuilding the Lynx engine");
++    }
++  }
++
+   private synchronized void fallbackNewEngine(boolean enable_async) {
+     if (!UIThreadUtils.isOnUiThread()) {
+       LLog.e(TAG, "fallbackNewEngine should be called on ui thread, url: " + mUrl);
+@@ -3274,6 +3281,7 @@ public class LynxTemplateRender
+     if (mHasDestroy) {
+       return;
+     }
++    checkNativeRendererHostForEngineRebuild(mNativeRendererHost);
+     onTraceEventBegin(TraceEventDef.TEMPLATE_RENDER_FALLBACK_NEW_ENGINE);
+     LLog.i(TAG, "call fallbackNewEngine enable_async:" + enable_async);
+ 

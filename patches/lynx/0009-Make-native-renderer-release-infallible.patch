@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 03:00:00 +0800
+Subject: [PATCH 9/15] Make native renderer release infallible
+
+Prepare release pipeline options while acquire is still protected by
+AcquireRollback, before the renderer handle is published. Release preparation
+then only validates thread and active state and cannot fail from allocation.
+
+Verify only through the production function table that wrong-thread release is
+non-consuming, owner-thread release cleans up for reacquisition, and duplicate
+release is rejected.
+
+---
+ core/renderer/native_renderer.cc          | 13 +++------
+ core/renderer/native_renderer_unittest.cc | 43 +++++++++++++++++++++++++++++
+ 2 files changed, 48 insertions(+), 8 deletions(-)
+
+diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
+index ebe0b38..903756a 100644
+--- a/core/renderer/native_renderer.cc
++++ b/core/renderer/native_renderer.cc
+@@ -459,6 +459,8 @@ class Session final : public std::enable_shared_from_this<Session> {
+       return kHostError;
+     }
+ 
++    release_options_ = std::make_shared<PipelineOptions>();
++    release_options_->pipeline_origin = "native_renderer_release";
+     previous_page_config_ = tasm_->GetPageConfig();
+     auto config = std::make_shared<PageConfig>();
+     config->SetEnableFiberArch(true);
+@@ -489,11 +491,11 @@ class Session final : public std::enable_shared_from_this<Session> {
+ 
+   LynxNativeRendererHandle renderer_handle() const { return renderer_; }
+ 
+-  bool CanReleaseSynchronously() const {
++  bool CanReleaseSynchronously() const noexcept {
+     return CheckThread() == kOk && active_ && dispatch_depth_ == 0;
+   }
+ 
+-  Status CheckThread() const {
++  Status CheckThread() const noexcept {
+     return owner_ == std::this_thread::get_id() ? kOk : kWrongThread;
+   }
+ 
+@@ -893,7 +895,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+     return kOk;
+   }
+ 
+-  Status PrepareRelease() {
++  Status PrepareRelease() const noexcept {
+     Status status = CheckThread();
+     if (status != kOk) {
+       return status;
+@@ -901,11 +903,6 @@ class Session final : public std::enable_shared_from_this<Session> {
+     if (!active_) {
+       return kInvalidSession;
+     }
+-
+-    if (release_options_ == nullptr) {
+-      release_options_ = std::make_shared<PipelineOptions>();
+-      release_options_->pipeline_origin = "native_renderer_release";
+-    }
+     return kOk;
+   }
+ 
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index 3bc01bb..1485402 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -687,6 +687,49 @@ TEST(NativeRendererApiTest, ReleaseClearsRootsFlushesAndAllowsReacquire) {
+   EXPECT_TRUE(UnregisterNativeRendererHost(host));
+ }
+ 
++TEST(NativeRendererApiTest,
++     WrongThreadReleaseIsNonConsumingAndOwnerReleaseCleansExactlyOnce) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle root = 0;
++  ASSERT_EQ(api->get_root(renderer, &root), LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  LynxNativeRendererStatus wrong_thread_status =
++      LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR;
++  std::thread other_thread(
++      [&]() { wrong_thread_status = api->release(renderer); });
++  other_thread.join();
++  EXPECT_EQ(wrong_thread_status, LYNX_NATIVE_RENDERER_STATUS_WRONG_THREAD);
++  LynxNativeNodeHandle retained_root = 0;
++  EXPECT_EQ(api->get_root(renderer, &retained_root),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(retained_root, root);
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION);
++
++  LynxNativeRendererHandle reacquired = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &reacquired),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_NE(reacquired, renderer);
++  LynxNativeNodeHandle reacquired_root = 0;
++  EXPECT_EQ(api->get_root(reacquired, &reacquired_root),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->release(reacquired), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->release(reacquired),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_SESSION);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++  EXPECT_FALSE(UnregisterNativeRendererHost(host));
++}
++
+ TEST(NativeRendererApiTest,
+      FailedAcquirePreservesPageConfigAndReleasesHostReservation) {
+   NativeRendererHarness harness;
+-- 
+2.39.5

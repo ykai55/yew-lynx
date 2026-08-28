@@ -4,10 +4,9 @@
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
       <trusted-artifacts>
-         <trust group="org.lynxsdk.lynx" name="lynx" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
+         <trust group="org.lynxsdk.lynx" name="lynx-native-renderer" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
          <trust group="org.lynxsdk.lynx" name="lynx-base" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
          <trust group="org.lynxsdk.lynx" name="lynx-gfx" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
-         <trust group="org.lynxsdk.lynx" name="lynx-jssdk" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
          <trust group="org.lynxsdk.lynx" name="lynx-trace" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
          <trust group="org.lynxsdk.lynx" name="service-api" version="0.0.1-0df14207" reason="Built locally from the pinned public Lynx submodule"/>
       </trusted-artifacts>

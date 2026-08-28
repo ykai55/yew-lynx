@@ -1,4 +1,4 @@
-//! Counter application backed by the Yew-Lynx runtime.
+//! Counter application backed by the Yew-Lynx native renderer runtime.
 
 mod app;
 #[path = "yew-lynx-runtime.rs"]

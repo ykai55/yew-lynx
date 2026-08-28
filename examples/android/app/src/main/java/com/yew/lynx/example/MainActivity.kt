@@ -5,66 +5,150 @@ import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.ViewGroup
-import com.lynx.tasm.LynxError
+import com.lynx.elementbridge.LynxNativeRendererHost
 import com.lynx.tasm.LynxView
 import com.lynx.tasm.LynxViewBuilder
-import com.lynx.tasm.LynxViewClient
 import com.lynx.tasm.ThreadStrategyForRendering
-import com.yew.lynx.YewLynxModule
 
 class MainActivity : Activity() {
     private var lynxView: LynxView? = null
+    private var nativeRendererHost: LynxNativeRendererHost? = null
+    private var nativeHostToken = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "MainActivity onCreate")
 
-        val template = assets.open(TEMPLATE_ASSET).use { it.readBytes() }
-        val builder = LynxViewBuilder().apply {
-            setEnableJSRuntime(false)
-            setEnableMTSModule(true)
-            setThreadStrategyForRendering(ThreadStrategyForRendering.ALL_ON_UI)
-            registerModule(YewLynxModule.NAME, YewLynxModule::class.java)
-        }
-        val view = builder.build(this).apply {
-            setBackgroundColor(Color.rgb(245, 242, 234))
-            addLynxViewClient(object : LynxViewClient() {
-                override fun onLoadSuccess() {
-                    Log.i(TAG, "Lynx template loaded")
-                }
+        var view: LynxView? = null
+        var rendererHost: LynxNativeRendererHost? = null
+        var hostToken = 0L
+        var hostRegistered = false
+        var rustMounted = false
+        try {
+            val builder = LynxViewBuilder().apply {
+                setEnableJSRuntime(false)
+                setThreadStrategyForRendering(ThreadStrategyForRendering.ALL_ON_UI)
+            }
+            view = builder.build(this)
+            view.setBackgroundColor(Color.rgb(245, 242, 234))
+            hostToken = view.registerNativeRendererHost()
+            hostRegistered = true
+            rendererHost = LynxNativeRendererHost()
+            setContentView(
+                view,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            val backend = rendererHost.mount(hostToken)
+            rustMounted = true
+            lynxView = view
+            nativeRendererHost = rendererHost
+            nativeHostToken = hostToken
+            Log.i(TAG, "Native renderer backend=$backend")
+            Log.i(
+                TAG,
+                "Native renderer diagnostics mode=native bts_runtime=false mts_context=false template=false",
+            )
+        } catch (error: Throwable) {
+            lynxView = null
+            nativeRendererHost = null
+            nativeHostToken = 0
 
-                override fun onFirstScreen() {
-                    Log.i(TAG, "Lynx first screen rendered")
+            if (rustMounted) {
+                try {
+                    rendererHost?.destroy()
+                } catch (cleanupError: Throwable) {
+                    error.addSuppressed(cleanupError)
+                    try {
+                        rendererHost?.abandon()
+                    } catch (abandonError: Throwable) {
+                        cleanupError.addSuppressed(abandonError)
+                    }
                 }
-
-                override fun onReceivedError(error: LynxError) {
-                    Log.e(
-                        TAG,
-                        "Lynx error ${error.subCode}: ${error.summaryMessage}",
-                    )
+            }
+            if (hostRegistered) {
+                try {
+                    view?.unregisterNativeRendererHost(hostToken)
+                } catch (cleanupError: Throwable) {
+                    error.addSuppressed(cleanupError)
                 }
-            })
+            }
+            try {
+                view?.destroy()
+            } catch (cleanupError: Throwable) {
+                error.addSuppressed(cleanupError)
+            }
+            throw error
         }
-        lynxView = view
-        setContentView(
-            view,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            ),
-        )
-        view.renderTemplateWithBaseUrl(template, emptyMap(), "asset:///$TEMPLATE_ASSET")
     }
 
     override fun onDestroy() {
-        lynxView?.destroy()
+        val view = lynxView
+        val rendererHost = nativeRendererHost
+        val hostToken = nativeHostToken
         lynxView = null
-        super.onDestroy()
+        nativeRendererHost = null
+        nativeHostToken = 0
+
+        var failure: Throwable? = null
+        fun recordFailure(error: Throwable) {
+            val current = failure
+            if (current == null) {
+                failure = error
+            } else if (current !== error) {
+                current.addSuppressed(error)
+            }
+        }
+
+        try {
+            rendererHost?.destroy()
+        } catch (error: Throwable) {
+            recordFailure(error)
+            try {
+                rendererHost?.abandon()
+            } catch (cleanupError: Throwable) {
+                error.addSuppressed(cleanupError)
+            }
+        }
+        try {
+            if (view != null && hostToken != 0L) {
+                view.unregisterNativeRendererHost(hostToken)
+            }
+        } catch (error: Throwable) {
+            recordFailure(error)
+        }
+        try {
+            view?.destroy()
+        } catch (error: Throwable) {
+            recordFailure(error)
+        }
+        try {
+            super.onDestroy()
+        } catch (error: Throwable) {
+            recordFailure(error)
+        }
+
+        val lifecycleFailure = failure
+        if (lifecycleFailure != null) {
+            Log.e(TAG, "MainActivity onDestroy failed", lifecycleFailure)
+            throw lifecycleFailure
+        }
         Log.i(TAG, "MainActivity onDestroy complete")
     }
 
+    override fun onResume() {
+        super.onResume()
+        lynxView?.onEnterForeground()
+    }
+
+    override fun onPause() {
+        lynxView?.onEnterBackground()
+        super.onPause()
+    }
+
     private companion object {
-        const val TAG = "YewLynxExample"
-        const val TEMPLATE_ASSET = "yew-lynx-counter.lynx.bundle"
+        const val TAG = "LynxElementBridge"
     }
 }

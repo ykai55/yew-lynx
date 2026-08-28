@@ -1,8 +1,8 @@
 /.deps/
-/adapters/mts/dist/
-/adapters/mts/node_modules/
 /examples/android/.gradle/
 /examples/android/build/
 /examples/android/app/.cxx/
 /examples/android/app/build/
 /target/
+__pycache__/
+*.py[cod]

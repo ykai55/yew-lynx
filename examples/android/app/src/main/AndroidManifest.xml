@@ -2,10 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.yew.lynx.example">
     <application
-        android:name=".YewLynxApplication"
+        android:name=".LynxElementBridgeApplication"
         android:allowBackup="false"
         android:hardwareAccelerated="true"
-        android:label="Yew Lynx Counter"
+        android:label="Lynx Element Bridge Counter"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity

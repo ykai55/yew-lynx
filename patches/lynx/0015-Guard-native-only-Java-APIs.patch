@@ -1,0 +1,495 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 19:00:00 +0800
+Subject: [PATCH 15/15] Guard native-only Java APIs
+
+Register renderer and shell JNI methods supported by the native-only product.
+Reject runtime, template, SSR, and engine-reuse APIs in Java before their
+intentionally omitted JNI methods can be reached. Resolve the event-thread
+query directly from the native-only thread strategy and cover the public API
+boundary on Android.
+---
+ .../android/lynx_template_render_android.cc   |  8 +--
+ .../LynxTemplateRenderNativeRendererTest.java | 44 +++++++++++++++
+ .../src/main/java/com/lynx/tasm/LynxEnv.java  |  4 ++
+ .../com/lynx/tasm/LynxTemplateRender.java     | 67 +++++++++++++++++++++-
+ .../lynx_android/src/main/jni/jni_configs.yml |  7 +++
+ 5 files changed, 125 insertions(+), 5 deletions(-)
+
+diff --git a/core/shell/android/lynx_template_render_android.cc b/core/shell/android/lynx_template_render_android.cc
+index 7a07c51..ea5f25e 100644
+--- a/core/shell/android/lynx_template_render_android.cc
++++ b/core/shell/android/lynx_template_render_android.cc
+@@ -1718,9 +1718,9 @@ void SetContextHasAttached(JNIEnv* env, jobject jcaller, jlong ptr,
+   AtomicLifecycle::TryFree(lifecycle_ptr);
+ }
+ 
+-void ReattachLynxEngineWrapper(JNIEnv* env, jobject jcaller, jlong ptr,
+-                               jlong lifecycle, jlong engine_ptr,
+-                               jlong proxy_ptr) {
++void ReattachLynxEngineWrapperInternal(JNIEnv* env, jobject jcaller, jlong ptr,
++                                       jlong lifecycle, jlong engine_ptr,
++                                       jlong proxy_ptr) {
+   AtomicLifecycle* lifecycle_ptr =
+       reinterpret_cast<AtomicLifecycle*>(lifecycle);
+   if (!AtomicLifecycle::TryLock(lifecycle_ptr)) {
+@@ -1738,8 +1738,8 @@ void ReattachLynxEngineWrapper(JNIEnv* env, jobject jcaller, jlong ptr,
+   AtomicLifecycle::TryFree(lifecycle_ptr);
+ }
+ 
+-void DetachLynxEngineWrapper(JNIEnv* env, jobject jcaller, jlong ptr,
+-                             jlong lifecycle) {
++void DetachLynxEngineWrapperInternal(JNIEnv* env, jobject jcaller, jlong ptr,
++                                     jlong lifecycle) {
+   AtomicLifecycle* lifecycle_ptr =
+       reinterpret_cast<AtomicLifecycle*>(lifecycle);
+   if (!AtomicLifecycle::TryLock(lifecycle_ptr)) {
+diff --git a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+index 093afe2..5d3e7bd 100644
+--- a/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
++++ b/platform/android/lynx_android/src/android_test/java/com/lynx/tasm/LynxTemplateRenderNativeRendererTest.java
+@@ -5,6 +5,7 @@
+ package com.lynx.tasm;
+ 
+ import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
+ import static org.junit.Assert.fail;
+ import static org.junit.Assume.assumeTrue;
+ 
+@@ -93,6 +94,40 @@ public class LynxTemplateRenderNativeRendererTest {
+     });
+   }
+ 
++  @Test
++  public void nativeRendererOnlyPublicApisDoNotCallOmittedJniMethods() throws Exception {
++    assumeTrue(BuildConfig.enable_native_renderer_only);
++    Context context =
++        InstrumentationRegistry.getInstrumentation().getTargetContext().getApplicationContext();
++    LynxEnv.inst().init((Application) context, System::loadLibrary, null, null, null);
++    assertUnsupported(() -> LynxEnv.inst().getSSRApiVersion());
++
++    Field renderField = LynxView.class.getDeclaredField("mLynxTemplateRender");
++    renderField.setAccessible(true);
++    InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
++      LynxView view =
++          new LynxViewBuilder()
++              .setEnableJSRuntime(false)
++              .setThreadStrategyForRendering(ThreadStrategyForRendering.ALL_ON_UI)
++              .build(context);
++      try {
++        LynxTemplateRender render;
++        try {
++          render = (LynxTemplateRender) renderField.get(view);
++        } catch (IllegalAccessException error) {
++          throw new AssertionError(error);
++        }
++        assertTrue(render.shouldSendEventToMainThread());
++        view.setLongTaskMonitorEnabled(LynxBooleanOption.TRUE);
++        assertNotNull(view.getAllTimingInfo());
++        assertUnsupported(view::startLynxRuntime);
++        assertUnsupported(() -> render.getAllJsSource());
++      } finally {
++        view.destroy();
++      }
++    });
++  }
++
+   private static void assertNativeRendererOnlyConfigurationRejected(boolean enableJSRuntime,
+       boolean hasBackgroundRuntime, boolean hasViewGroup, boolean hasLogicExecutor) {
+     try {
+@@ -103,4 +138,13 @@ public class LynxTemplateRenderNativeRendererTest {
+       // Expected.
+     }
+   }
++
++  private static void assertUnsupported(Runnable call) {
++    try {
++      call.run();
++      fail("Expected native-renderer-only API to reject runtime or template behavior");
++    } catch (UnsupportedOperationException expected) {
++      // Expected.
++    }
++  }
+ }
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+index 1ea35d9..d3b86b7 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+@@ -1209,6 +1209,10 @@ public class LynxEnv {
+       LLog.e(TAG, "The local library is not loaded, getting the ssr api version failed.");
+       return "";
+     }
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "SSR is unavailable in native-renderer-only builds");
++    }
+     return nativeGetSSRApiVersion();
+   }
+ 
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index 859a0ee..1ce9d5c 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -733,6 +733,9 @@ public class LynxTemplateRender
+   }
+ 
+   public boolean shouldSendEventToMainThread() {
++    if (BuildConfig.enable_native_renderer_only) {
++      return mThreadStrategyForRendering == ThreadStrategyForRendering.ALL_ON_UI;
++    }
+     return checkIfEnvPrepared() && mNativePtr != 0
+         && nativeShouldSendEventToMainThread(mNativePtr, mNativeLifecycle);
+   }
+@@ -1300,6 +1303,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void sendGlobalEvent(String name, JavaOnlyArray params) {
++    requireRuntimeOrTemplateSupport("Global events");
+     // When SSR hydrate status is pending、beginning or failed, a global event will
+     // be sent to SSR
+     // runtime to be consumed. But this global event will also be cached so that
+@@ -1332,6 +1336,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void sendGlobalEventToLepus(String name, List<Object> params) {
++    requireRuntimeOrTemplateSupport("Lepus global events");
+     if (checkIfEnvPrepared() && mNativePtr != 0) {
+       ByteBuffer buffer = LepusBuffer.INSTANCE.encodeMessage(params);
+       nativeSendGlobalEventToLepus(
+@@ -1342,6 +1347,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void triggerEventBus(String name, List<Object> params) {
++    requireRuntimeOrTemplateSupport("Runtime event bus");
+     if (checkIfEnvPrepared() && mNativePtr != 0) {
+       ByteBuffer buffer = LepusBuffer.INSTANCE.encodeMessage(params);
+       nativeTriggerEventBus(
+@@ -1352,6 +1358,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void updateGlobalProps(TemplateData props) {
++    requireRuntimeOrTemplateSupport("Global template properties");
+     LLog.d(TAG, "updateGlobalProps with url: " + getTemplateUrl());
+     onTraceEventBegin(TraceEventDef.TEMPLATE_RENDER_SET_GLOBAL_PROPS);
+     if (checkIfEnvPrepared() && (mNativePtr != 0) && props != null) {
+@@ -1362,6 +1369,7 @@ public class LynxTemplateRender
+   }
+ 
+   private void renderSSRUrlInternal(@NonNull String templateUrl, InnerSSRLoadedCallback callback) {
++    requireRuntimeOrTemplateSupport("SSR");
+     if (!checkIfEnvPrepared()) {
+       onErrorOccurred(LynxSubErrorCode.E_APP_BUNDLE_LOAD_ENV_NOT_READY,
+           "LynxEnv has not been prepared successfully!");
+@@ -1872,6 +1880,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void renderSSR(final byte[] ssr, final String url, final TemplateData templateData) {
++    requireRuntimeOrTemplateSupport("SSR");
+     if (mHasDestroy) {
+       return;
+     }
+@@ -1901,6 +1910,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void prepareForRenderSSR(final byte[] ssr, final String url) {
++    requireRuntimeOrTemplateSupport("SSR");
+     setUrl(url);
+     updateGenericInfoURL(url);
+     LLog.i(TAG, formatLynxMessage("renderTemplate"));
+@@ -1935,6 +1945,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void setTheme(LynxTheme theme) {
++    requireRuntimeOrTemplateSupport("Themes");
+     if (theme == null) {
+       return;
+     }
+@@ -1953,6 +1964,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void setTheme(@NonNull ByteBuffer rawTheme) {
++    requireRuntimeOrTemplateSupport("Themes");
+     if (!checkIfEnvPrepared() || mNativePtr == 0) {
+       return;
+     }
+@@ -1977,6 +1989,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void updateMetaData(LynxUpdateMeta meta) {
++    requireRuntimeOrTemplateSupport("Template data");
+     LynxContext context = mLynxContext;
+     if (context == null) {
+       return;
+@@ -2230,6 +2243,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void updateData(TemplateData data, boolean is_reuse_engine) {
++    requireRuntimeOrTemplateSupport("Template data");
+     String eventName = "LynxTemplateRender.updateData";
+     onTraceEventBegin(eventName);
+ 
+@@ -2262,6 +2276,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void resetData(TemplateData data) {
++    requireRuntimeOrTemplateSupport("Template data");
+     String eventName = "LynxTemplateRender.resetData";
+     onTraceEventBegin(eventName);
+     if (prepareUpdateData(data)) {
+@@ -2277,6 +2292,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void reloadTemplate(TemplateData data, TemplateData newGlobalProps) {
++    requireRuntimeOrTemplateSupport("Templates");
+     LLog.d(TAG, "reloadTemplate with url: " + getTemplateUrl());
+     String eventName = "LynxTemplateRender.reloadTemplate";
+     onTraceEventBegin(eventName);
+@@ -2320,10 +2336,12 @@ public class LynxTemplateRender
+   }
+ 
+   public void preloadLazyBundles(String[] urls) {
++    requireRuntimeOrTemplateSupport("Lazy template bundles");
+     nativePreloadLazyBundles(mNativePtr, mNativeLifecycle, urls);
+   }
+ 
+   public void getCurrentData(LynxGetDataCallback callback) {
++    requireRuntimeOrTemplateSupport("Template data");
+     if (!checkIfEnvPrepared() || mNativePtr == 0) {
+       callback.onFail("LynxView Not Initialized Yet");
+       return;
+@@ -2335,6 +2353,7 @@ public class LynxTemplateRender
+   }
+ 
+   public Map<String, Object> getPageDataByKey(String[] keys) {
++    requireRuntimeOrTemplateSupport("Template data");
+     if (!checkIfEnvPrepared() || mNativePtr == 0) {
+       return null;
+     }
+@@ -3320,6 +3339,13 @@ public class LynxTemplateRender
+     }
+   }
+ 
++  private static void requireRuntimeOrTemplateSupport(String feature) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          feature + " support is unavailable in native-renderer-only builds");
++    }
++  }
++
+   private synchronized void fallbackNewEngine(boolean enable_async) {
+     if (!UIThreadUtils.isOnUiThread()) {
+       LLog.e(TAG, "fallbackNewEngine should be called on ui thread, url: " + mUrl);
+@@ -3766,6 +3792,7 @@ public class LynxTemplateRender
+   }
+ 
+   public Map<String, Object> getAllJsSource() {
++    requireRuntimeOrTemplateSupport("JavaScript sources");
+     return mNativePtr != 0 ? nativeGetAllJsSource(mNativePtr, mNativeLifecycle) : null;
+   }
+ 
+@@ -3809,6 +3836,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void startLynxRuntime() {
++    requireRuntimeOrTemplateSupport("JavaScript runtimes");
+     if (mNativePtr != 0) {
+       // Once LynxView starts its LynxRuntime, user expects that
+       // LynxRuntime is always running, reload/load operations
+@@ -3854,6 +3882,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void setEnableBytecode(boolean enableUserBytecode, String url) {
++    requireRuntimeOrTemplateSupport("JavaScript bytecode");
+     if (mLynxRuntimeOptions.isEnableUserBytecode() == enableUserBytecode
+         && Objects.equals(mLynxRuntimeOptions.getBytecodeSourceUrl(), url)) {
+       return;
+@@ -3866,6 +3895,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void setSessionStorageItem(String key, TemplateData data) {
++    requireRuntimeOrTemplateSupport("Runtime session storage");
+     LLog.d(TAG, "setSessionStorageItem with key: " + key);
+     if ((mNativePtr != 0) && (data != null) && (!TextUtils.isEmpty(key))) {
+       data.flush();
+@@ -3880,6 +3910,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void getSessionStorageItem(String key, PlatformCallBack callback) {
++    requireRuntimeOrTemplateSupport("Runtime session storage");
+     LLog.d(TAG, "getSessionStorageItem with key: " + key);
+     if ((!TextUtils.isEmpty(key)) && (mNativePtr != 0)) {
+       nativeGetSessionStorageItem(mNativePtr, mNativeLifecycle, key, callback);
+@@ -3887,6 +3918,7 @@ public class LynxTemplateRender
+   }
+ 
+   public double subscribeSessionStorage(String key, PlatformCallBack callBack) {
++    requireRuntimeOrTemplateSupport("Runtime session storage");
+     LLog.d(TAG, "subscribeSessionStorage with key: " + key);
+     if ((!TextUtils.isEmpty(key)) && (mNativePtr != 0)) {
+       double listenerId =
+@@ -3898,6 +3930,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void unsubscribeSessionStorage(String key, double id) {
++    requireRuntimeOrTemplateSupport("Runtime session storage");
+     LLog.d(TAG, "unsubscribeSessionStorage with key: " + key);
+     if ((!TextUtils.isEmpty(key)) && (mNativePtr != 0) && (PlatformCallBack.InvalidId != id)) {
+       nativeUnsubscribeSessionStorage(mNativePtr, mNativeLifecycle, key, id);
+@@ -3906,6 +3939,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void attachEngineToUIThread() {
++    requireRuntimeOrTemplateSupport("Engine thread switching");
+     if (mNativePtr != 0) {
+       if (!UIThreadUtils.isOnUiThread()) {
+         LLog.e(TAG, "attachEngineToUIThread should be called on ui thread, url: " + mUrl);
+@@ -3936,6 +3970,7 @@ public class LynxTemplateRender
+   }
+ 
+   public void detachEngineFromUIThread() {
++    requireRuntimeOrTemplateSupport("Engine thread switching");
+     if (mNativePtr != 0) {
+       if (!UIThreadUtils.isOnUiThread()) {
+         LLog.e(TAG, "detachEngineFromUIThread should be called on ui thread, url: " + mUrl);
+@@ -4150,6 +4185,7 @@ public class LynxTemplateRender
+   }
+ 
+   public boolean registerLazyBundle(String url, TemplateBundle bundle) {
++    requireRuntimeOrTemplateSupport("Lazy template bundles");
+     String errorMsg = null;
+     String originCause = null;
+     if (TextUtils.isEmpty(url)) {
+@@ -4176,6 +4212,7 @@ public class LynxTemplateRender
+   }
+ 
+   public synchronized void updateGlobalPropsInternal(TemplateData globalProps) {
++    requireRuntimeOrTemplateSupport("Global template properties");
+     if (globalProps == null) {
+       return;
+     }
+@@ -4269,56 +4306,68 @@ public class LynxTemplateRender
+   }
+ 
+   public long getListEngineProxy() {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     return nativeGetListEngineProxy(mNativePtr, mNativeLifecycle);
+   }
+ 
+   public JavaOnlyMap getListPlatformInfo(int listSign) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     return nativeGetListPlatformInfo(mNativePtr, mNativeLifecycle, listSign);
+   }
+ 
+   public void renderChild(int listSign, int index, long operationId) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeRenderChild(mNativePtr, mNativeLifecycle, listSign, index, operationId);
+   }
+ 
+   public void updateChild(int listSign, int oldSign, int newIndex, long operationId) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeUpdateChild(mNativePtr, mNativeLifecycle, listSign, oldSign, newIndex, operationId);
+   }
+ 
+   public void removeChild(int listSign, int childSign) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeRemoveChild(mNativePtr, mNativeLifecycle, listSign, childSign);
+   }
+ 
+   public int obtainChild(
+       int listSign, int index, long operationId, boolean enableReuseNotification) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     return nativeObtainChild(
+         mNativePtr, mNativeLifecycle, listSign, index, operationId, enableReuseNotification);
+   }
+ 
+   public void recycleChild(int listSign, int childSign) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeRecycleChild(mNativePtr, mNativeLifecycle, listSign, childSign);
+   }
+ 
+   public void obtainChildAsync(int listSign, int index, long operationId) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeObtainChildAsync(mNativePtr, mNativeLifecycle, listSign, index, operationId);
+   }
+ 
+   public void recycleChildAsync(int listSign, int childSign) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeRecycleChildAsync(mNativePtr, mNativeLifecycle, listSign, childSign);
+   }
+ 
+   public void scrollByListContainer(
+       int containerSign, float x, float y, float originalX, float originalY) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeScrollByListContainer(
+         mNativePtr, mNativeLifecycle, containerSign, x, y, originalX, originalY);
+   }
+ 
+   public void scrollToPosition(
+       int containerSign, int position, float offset, int align, boolean smooth) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeScrollToPosition(
+         mNativePtr, mNativeLifecycle, containerSign, position, offset, align, smooth);
+   }
+ 
+   public void scrollStopped(int containerSign) {
++    requireRuntimeOrTemplateSupport("Template list rendering");
+     nativeScrollStopped(mNativePtr, mNativeLifecycle, containerSign);
+   }
+ 
+@@ -4962,8 +5011,19 @@ public class LynxTemplateRender
+ 
+   private native void nativeSetContextHasAttached(long ptr, long lifecycle);
+ 
+-  public native void nativeReattachLynxEngineWrapper(
++  public void nativeReattachLynxEngineWrapper(
++      long ptr, long lifecycle, long engine_ptr, long proxy_ptr) {
++    requireRuntimeOrTemplateSupport("Engine cache/reuse");
++    nativeReattachLynxEngineWrapperInternal(ptr, lifecycle, engine_ptr, proxy_ptr);
++  }
++
++  public void nativeDetachLynxEngineWrapper(long ptr, long lifecycle) {
++    requireRuntimeOrTemplateSupport("Engine cache/reuse");
++    nativeDetachLynxEngineWrapperInternal(ptr, lifecycle);
++  }
++
++  private native void nativeReattachLynxEngineWrapperInternal(
+       long ptr, long lifecycle, long engine_ptr, long proxy_ptr);
+ 
+-  public native void nativeDetachLynxEngineWrapper(long ptr, long lifecycle);
++  private native void nativeDetachLynxEngineWrapperInternal(long ptr, long lifecycle);
+ }
+diff --git a/platform/android/lynx_android/src/main/jni/jni_configs.yml b/platform/android/lynx_android/src/main/jni/jni_configs.yml
+index 61b2fab..09eecae 100644
+--- a/platform/android/lynx_android/src/main/jni/jni_configs.yml
++++ b/platform/android/lynx_android/src/main/jni/jni_configs.yml
+@@ -27,7 +27,9 @@ jni_class_configs:
+         - SetLocalEnv
+         - SetGroupedEnv
+         - SetGroupedEnvWithGroupSet
++        - GetDebugEnvDescription
+         - InitUIThread
++        - RunJavaTaskOnConcurrentLoop
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+       native_renderer_only_methods:
+         - GenerateViewId
+@@ -41,6 +43,7 @@ jni_class_configs:
+         - LifecycleDestroy
+         - GetInstanceId
+         - SetEnableUIFlush
++        - ProcessRender
+         - OnEnterForeground
+         - OnEnterBackground
+         - OnLynxEngineCreated
+@@ -55,6 +58,10 @@ jni_class_configs:
+         - QueryNativeMemoryUsageAsync
+         - MarkDirty
+         - Flush
++        - GetAllTimingInfo
++        - ClearPipelineTimingInfo
++        - SetLongTaskMonitorDisabled
++        - SetContextHasAttached
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
+       macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/react/bridge/JavaOnlyMap.java
+-- 
+2.39.5

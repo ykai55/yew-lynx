@@ -16,5 +16,7 @@ verified-behavior = ["initial-render", "tap-update", "listener-cleanup", "flush"
 crate-type = ["staticlib"]
 
 [dependencies]
+lynx-element-bridge-core.workspace = true
+lynx-element-bridge-ffi.workspace = true
+lynx-element-bridge-yew.workspace = true
 yew.workspace = true
-yew-lynx-adapter.workspace = true

@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 18:00:00 +0800
+Subject: [PATCH 14/15] Cover native renderer callback statuses
+
+Exercise unsupported callbacks, task-runner exceptions, and callback-returned
+resource exhaustion and internal errors through the production function table.
+Verify that each non-OK timer callback status cancels a repeating timer without
+adding allocator hooks or private fault injection.
+---
+ core/renderer/native_renderer_unittest.cc | 90 +++++++++++++++++++++++
+ 1 file changed, 90 insertions(+)
+
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index 9f9c7d2..22d1e34 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -98,9 +98,16 @@ class RunnerTasmDelegate : public test::MockTasmDelegate {
+       : runner_(std::move(runner)) {}
+ 
+   fml::RefPtr<fml::TaskRunner> GetLepusTimedTaskRunner() override {
++#if defined(__cpp_exceptions)
++    if (throw_on_get_task_runner_) {
++      throw std::runtime_error("task runner unavailable");
++    }
++#endif
+     return runner_;
+   }
+ 
++  bool throw_on_get_task_runner_{false};
++
+  private:
+   fml::RefPtr<fml::TaskRunner> runner_;
+ };
+@@ -176,6 +183,32 @@ TEST(NativeRendererApiTest, RejectsNullCallbacksAndOutputsWithoutMutation) {
+   EXPECT_TRUE(UnregisterNativeRendererHost(host));
+ }
+ 
++TEST(NativeRendererApiTest, MissingCallbacksReturnUnsupported) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, nullptr, nullptr};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle root = 0;
++  ASSERT_EQ(api->get_root(renderer, &root), LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  EXPECT_EQ(api->add_event_listener(renderer, root, 1, 1, Utf8("tap")),
++            LYNX_NATIVE_RENDERER_STATUS_UNSUPPORTED);
++  EXPECT_TRUE(harness.manager_->root()->event_map().empty());
++  LynxNativeTimerHandle timer = 73;
++  EXPECT_EQ(api->create_timer(renderer, 0, 0, 1, &timer),
++            LYNX_NATIVE_RENDERER_STATUS_UNSUPPORTED);
++  EXPECT_EQ(timer, 0u);
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
+ TEST(NativeRendererApiTest, RejectsInvalidUtf8AndNullNonEmptySpans) {
+   NativeRendererHarness harness;
+   const auto* api = lynx_native_renderer_get_api(1);
+@@ -834,6 +867,63 @@ TEST(NativeRendererApiTest, RepeatingTimerStopsAfterCallbackFailure) {
+   EXPECT_TRUE(UnregisterNativeRendererHost(host));
+ }
+ 
++TEST(NativeRendererApiTest,
++     RepeatingTimersStopForResourceAndInternalCallbackFailures) {
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  for (LynxNativeRendererStatus status :
++       {LYNX_NATIVE_RENDERER_STATUS_RESOURCE_EXHAUSTED,
++        LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR}) {
++    state.timer_status = status;
++    const int previous_count = state.timer_count;
++    LynxNativeTimerHandle timer = 0;
++    ASSERT_EQ(api->create_timer(renderer, 0, 1, 32, &timer),
++              LYNX_NATIVE_RENDERER_STATUS_OK);
++    harness.loop_.RunExpiredTasksNow();
++    harness.loop_.RunExpiredTasksNow();
++    EXPECT_EQ(state.timer_count, previous_count + 1);
++    EXPECT_EQ(api->cancel_timer(renderer, timer),
++              LYNX_NATIVE_RENDERER_STATUS_INVALID_OWNERSHIP);
++  }
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
++TEST(NativeRendererApiTest, HostExceptionReturnsPanicAndRollsBackAcquire) {
++#if defined(__cpp_exceptions)
++  NativeRendererHarness harness;
++  const auto* api = lynx_native_renderer_get_api(1);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  auto original_config = harness.tasm_->GetPageConfig();
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++
++  harness.delegate_.throw_on_get_task_runner_ = true;
++  LynxNativeRendererHandle renderer = 73;
++  EXPECT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_PANIC);
++  EXPECT_EQ(renderer, 0u);
++  EXPECT_EQ(harness.manager_->root(), nullptr);
++  EXPECT_EQ(harness.tasm_->GetPageConfig(), original_config);
++
++  harness.delegate_.throw_on_get_task_runner_ = false;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++#endif
++}
++
+ TEST(NativeRendererApiTest, RegisteredHostBlocksNativeEngineRebuild) {
+   NativeRendererHarness harness;
+   LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
+-- 
+2.39.5

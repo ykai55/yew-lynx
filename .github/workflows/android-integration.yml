@@ -12,9 +12,13 @@ concurrency:
 
 jobs:
   build:
-    name: Build pinned stock Lynx APK
+    name: Build pinned native renderer APK (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [yew, dioxus]
 
     steps:
       - name: Check out repository and Lynx submodule
@@ -32,8 +36,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: adapters/mts/package-lock.json
 
       - name: Install Rust
         run: |
@@ -55,13 +57,13 @@ jobs:
         run: python3 -m pip install -r third_party/lynx/tools/vpython_tools/requirements.txt
 
       - name: Build standalone APK
-        run: ./scripts/build-android.sh --clean
+        run: ./scripts/build-android.sh --backend "${{ matrix.backend }}" --clean
 
       - name: Upload APK and build evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: yew-lynx-android-${{ github.sha }}
+          name: lynx-element-bridge-android-${{ matrix.backend }}-${{ github.sha }}
           if-no-files-found: error
           path: |
-            examples/android/app/build/outputs/apk/debug/app-debug.apk
-            .deps/android/build-evidence.txt
+            .deps/android/apks/lynx-element-bridge-${{ matrix.backend }}.apk
+            .deps/android/build-evidence-${{ matrix.backend }}.txt

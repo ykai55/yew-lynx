@@ -1,0 +1,1169 @@
+From d7fe9dbbcdc90d87ba63ed04327740638805092c Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 04:00:00 +0800
+Subject: [PATCH 10/10] Add native-renderer-only Android build
+
+Add an opt-in Android build mode that omits QuickJS, NAPI, Wasm, V8,
+and JavaScript runtime integration while preserving the default build.
+---
+ base/include/lynx_actor.h                     |  93 ++++++++------
+ config.gni                                    |   9 ++
+ core/napi.gni                                 |   4 +
+ core/renderer/BUILD.gn                        |  10 ++
+ core/renderer/events/touch_event_handler.cc   |   2 +
+ core/renderer/template_assembler.cc           |  12 +-
+ core/renderer/template_entry.cc               |   2 +
+ .../lazy_bundle/lazy_bundle_loader.cc         |   4 +-
+ core/runtime/lepus/BUILD.gn                   |   6 +
+ core/runtime/lepus/bindings/BUILD.gn          |  13 ++
+ core/shell/BUILD.gn                           |  17 +++
+ .../android/lynx_template_render_android.cc   | 114 ++++++++++--------
+ core/shell/lynx_actor_specialization.h        |   7 ++
+ core/shell/lynx_shell.cc                      |  21 +++-
+ core/shell/runtime/mts/mts_runtime.cc         |   4 +
+ .../lynx_binary_base_template_reader_impl.cc  |   8 ++
+ platform/android/lynx_android/BUILD.gn        |  43 ++++++-
+ platform/android/lynx_android/build.gradle    |  14 ++-
+ .../android/lynx_android/gradle.properties    |   1 +
+ .../java/com/lynx/config/LynxLiteConfigs.java |   2 +-
+ .../src/main/java/com/lynx/tasm/LynxEnv.java  |  29 ++++-
+ .../com/lynx/tasm/LynxTemplateRender.java     |  31 +++--
+ .../lynx_android/src/main/jni/jni_configs.yml |  46 +++++++
+ 23 files changed, 370 insertions(+), 122 deletions(-)
+
+diff --git a/base/include/lynx_actor.h b/base/include/lynx_actor.h
+index c4ce951..5be0f6c 100644
+--- a/base/include/lynx_actor.h
++++ b/base/include/lynx_actor.h
+@@ -20,6 +20,8 @@ constexpr static int32_t kUnknownInstanceId = -1;
+ template <typename C, typename T, typename Enable = void>
+ class LynxActorMixin {
+  protected:
++  static constexpr bool kInvocationEnabled = true;
++
+   void BeforeInvoked() {}
+ 
+   void AfterInvoked() {}
+@@ -40,16 +42,18 @@ class LynxActor : public LynxActorMixin<LynxActor<T>, T>,
+ 
+   template <typename F>
+   void Act(F&& func) {
+-    if (!enable_) {
+-      return;
+-    }
+-    if (runner_->RunsTasksOnCurrentThread()) {
+-      Invoke(std::forward<F>(func));
+-    } else {
+-      runner_->PostTask([self = this->shared_from_this(),
+-                         func = std::forward<F>(func)]() mutable {
+-        self->Invoke(std::forward<F>(func));
+-      });
++    if constexpr (LynxActorMixin<LynxActor<T>, T>::kInvocationEnabled) {
++      if (!enable_) {
++        return;
++      }
++      if (runner_->RunsTasksOnCurrentThread()) {
++        Invoke(std::forward<F>(func));
++      } else {
++        runner_->PostTask([self = this->shared_from_this(),
++                           func = std::forward<F>(func)]() mutable {
++          self->Invoke(std::forward<F>(func));
++        });
++      }
+     }
+   }
+ 
+@@ -57,52 +61,61 @@ class LynxActor : public LynxActorMixin<LynxActor<T>, T>,
+   // LynxActors.
+   template <typename F>
+   void ActLite(F&& func) {
+-    if (!enable_) {
+-      return;
+-    }
+-    if (runner_->RunsTasksOnCurrentThread()) {
+-      InvokeLite(func);
+-    } else {
+-      runner_->PostTask(
+-          [self = this->shared_from_this(),
+-           func = std::forward<F>(func)]() mutable { self->InvokeLite(func); });
++    if constexpr (LynxActorMixin<LynxActor<T>, T>::kInvocationEnabled) {
++      if (!enable_) {
++        return;
++      }
++      if (runner_->RunsTasksOnCurrentThread()) {
++        InvokeLite(func);
++      } else {
++        runner_->PostTask([self = this->shared_from_this(),
++                           func = std::forward<F>(func)]() mutable {
++          self->InvokeLite(func);
++        });
++      }
+     }
+   }
+ 
+   template <typename F>
+   void ActAsync(F&& func) {
+-    if (!enable_) {
+-      return;
+-    }
++    if constexpr (LynxActorMixin<LynxActor<T>, T>::kInvocationEnabled) {
++      if (!enable_) {
++        return;
++      }
+ 
+-    runner_->PostTask([self = this->shared_from_this(),
+-                       func = std::forward<F>(func)]() mutable {
+-      self->Invoke(std::forward<F>(func));
+-    });
++      runner_->PostTask([self = this->shared_from_this(),
++                         func = std::forward<F>(func)]() mutable {
++        self->Invoke(std::forward<F>(func));
++      });
++    }
+   }
+ 
+   template <typename F>
+   void ActIdle(F&& func) {
+-    if (!enable_) {
+-      return;
+-    }
++    if constexpr (LynxActorMixin<LynxActor<T>, T>::kInvocationEnabled) {
++      if (!enable_) {
++        return;
++      }
+ 
+-    runner_->PostIdleTask([self = this->shared_from_this(),
+-                           func = std::forward<F>(func)]() mutable {
+-      self->Invoke(std::forward<F>(func));
+-    });
++      runner_->PostIdleTask([self = this->shared_from_this(),
++                             func = std::forward<F>(func)]() mutable {
++        self->Invoke(std::forward<F>(func));
++      });
++    }
+   }
+ 
+   template <typename F>
+   void ActEmergency(F&& func) {
+-    if (!enable_) {
+-      return;
+-    }
++    if constexpr (LynxActorMixin<LynxActor<T>, T>::kInvocationEnabled) {
++      if (!enable_) {
++        return;
++      }
+ 
+-    runner_->PostEmergencyTask([self = this->shared_from_this(),
+-                                func = std::forward<F>(func)]() mutable {
+-      self->Invoke(std::forward<F>(func));
+-    });
++      runner_->PostEmergencyTask([self = this->shared_from_this(),
++                                  func = std::forward<F>(func)]() mutable {
++        self->Invoke(std::forward<F>(func));
++      });
++    }
+   }
+ 
+   template <typename F,
+diff --git a/config.gni b/config.gni
+index 0f2ade0..b6ca89f 100644
+--- a/config.gni
++++ b/config.gni
+@@ -15,6 +15,9 @@ import("//build_overrides/oliver.gni")
+ 
+ # global configs
+ declare_args() {
++  # Build the Android LynxView/native renderer path without a JavaScript engine.
++  enable_native_renderer_only = false
++
+   # Whether to enable trace
+   # There are three modes: "perfetto", "systrace", "none"
+   # 1. "perfetto" : enable perfetto trace
+@@ -132,6 +135,12 @@ if (is_android) {
+   enable_inspector_test = true
+ }
+ 
++if (enable_native_renderer_only) {
++  enable_inspector = false
++  enable_inspector_test = false
++  disable_rts_ng = true
++}
++
+ if (enable_lite) {
+   # these args are up to enable_lite arg
+   enable_v8 = false
+diff --git a/core/napi.gni b/core/napi.gni
+index cffb215..2aa86f9 100644
+--- a/core/napi.gni
++++ b/core/napi.gni
+@@ -22,3 +22,7 @@ if (is_android || is_ios) {
+ } else {
+   enable_napi_binding = enable_lepusng_worklet
+ }
++
++if (enable_native_renderer_only) {
++  enable_napi_binding = false
++}
+diff --git a/core/renderer/BUILD.gn b/core/renderer/BUILD.gn
+index fc06977..c2f2a32 100644
+--- a/core/renderer/BUILD.gn
++++ b/core/renderer/BUILD.gn
+@@ -66,6 +66,16 @@ lynx_core_source_set("tasm") {
+     ]
+   }
+ 
++  if (enable_native_renderer_only) {
++    if (!is_oliver_ssr) {
++      public_deps -= [
++        "../runtime",
++        "../shared_data",
++        "../shell",
++      ]
++    }
++  }
++
+   if (enable_unittests) {
+     sources += [
+       "tasm/testing/event_tracker_mock.cc",
+diff --git a/core/renderer/events/touch_event_handler.cc b/core/renderer/events/touch_event_handler.cc
+index 61c4b91..d087eea 100644
+--- a/core/renderer/events/touch_event_handler.cc
++++ b/core/renderer/events/touch_event_handler.cc
+@@ -1444,11 +1444,13 @@ void TouchEventHandler::TriggerLepusBridgesAsync(
+ }
+ 
+ void TouchEventHandler::EnsureGestureManager(runtime::MTSRuntime *context) {
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   // Ensure that the context is valid and the gesture_manager_ is empty
+   if (context && gesture_manager_.IsEmpty()) {
+     // Create a new object for gesture_manager_ using the provided context
+     gesture_manager_ = Utils::CreateGestureManager(context);
+   }
++#endif
+ }
+ 
+ // This method is used to call the front-end framework layer entry function in
+diff --git a/core/renderer/template_assembler.cc b/core/renderer/template_assembler.cc
+index 5a6b8d9..8499cce 100644
+--- a/core/renderer/template_assembler.cc
++++ b/core/renderer/template_assembler.cc
+@@ -834,9 +834,7 @@ bool TemplateAssembler::BeginNativeRendererSession() {
+   return true;
+ }
+ 
+-void TemplateAssembler::EndNativeRendererSession() {
+-  template_loaded_ = false;
+-}
++void TemplateAssembler::EndNativeRendererSession() { template_loaded_ = false; }
+ 
+ void TemplateAssembler::DidLoadTemplate() {
+   // exec callback
+@@ -1354,6 +1352,9 @@ void TemplateAssembler::DidLoadComponent(
+ 
+ void TemplateAssembler::CreateModuleManager(
+     std::unique_ptr<pub::LynxNativeModuleManager> native_module_manager) {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return;
++#else
+   if (native_module_manager != nullptr) {
+     // Do not use native_module_manager ptr anymore, the resource has been moved
+     lepus_module_manager_ = std::make_unique<lepus::LynxLepusModuleManager>(
+@@ -1363,6 +1364,7 @@ void TemplateAssembler::CreateModuleManager(
+         "NativeModules: mts native_module_manager is nullptr! , please check "
+         "engine init");
+   }
++#endif
+ }
+ 
+ void TemplateAssembler::DidFetchBundle(
+@@ -3648,6 +3650,9 @@ void TemplateAssembler::OnReceiveMessageEvent(
+ 
+ ContextProxyInLepus* TemplateAssembler::GetContextProxy(
+     runtime::ContextProxy::Type type) {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return nullptr;
++#else
+   if (type >= runtime::ContextProxy::Type::kUnknown ||
+       type < runtime::ContextProxy::Type::kJSContext) {
+     return nullptr;
+@@ -3658,6 +3663,7 @@ ContextProxyInLepus* TemplateAssembler::GetContextProxy(
+         std::make_unique<ContextProxyInLepus>(delegate_, type);
+   }
+   return context_proxy_vector_[index].get();
++#endif
+ }
+ 
+ lepus::Value TemplateAssembler::GetCustomSectionByKey(
+diff --git a/core/renderer/template_entry.cc b/core/renderer/template_entry.cc
+index 6bc1107..3153e26 100644
+--- a/core/renderer/template_entry.cc
++++ b/core/renderer/template_entry.cc
+@@ -404,11 +404,13 @@ TemplateEntry::~TemplateEntry() {
+ }
+ 
+ void TemplateEntry::RegisterBuiltin() {
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   TRACE_EVENT(LYNX_TRACE_CATEGORY, TEMPLATE_ENTRY_REGISTER_BUILD_IN);
+   tasm::Renderer::RegisterBuiltin(
+       vm_context_.get(), compile_options().arch_option_,
+       template_bundle_.page_configs_ &&
+           template_bundle_.page_configs_->GetEnableElementApiNewRegistration());
++#endif
+ }
+ 
+ void TemplateEntry::SetTemplateAssembler(TemplateAssembler* assembler) {
+diff --git a/core/resource/lazy_bundle/lazy_bundle_loader.cc b/core/resource/lazy_bundle/lazy_bundle_loader.cc
+index 21781da..30ff469 100644
+--- a/core/resource/lazy_bundle/lazy_bundle_loader.cc
++++ b/core/resource/lazy_bundle/lazy_bundle_loader.cc
+@@ -11,7 +11,7 @@
+ #include "core/build/gen/lynx_sub_error_code.h"
+ #include "core/resource/trace/resource_trace_event_def.h"
+ #include "core/shell/lynx_engine.h"
+-#ifdef OS_ANDROID
++#if defined(OS_ANDROID) && !ENABLE_NATIVE_RENDERER_ONLY
+ #include "core/runtime/js/bytecode/js_cache_manager_facade.h"
+ #endif
+ 
+@@ -270,7 +270,7 @@ void LazyBundleLoader::DidFetchBundle(
+   TRACE_EVENT(LYNX_TRACE_CATEGORY, LAZY_BUNDLE_DID_FETCH_BUNDLE, "url",
+               callback_info.component_url);
+ 
+-#ifdef OS_ANDROID
++#if defined(OS_ANDROID) && !ENABLE_NATIVE_RENDERER_ONLY
+   // TODO(zhoupeng): Currently, there is no easy way to get JsEngineType, so
+   // QUICK_JS is used by default. Fix it later.
+   if (callback_info.bundle) {
+diff --git a/core/runtime/lepus/BUILD.gn b/core/runtime/lepus/BUILD.gn
+index 7f54596..e2209dd 100644
+--- a/core/runtime/lepus/BUILD.gn
++++ b/core/runtime/lepus/BUILD.gn
+@@ -8,6 +8,9 @@ import("build.gni")
+ 
+ lynx_core_source_set("lepus") {
+   sources = lynx_lepus_common_sources_path
++  if (enable_native_renderer_only) {
++    sources -= [ get_path_info("lynx_value_extended.cc", "abspath") ]
++  }
+   include_dirs = [ "//third_party/PrimTS/src" ]
+   if (is_android) {
+     if (!enable_just_lepusng) {
+@@ -36,6 +39,9 @@ lynx_core_source_set("lepus") {
+     "../profile:profile_public_header",
+     "tasks:tasks",
+   ]
++  if (enable_native_renderer_only) {
++    public_deps += [ "../../../base/src:base_values_extended" ]
++  }
+ 
+   if (is_mac) {
+     exclude_configs = [ "//build/config/compiler:no_exceptions" ]
+diff --git a/core/runtime/lepus/bindings/BUILD.gn b/core/runtime/lepus/bindings/BUILD.gn
+index dcd09d4..7b00d2f 100644
+--- a/core/runtime/lepus/bindings/BUILD.gn
++++ b/core/runtime/lepus/bindings/BUILD.gn
+@@ -32,4 +32,17 @@ lynx_core_source_set("bindings") {
+       "resource:lepus_runtime",
+     ]
+   }
++  if (enable_native_renderer_only && !is_oliver_ssr) {
++    sources -= lynx_renderer_functions_sources_path
++    sources += lynx_empty_renderer_functions_sources_path
++    public_deps -= [
++      "../../../resource",
++      "../../common/bindings/event:runtime_common",
++      "../../common/bindings/modules:native_modules",
++      "../../js/bindings/event:js_runtime",
++      "event:lepus_runtime",
++      "modules:lepus_runtime",
++      "resource:lepus_runtime",
++    ]
++  }
+ }
+diff --git a/core/shell/BUILD.gn b/core/shell/BUILD.gn
+index e10ee68..afbd8f5 100644
+--- a/core/shell/BUILD.gn
++++ b/core/shell/BUILD.gn
+@@ -144,6 +144,17 @@ if (is_android) {
+   ]
+ }
+ 
++if (enable_native_renderer_only) {
++  shell_shared_sources -= [
++    "android/js_proxy_android.cc",
++    "android/lynx_runtime_wrapper_android.cc",
++    "runtime/bts/bts_runtime.cc",
++    "runtime/bts/bts_runtime_mediator.cc",
++    "runtime/bts/bts_runtime_standalone_helper.cc",
++    "runtime/bts/lynx_bts_runtime_proxy_impl.cc",
++  ]
++}
++
+ lynx_core_source_set("shell") {
+   sources = shell_shared_sources
+   public_deps = [
+@@ -154,4 +165,10 @@ lynx_core_source_set("shell") {
+     "../services/timing_handler",
+     "../services/timing_handler:timing_handler_delegate",
+   ]
++  if (enable_native_renderer_only) {
++    public_deps -= [
++      "../resource",
++      "../runtime",
++    ]
++  }
+ }
+diff --git a/core/shell/android/lynx_template_render_android.cc b/core/shell/android/lynx_template_render_android.cc
+index b1e2499..e1f4e61 100644
+--- a/core/shell/android/lynx_template_render_android.cc
++++ b/core/shell/android/lynx_template_render_android.cc
+@@ -297,6 +297,12 @@ jlong Create(JNIEnv* env, jclass jcaller, jlong view_id,
+              jboolean enable_unified_pipeline, jint embedded_mode,
+              jboolean has_logic_executor, jboolean debuggable,
+              jlong engine_wrapper_ptr, jobject module_factory) {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  if (enable_js || runtime_wrapper_ptr != 0 || engine_wrapper_ptr != 0 ||
++      module_factory != nullptr) {
++    return 0;
++  }
++#endif
+   auto* ui_delegate =
+       reinterpret_cast<lynx::tasm::UIDelegate*>(ui_delegate_ptr);
+ 
+@@ -309,6 +315,7 @@ jlong Create(JNIEnv* env, jclass jcaller, jlong view_id,
+                                       screen_height / density, 1.f, density)
+           : lynx::tasm::LynxEnvConfig(screen_width, screen_height, density,
+                                       1.f);
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   auto* runtime_wrapper =
+       reinterpret_cast<lynx::shell::LynxRuntimeWrapperAndroid*>(
+           runtime_wrapper_ptr);
+@@ -325,20 +332,26 @@ jlong Create(JNIEnv* env, jclass jcaller, jlong view_id,
+         std::make_shared<lynx::runtime::js::ModuleFactoryAndroid>(
+             env, module_factory));
+   }
++#endif
+   lynx::shell::ShellOption shell_option;
+   shell_option.view_id_ = static_cast<lynx::base::LynxEntityId>(view_id);
+   shell_option.enable_multi_tasm_thread_ = enable_multi_async_thread;
+   shell_option.enable_multi_layout_thread_ = enable_multi_async_thread;
+-  shell_option.enable_js_ = enable_js;
++  shell_option.enable_js_ = false;
+   shell_option.enable_vsync_aligned_msg_loop_ = enable_vsync_aligned_msg_loop;
+   shell_option.enable_async_hydration_ = enable_async_hydration;
+   shell_option.enable_js_group_thread_ = enable_js_group_thread;
+   shell_option.js_group_thread_name_ =
+       JNIConvertHelper::ConvertToString(env, js_group_thread_name);
++#if ENABLE_NATIVE_RENDERER_ONLY
++  shell_option.instance_id_ = -1;
++#else
++  shell_option.enable_js_ = enable_js;
+   shell_option.instance_id_ =
+       runtime_wrapper == nullptr
+           ? -1  // {kUnknownInstanceId};
+           : runtime_wrapper->BTSRuntimeStandalone().GetRuntimeId();
++#endif
+   shell_option.page_options_.SetInstanceID(shell_option.instance_id_);
+   shell_option.page_options_.SetLongTaskMonitorDisabled(
+       long_task_monitor_disabled);
+@@ -353,53 +366,54 @@ jlong Create(JNIEnv* env, jclass jcaller, jlong view_id,
+         white_board_ptr);
+   }
+ 
+-  return reinterpret_cast<jlong>(
+-      lynx::shell::LynxShellBuilder()
+-          .SetUseInvokeUIMethodFunction(use_invoke_ui_method)
+-          .SetNativeFacade(std::make_unique<lynx::shell::NativeFacadeAndroid>(
+-              env, native_facade))
+-          .SetPaintingContextPlatformImpl(
+-              (engine_wrapper && engine_wrapper->HasInit())
+-                  ? nullptr
+-                  : ui_delegate->CreatePaintingContext())
+-          .SetLynxEnvConfig(lynx_env_config)
+-          .SetEnableElementManagerVsyncMonitor(true)
+-          .SetEnableLayoutOnly(enable_layout_only)
+-          .SetEnableNativeList(ui_delegate->EnableNativeList())
+-          .SetWhiteBoard(white_board)
+-          .SetLazyBundleLoader(loader)
+-          .SetNativeModuleManager(std::move(native_module_manager))
+-          .SetEnableUnifiedPipeline(enable_unified_pipeline)
+-          .SetTasmLocale(JNIConvertHelper::ConvertToString(env, locale))
+-          .SetEnablePreUpdateData(enable_pre_update_data)
+-          .SetLayoutContextPlatformImpl(
+-              (engine_wrapper && engine_wrapper->HasInit())
+-                  ? nullptr
+-                  : ui_delegate->CreateLayoutContext())
+-          .SetStrategy(static_cast<lynx::base::ThreadStrategyForRendering>(
+-              thread_strategy))
+-          .SetLynxEngineWrapper(engine_wrapper)
+-          .SetRuntimeActor(
+-              (runtime_wrapper != nullptr)
+-                  ? runtime_wrapper->BTSRuntimeStandalone().GetRuntimeActor()
+-                  : nullptr)
+-          .SetPerfControllerActor((runtime_wrapper != nullptr)
+-                                      ? runtime_wrapper->BTSRuntimeStandalone()
+-                                            .GetPerfControllerActor()
+-                                      : nullptr)
+-          .SetPerformanceControllerPlatform(
+-              j_performance_controller != nullptr
+-                  ? std::make_unique<
+-                        lynx::tasm::performance::PerformanceControllerAndroid>(
+-                        env, j_performance_controller)
+-                  : nullptr)
+-          .SetShellOption(shell_option)
+-          .SetPropBundleCreator(ui_delegate->CreatePropBundleCreator())
+-          .SetTasmPlatformInvoker(
+-              std::make_unique<lynx::shell::TasmPlatformInvokerAndroid>(
+-                  env, tasm_platform_invoker, ui_delegate))
+-          .SetForceLayoutOnBackgroundThread(force_layout_on_background_thread)
+-          .build());
++  lynx::shell::LynxShellBuilder builder;
++  builder.SetUseInvokeUIMethodFunction(use_invoke_ui_method)
++      .SetNativeFacade(std::make_unique<lynx::shell::NativeFacadeAndroid>(
++          env, native_facade))
++      .SetPaintingContextPlatformImpl(
++          (engine_wrapper && engine_wrapper->HasInit())
++              ? nullptr
++              : ui_delegate->CreatePaintingContext())
++      .SetLynxEnvConfig(lynx_env_config)
++      .SetEnableElementManagerVsyncMonitor(true)
++      .SetEnableLayoutOnly(enable_layout_only)
++      .SetEnableNativeList(ui_delegate->EnableNativeList())
++      .SetWhiteBoard(white_board)
++      .SetEnableUnifiedPipeline(enable_unified_pipeline)
++      .SetTasmLocale(JNIConvertHelper::ConvertToString(env, locale))
++      .SetEnablePreUpdateData(enable_pre_update_data)
++      .SetLayoutContextPlatformImpl(
++          (engine_wrapper && engine_wrapper->HasInit())
++              ? nullptr
++              : ui_delegate->CreateLayoutContext())
++      .SetStrategy(
++          static_cast<lynx::base::ThreadStrategyForRendering>(thread_strategy))
++      .SetLynxEngineWrapper(engine_wrapper)
++      .SetPerformanceControllerPlatform(
++          j_performance_controller != nullptr
++              ? std::make_unique<
++                    lynx::tasm::performance::PerformanceControllerAndroid>(
++                    env, j_performance_controller)
++              : nullptr)
++      .SetShellOption(shell_option)
++      .SetPropBundleCreator(ui_delegate->CreatePropBundleCreator())
++      .SetTasmPlatformInvoker(
++          std::make_unique<lynx::shell::TasmPlatformInvokerAndroid>(
++              env, tasm_platform_invoker, ui_delegate))
++      .SetForceLayoutOnBackgroundThread(force_layout_on_background_thread);
++#if !ENABLE_NATIVE_RENDERER_ONLY
++  builder.SetLazyBundleLoader(loader)
++      .SetNativeModuleManager(std::move(native_module_manager))
++      .SetRuntimeActor(
++          (runtime_wrapper != nullptr)
++              ? runtime_wrapper->BTSRuntimeStandalone().GetRuntimeActor()
++              : nullptr)
++      .SetPerfControllerActor(
++          (runtime_wrapper != nullptr)
++              ? runtime_wrapper->BTSRuntimeStandalone().GetPerfControllerActor()
++              : nullptr);
++#endif
++  return reinterpret_cast<jlong>(builder.build());
+ }
+ 
+ void RebuildLynxEngine(JNIEnv* env, jclass jcaller, jlong ptr, jlong lifecycle,
+@@ -571,8 +585,12 @@ void OnLynxEngineCreated(JNIEnv* env, jclass jcaller, jlong ptr,
+                          jlong uiDelegatePtr) {
+   auto shell = reinterpret_cast<LynxShell*>(ptr);
+   auto ui_delegate = reinterpret_cast<lynx::tasm::UIDelegate*>(uiDelegatePtr);
++#if ENABLE_NATIVE_RENDERER_ONLY
++  std::shared_ptr<lynx::shell::LynxRuntimeProxy> runtime_proxy;
++#else
+   auto runtime_proxy = std::make_shared<lynx::shell::LynxBTSRuntimeProxyImpl>(
+       shell->GetRuntimeActor());
++#endif
+   auto engine_proxy = std::make_shared<lynx::shell::LynxEngineProxyImpl>(
+       shell->GetEngineActor());
+   auto perf_controller_proxy =
+diff --git a/core/shell/lynx_actor_specialization.h b/core/shell/lynx_actor_specialization.h
+index 0873040..9af7b30 100644
+--- a/core/shell/lynx_actor_specialization.h
++++ b/core/shell/lynx_actor_specialization.h
+@@ -46,6 +46,13 @@ inline constexpr const char* kActorTag<tasm::LayoutContext> = "LayoutContext";
+ template <typename C, typename T>
+ class LynxActorMixin<C, T, typename std::enable_if_t<kIsLynxActor<T>>> {
+  public:
++#if ENABLE_NATIVE_RENDERER_ONLY
++  static constexpr bool kInvocationEnabled =
++      !std::is_same_v<T, shell::BTSRuntime>;
++#else
++  static constexpr bool kInvocationEnabled = true;
++#endif
++
+   void BeforeInvoked() {
+     int32_t instance_id =
+         static_cast<std::add_pointer_t<C>>(this)->GetInstanceId();
+diff --git a/core/shell/lynx_shell.cc b/core/shell/lynx_shell.cc
+index ba641f5..39cc83b 100644
+--- a/core/shell/lynx_shell.cc
++++ b/core/shell/lynx_shell.cc
+@@ -243,10 +243,12 @@ void LynxShell::BuildEngineActor(
+   if (engine_build_options_.lazy_bundle_loader_ != nullptr) {
+     tasm->SetLazyBundleLoader(engine_build_options_.lazy_bundle_loader_);
+   }
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   if (engine_build_options_.white_board_ == nullptr) {
+     engine_build_options_.white_board_ = std::make_shared<tasm::WhiteBoard>();
+   }
+   tasm->SetWhiteBoard(engine_build_options_.white_board_);
++#endif
+   if (!engine_build_options_.locale_.empty()) {
+     tasm->SetLocale(engine_build_options_.locale_);
+   }
+@@ -312,11 +314,13 @@ void LynxShell::OnLynxEngineBuilt(
+                          element_manager->node_manager(),
+                          element_manager->catalyzer());
+ 
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   if (native_module_manager != nullptr) {
+     native_module_manager->SetEngineActor(engine_actor_);
+     native_module_manager->SetFacadeActor(facade_actor_);
+     tasm->CreateModuleManager(std::move(native_module_manager));
+   }
++#endif
+ 
+   engine_actor_->ActLite([](auto& engine) { engine->Init(); });
+ 
+@@ -331,6 +335,7 @@ void LynxShell::OnLynxEngineBuilt(
+         };
+     tasm_mediator_->SetInvokeUIMethodFunction(std::move(invoke_ui_method_func));
+   }
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   if (runtime_actor_) {
+     tasm_mediator_->SetRuntimeActor(runtime_actor_);
+     layout_mediator_->SetRuntimeActor(runtime_actor_);
+@@ -348,6 +353,7 @@ void LynxShell::OnLynxEngineBuilt(
+               facade_actor, engine_actor, card_cached_data_mgr);
+         });
+   }
++#endif
+ 
+   SetPageOptions(page_options_);
+ }
+@@ -426,6 +432,7 @@ void LynxShell::Destroy() {
+         }
+         tasm::report::FeatureCounter::Instance()->ClearAndReport(instance_id);
+       });
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   if (runtime_actor_) {
+ #if ENABLE_TRACE_PERFETTO
+     [[maybe_unused]] auto group_id =
+@@ -457,6 +464,7 @@ void LynxShell::Destroy() {
+     }
+ #endif
+   }
++#endif
+ 
+   if (enable_async_hydration_) {
+     {
+@@ -482,6 +490,9 @@ void LynxShell::InitRuntime(
+     const std::string& code_cache_source_url,
+     const std::shared_ptr<base::VSyncMonitorPlatformImpl>&
+         vsync_monitor_platform_impl) {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return;
++#else
+   [[maybe_unused]] uint64_t flow_id = TRACE_FLOW_ID();
+   TRACE_EVENT(LYNX_TRACE_CATEGORY, LYNX_SHELL_INIT_RUNTIME,
+               [flow_id](lynx::perfetto::EventContext ctx) {
+@@ -576,9 +587,13 @@ void LynxShell::InitRuntime(
+   if ((runtime_flags & LynxRuntimeFlags::PENDING_JS_TASK) == 0) {
+     runtime_actor_->ActAsync(std::move(start_js_runtime_task_));
+   }
++#endif
+ }
+ 
+ void LynxShell::AttachRuntime() {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return;
++#else
+   OnRuntimeCreate();
+ 
+   // TODO(huzhanbo.luc): support TestBench
+@@ -619,13 +634,16 @@ void LynxShell::AttachRuntime() {
+                               std::move(card_cached_data_mgr));
+     });
+   }
++#endif
+ }
+ 
+ void LynxShell::StartJsRuntime() {
++#if !ENABLE_NATIVE_RENDERER_ONLY
+   if (!is_destroyed_ && start_js_runtime_task_ != nullptr && runtime_actor_) {
+     TRACE_EVENT(LYNX_TRACE_CATEGORY, LYNX_SHELL_START_JS_RUNTIME);
+     runtime_actor_->ActAsync(std::move(start_js_runtime_task_));
+   }
++#endif
+ }
+ 
+ void LynxShell::DestroyRuntime(int32_t instance_id,
+@@ -1648,8 +1666,7 @@ NativeRendererDiagnostics LynxShell::GetNativeRendererDiagnostics() {
+ }
+ 
+ bool LynxShell::CanRegisterNativeRendererHost() {
+-  const NativeRendererDiagnostics diagnostics =
+-      GetNativeRendererDiagnostics();
++  const NativeRendererDiagnostics diagnostics = GetNativeRendererDiagnostics();
+   return !diagnostics.bts_runtime && !diagnostics.mts_context &&
+          !diagnostics.template_bundle;
+ }
+diff --git a/core/shell/runtime/mts/mts_runtime.cc b/core/shell/runtime/mts/mts_runtime.cc
+index 7d07cb0..f0fc388 100644
+--- a/core/shell/runtime/mts/mts_runtime.cc
++++ b/core/shell/runtime/mts/mts_runtime.cc
+@@ -471,7 +471,11 @@ bool MTSRuntime::HasPreExecuteSuccess() { return has_pre_execute_success_; }
+ void MTSRuntime::ResetPreExecuteSuccess() { has_pre_execute_success_ = false; }
+ 
+ std::unique_ptr<ContextBundle> ContextBundle::Create(ContextType context_type) {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return nullptr;
++#else
+   return ContextBundleFactory::Create(context_type);
++#endif
+ }
+ 
+ MTSRuntime::MTSRuntime(ContextType type, bool disable_tracing_gc,
+diff --git a/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_template_reader_impl.cc b/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_template_reader_impl.cc
+index 7aed0c3..4886eeb 100644
+--- a/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_template_reader_impl.cc
++++ b/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_template_reader_impl.cc
+@@ -526,6 +526,9 @@ bool LynxBinaryBaseTemplateReader::DeserializeSection() {
+ }
+ 
+ bool LynxBinaryBaseTemplateReader::DeserializeJSSourceSection() {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return false;
++#else
+   TRACE_EVENT(LYNX_TRACE_CATEGORY,
+               BINARY_BASE_TEMPLATE_READER_DECODE_JS_SOURCE_SECTION);
+   DECODE_U32(count);
+@@ -536,9 +539,13 @@ bool LynxBinaryBaseTemplateReader::DeserializeJSSourceSection() {
+         path, {std::move(content), runtime::js::JsContent::Type::SOURCE});
+   }
+   return true;
++#endif
+ }
+ 
+ bool LynxBinaryBaseTemplateReader::DeserializeJSBytecodeSection() {
++#if ENABLE_NATIVE_RENDERER_ONLY
++  return false;
++#else
+   TRACE_EVENT(LYNX_TRACE_CATEGORY,
+               BINARY_BASE_TEMPLATE_READER_DECODE_JS_BYTECODE_SECTION);
+   DECODE_U32(engine);
+@@ -557,6 +564,7 @@ bool LynxBinaryBaseTemplateReader::DeserializeJSBytecodeSection() {
+         {std::move(content), runtime::js::JsContent::Type::BYTECODE});
+   }
+   return true;
++#endif
+ }
+ 
+ void LynxBinaryBaseTemplateReader::EnsurePageConfig() {
+diff --git a/platform/android/lynx_android/BUILD.gn b/platform/android/lynx_android/BUILD.gn
+index 0180999..1a2949d 100644
+--- a/platform/android/lynx_android/BUILD.gn
++++ b/platform/android/lynx_android/BUILD.gn
+@@ -10,11 +10,17 @@ assert(is_android)
+ group("LynxAndroid") {
+   deps = []
+   deps += [ ":lynx_android" ]
+-  if (!enable_lite) {
++  if (!enable_lite && !enable_native_renderer_only) {
+     deps += [ "../../../core/runtime/js/jsi/v8:lynx_v8_bridge" ]
+   }
+ }
+ 
++if (enable_native_renderer_only) {
++  group("LynxAndroidNativeRendererOnly") {
++    deps = [ ":lynx_android" ]
++  }
++}
++
+ cmake_target("lynx_android") {
+   cmake_version = "3.4.1"
+   target_type = "shared_library"
+@@ -35,7 +41,7 @@ cmake_target("lynx_android") {
+     ":lynx_android_private_config",
+     "../:16kb_page",
+   ]
+-  if (!enable_lite) {
++  if (!enable_lite && !enable_native_renderer_only) {
+     sub_cmake_target = [ "../../../core/runtime/js/jsi/v8:lynx_v8_bridge" ]
+   }
+ }
+@@ -118,6 +124,29 @@ group("lynx_android_lib") {
+       "//third_party/googletest_custom:gtest_custom",
+     ]
+   }
++  if (enable_native_renderer_only) {
++    public_deps -= [
++      "../../../core/renderer/signal:signal",
++      "../../../core/resource",
++      "../../../core/runtime",
++      "../../../core/runtime/common/bindings/event:runtime_common",
++      "../../../core/runtime/common/bindings/modules:native_modules",
++      "../../../core/runtime/common/bindings/resource:promise",
++      "../../../core/runtime/js/bindings/event:js_runtime",
++      "../../../core/runtime/js/bindings/interceptor:network_interceptor",
++      "../../../core/runtime/js/bindings/resource:js_runtime",
++      "../../../core/runtime/lepus/bindings:bindings",
++      "../../../core/runtime/lepus/bindings/event:lepus_runtime",
++      "../../../core/runtime/lepus/bindings/resource:lepus_runtime",
++      "../../../core/shared_data:shared_data",
++    ]
++    public_deps += [
++      "../../../core/runtime/common:common",
++      "../../../core/runtime/common:reporter",
++      "../../../core/runtime/common/bindings/event:runtime_common",
++      "../../../core/shared_data:white_board",
++    ]
++  }
+ }
+ 
+ group("lynx_jni_files") {
+@@ -134,6 +163,7 @@ group("lynx_jni_files") {
+ config("lynx_android_public_config") {
+   defines = [
+     "ANDROID",
++    "ENABLE_NATIVE_RENDERER_ONLY=${enable_native_renderer_only}",
+     "RAPIDJSON_HAS_STDSTRING=1",
+     "LYNX_DEV",
+     "LYNX_SIMPLIFY=0",
+@@ -257,11 +287,12 @@ config("lynx_android_private_config") {
+     "jnigraphics",
+     "log",
+   ]
+-  lib_dirs += [ "${primjs_native_lib_dir}" ]
+-  libs += [ "quick" ]
+-  if (enable_napi_binding) {
++  if (!enable_native_renderer_only) {
+     lib_dirs += [ "${primjs_native_lib_dir}" ]
+-    libs += [ "napi" ]
++    libs += [ "quick" ]
++    if (enable_napi_binding) {
++      libs += [ "napi" ]
++    }
+   }
+ 
+   if (!is_debug) {
+diff --git a/platform/android/lynx_android/build.gradle b/platform/android/lynx_android/build.gradle
+index 6ed31ad..2c34bed 100644
+--- a/platform/android/lynx_android/build.gradle
++++ b/platform/android/lynx_android/build.gradle
+@@ -29,6 +29,7 @@ android {
+         buildConfigField("Boolean","enable_packrel",enable_packrel)
+         buildConfigField("Boolean","enable_lepusng_worklet",enable_lepusng_worklet)
+         buildConfigField("Boolean","enable_napi_binding",enable_napi_binding)
++        buildConfigField("Boolean","enable_native_renderer_only",enable_native_renderer_only)
+ 
+         multiDexEnabled true
+ 
+@@ -284,6 +285,7 @@ task configGnCompileParas {
+             gnBuildArgs_list.put("enable_packrel", "\"$enable_packrel\"")
+             gnBuildArgs_list.put("enable_lepusng_worklet", "\"$enable_lepusng_worklet\"")
+             gnBuildArgs_list.put("enable_napi_binding", "\"$enable_napi_binding\"")
++            gnBuildArgs_list.put("enable_native_renderer_only", "\"$enable_native_renderer_only\"")
+             if (buildType == "release") {
+                 gnBuildArgs_list.put("is_debug", "false")
+                 gnBuildArgs_list.put("enable_replay_release", "\"$enable_replay_release\"")
+@@ -337,11 +339,13 @@ dependencies {
+     androidTestImplementation "com.google.auto.service:auto-service-annotations:1.0-rc5"
+     androidTestAnnotationProcessor "com.google.auto.service:auto-service:1.0-rc5"
+ 
+-    implementation 'org.lynxsdk.lynx:primjs:4.2.0-alpha.0-SNAPSHOT'
+-    extractJNI 'org.lynxsdk.lynx:primjs:4.2.0-alpha.0-SNAPSHOT@aar'
+-    implementation 'org.lynxsdk.lynx:primjsWasm:4.2.0-alpha.0-SNAPSHOT'
+-    extractJNI 'org.lynxsdk.lynx:primjsWasm:4.2.0-alpha.0-SNAPSHOT@aar'
+-    extractJNI 'org.lynxsdk.lynx:v8so:11.1.277.4'
++    if (!enable_native_renderer_only.toBoolean()) {
++        implementation 'org.lynxsdk.lynx:primjs:4.2.0-alpha.0-SNAPSHOT'
++        extractJNI 'org.lynxsdk.lynx:primjs:4.2.0-alpha.0-SNAPSHOT@aar'
++        implementation 'org.lynxsdk.lynx:primjsWasm:4.2.0-alpha.0-SNAPSHOT'
++        extractJNI 'org.lynxsdk.lynx:primjsWasm:4.2.0-alpha.0-SNAPSHOT@aar'
++        extractJNI 'org.lynxsdk.lynx:v8so:11.1.277.4'
++    }
+ 
+     api project(':LynxJSSDK')
+     api project(':ServiceAPI')
+diff --git a/platform/android/lynx_android/gradle.properties b/platform/android/lynx_android/gradle.properties
+index 9381195..ec9c9d4 100644
+--- a/platform/android/lynx_android/gradle.properties
++++ b/platform/android/lynx_android/gradle.properties
+@@ -6,6 +6,7 @@ enable_frozen_mode=false
+ enable_packrel=false
+ enable_lepusng_worklet=false
+ enable_napi_binding=true
++enable_native_renderer_only=false
+ # whether to link static library libc++_static.so
+ use_cpp_static=true
+ 
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/config/LynxLiteConfigs.java b/platform/android/lynx_android/src/main/java/com/lynx/config/LynxLiteConfigs.java
+index f04dbf4..30baf63 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/config/LynxLiteConfigs.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/config/LynxLiteConfigs.java
+@@ -31,7 +31,7 @@ public class LynxLiteConfigs {
+ 
+   // LynxLite statically compiles certain libraries into the liblynx.so
+   public static boolean requireQuickSharedLibrary() {
+-    return !BuildConfig.enable_lite;
++    return !BuildConfig.enable_lite && !BuildConfig.enable_native_renderer_only;
+   }
+ 
+   // Many APIs in Fresco 2.x are not compatible with 1.x.
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+index 8e47440..3cb6880 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
+@@ -327,8 +327,9 @@ public class LynxEnv {
+     // settings update
+     postUpdateSettings();
+ 
+-    // load wasm library
+-    WebAssemblyBridge.initWasm();
++    if (!BuildConfig.enable_native_renderer_only) {
++      WebAssemblyBridge.initWasm();
++    }
+ 
+     // ensure init ui thread native loop
+     initNativeUIThread();
+@@ -336,8 +337,9 @@ public class LynxEnv {
+     // init default display metrics if needed
+     initDisplayMetrics();
+ 
+-    // init global cache pool
+-    initNativeGlobalPool();
++    if (!BuildConfig.enable_native_renderer_only) {
++      initNativeGlobalPool();
++    }
+ 
+     initImageExperimentSettings();
+     initMemoryReportExperimentSettings();
+@@ -376,7 +378,9 @@ public class LynxEnv {
+     initVsyncMonitor();
+ 
+     // add native memory listener
+-    registerNativeMemoryPressureCallback();
++    if (!BuildConfig.enable_native_renderer_only) {
++      registerNativeMemoryPressureCallback();
++    }
+ 
+     mHasInitCompleted = true;
+     dispatchInitCompletionHandler(completionHandler);
+@@ -1660,6 +1664,10 @@ public class LynxEnv {
+   }
+ 
+   public void prepareLynxGlobalPoolByContextType(@MTSContextType int contextType, int count) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "MTS context pools are unavailable in native-renderer-only builds");
++    }
+     if (!mIsNativeLibraryLoaded) {
+       return;
+     }
+@@ -1678,6 +1686,10 @@ public class LynxEnv {
+    * when bytecodeSourceUrl is empty, that means clean all bytecode.
+    */
+   public static void clearBytecode(String bytecodeSourceUrl, boolean useV8) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "JavaScript bytecode is unavailable in native-renderer-only builds");
++    }
+     if (inst().isNativeLibraryLoaded()) {
+       nativeClearBytecode(bytecodeSourceUrl, useV8);
+     }
+@@ -1689,12 +1701,19 @@ public class LynxEnv {
+    *     please pay attention to memory management.
+    */
+   public static void setGlobalBytecodeGenerateCallback(LynxBytecodeCallback callback) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "JavaScript bytecode is unavailable in native-renderer-only builds");
++    }
+     if (inst().isNativeLibraryLoaded()) {
+       nativeSetGlobalBytecodeGenerateCallback(callback);
+     }
+   }
+ 
+   public boolean tryToLoadV8Bridge(boolean unused) {
++    if (BuildConfig.enable_native_renderer_only) {
++      return false;
++    }
+     synchronized (this) {
+       if (mHasV8BridgeLoadSuccess) {
+         return true;
+diff --git a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+index 2b5c118..d0e7597 100644
+--- a/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++++ b/platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
+@@ -416,6 +416,10 @@ public class LynxTemplateRender
+     mTemplateProvider = builder.templateProvider;
+     mEnableSyncFlush = mLynxViewConfigProvider.isEnableSyncFlush();
+     mEnableJSRuntime = mLynxViewConfigProvider.isEnableJSRuntime();
++    if (BuildConfig.enable_native_renderer_only && (mEnableJSRuntime || mRuntime != null)) {
++      throw new UnsupportedOperationException(
++          "JavaScript runtimes are unavailable in native-renderer-only builds");
++    }
+     mEnableGenericResourceFetcher =
+         checkEnableGenericResourceFetcher(mLynxViewConfigProvider.isEnableGenericResourceFetcher());
+     mEnableAirStrictMode = mLynxViewConfigProvider.isEnableAirStrictMode();
+@@ -1032,7 +1036,9 @@ public class LynxTemplateRender
+     TasmPlatformInvoker tasmPlatformInvoker = tasmPlatformInvoker();
+     boolean enableVSyncAligned = mLynxViewConfigProvider.isEnableVSyncAlignedMessageLoop()
+         || LynxEnv.inst().enableVSyncAlignedMessageLoopGlobal();
+-    setUpMainThreadModuleFactory();
++    if (!BuildConfig.enable_native_renderer_only) {
++      setUpMainThreadModuleFactory();
++    }
+     mNativePtr = nativeCreate(mLogContext.viewId, runtimeWrapperPtr, mNativeFacade,
+         mPerformanceController.isEmbeddedMode() ? null : mPerformanceController, mLoader,
+         mThreadStrategyForRendering.id(), mLynxViewConfigProvider.isEnableLayoutSafepoint(),
+@@ -1132,17 +1138,18 @@ public class LynxTemplateRender
+     mIntersectionObserverManager = new LynxIntersectionObserverManager(mLynxContext, mJSProxy);
+     mLynxContext.setIntersectionObserverManager(mIntersectionObserverManager);
+ 
+-    initEngineAndLayoutProxies();
+-
+-    EventEmitter eventEmitter = new LynxEventEmitter(mEngineProxy);
+-    eventEmitter.addObserver(mIntersectionObserverManager);
+-    eventEmitter.registerEventReporter(mNativeFacade);
+-    eventEmitter.registerEventFallback(this);
+-    mLynxContext.setEventEmitter(eventEmitter);
++    if (!BuildConfig.enable_native_renderer_only) {
++      initEngineAndLayoutProxies();
+ 
+-    setThemeInternal(mTheme);
++      EventEmitter eventEmitter = new LynxEventEmitter(mEngineProxy);
++      eventEmitter.addObserver(mIntersectionObserverManager);
++      eventEmitter.registerEventReporter(mNativeFacade);
++      eventEmitter.registerEventFallback(this);
++      mLynxContext.setEventEmitter(eventEmitter);
+ 
+-    updateGlobalPropsInternal(globalProps);
++      setThemeInternal(mTheme);
++      updateGlobalPropsInternal(globalProps);
++    }
+ 
+     if (mFontScale != 1.0f) {
+       nativeSetFontScale(mNativePtr, mNativeLifecycle, mFontScale);
+@@ -1629,6 +1636,10 @@ public class LynxTemplateRender
+    */
+   @AnyThread
+   public void loadTemplate(final LynxLoadMeta metaData) {
++    if (BuildConfig.enable_native_renderer_only) {
++      throw new UnsupportedOperationException(
++          "Templates are unavailable in native-renderer-only builds");
++    }
+     if (mHasDestroy) {
+       return;
+     }
+diff --git a/platform/android/lynx_android/src/main/jni/jni_configs.yml b/platform/android/lynx_android/src/main/jni/jni_configs.yml
+index af6e193..6b4845a 100644
+--- a/platform/android/lynx_android/src/main/jni/jni_configs.yml
++++ b/platform/android/lynx_android/src/main/jni/jni_configs.yml
+@@ -8,6 +8,7 @@ jni_register_configs:
+   special_cases:
+     - header: core/runtime/js/bindings/modules/android/lynx_promise_impl.h
+       method: lynx::runtime::js::LynxPromiseImpl::RegisterJNI(env);
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+ # gn file configs.
+ gn_configs:
+   output_path: platform/android/lynx_android/src/main/jni/BUILD.gn
+@@ -22,8 +23,38 @@ jni_class_configs:
+     - java: platform/android/lynx_android/src/main/java/com/lynx/devtoolwrapper/LynxDevToolPool.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/utils/BlurUtils.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEnv.java
++      native_renderer_only_methods:
++        - SetLocalEnv
++        - SetGroupedEnv
++        - SetGroupedEnvWithGroupSet
++        - InitUIThread
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxTemplateRender.java
++      native_renderer_only_methods:
++        - GenerateViewId
++        - Create
++        - Destroy
++        - RegisterNativeRendererHost
++        - UnregisterNativeRendererHost
++        - DestroyNativeRendererHost
++        - LifecycleCreate
++        - LifecycleTryTerminate
++        - LifecycleDestroy
++        - GetInstanceId
++        - SetEnableUIFlush
++        - OnEnterForeground
++        - OnEnterBackground
++        - OnLynxEngineCreated
++        - SetFontScale
++        - UpdateFontScale
++        - UpdateColorScheme
++        - UpdateReducedMotion
++        - UpdateViewport
++        - SyncFetchLayoutResult
++        - EnforceRelayoutOnCurrentThreadWithUpdatedViewport
++        - MarkDirty
++        - Flush
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/react/bridge/JavaOnlyMap.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/react/bridge/JavaOnlyArray.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxError.java
+@@ -44,21 +75,32 @@ jni_class_configs:
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/utils/CallStackUtil.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/utils/DeviceUtils.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/LynxModuleWrapper.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/MethodDescriptor.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/AttributeDescriptor.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/CallbackImpl.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/jsi/ILynxJSIObjectDescriptor.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/jsi/LynxJSIObjectHub.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/LynxModuleFactory.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/webassembly/WebAssemblyBridge.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     # - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/network/HttpRequest.java
+     # - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/network/HttpResponse.java
+     # - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/network/LynxHttpRunner.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/core/resource/LynxResourceLoader.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/core/JSProxy.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/core/LynxEngineProxy.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/core/LynxLayoutProxy.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxEngine.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     # - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/core/ResourceLoader.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/utils/TextUtils.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/behavior/shadow/TextLayout.java
+@@ -73,6 +115,7 @@ jni_class_configs:
+     - java: platform/android/lynx_android/src/main/java/com/lynx/react/bridge/PiperData.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/behavior/LynxUIRenderer.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/TemplateBundle.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/fluency/FluencySample.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/icu/ICURegister.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/PlatformCallBack.java
+@@ -84,6 +127,9 @@ jni_class_configs:
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/behavior/render/NativePaintingContext.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/featurecount/LynxFeatureCounter.java
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/LynxBackgroundRuntime.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/RuntimeLifecycleListenerDelegate.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/jsbridge/LynxBytecodeCallback.java
++      macro: "!ENABLE_NATIVE_RENDERER_ONLY"
+     - java: platform/android/lynx_android/src/main/java/com/lynx/tasm/behavior/ui/list/container/ListContainerProxy.java
+-- 
+2.39.5
+
