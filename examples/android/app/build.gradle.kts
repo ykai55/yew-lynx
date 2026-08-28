@@ -8,23 +8,57 @@ val androidAdapterDir = repositoryRoot.resolve("adapters/android")
 val elementBridgeBackend = providers.gradleProperty("lynxElementBridgeBackend")
     .orElse("yew")
     .get()
-require(elementBridgeBackend == "yew" || elementBridgeBackend == "dioxus") {
-    "lynxElementBridgeBackend must be yew or dioxus"
+require(elementBridgeBackend in setOf("yew", "dioxus", "wasm-dioxus", "wasm-yew")) {
+    "lynxElementBridgeBackend must be yew, dioxus, wasm-dioxus, or wasm-yew"
 }
-val rustPackage = if (elementBridgeBackend == "yew") {
-    "yew-lynx-counter"
-} else {
-    "lynx-element-bridge-dioxus-counter"
+val wasmMode = elementBridgeBackend.startsWith("wasm-")
+val rustPackage = when (elementBridgeBackend) {
+    "yew" -> "yew-lynx-counter"
+    "dioxus" -> "lynx-element-bridge-dioxus-counter"
+    else -> "lynx-element-bridge-wamr-host"
 }
-val rustArchiveName = if (elementBridgeBackend == "yew") {
-    "libyew_lynx_counter.a"
-} else {
-    "liblynx_element_bridge_dioxus_counter.a"
+val rustArchiveName = when (elementBridgeBackend) {
+    "yew" -> "libyew_lynx_counter.a"
+    "dioxus" -> "liblynx_element_bridge_dioxus_counter.a"
+    else -> "liblynx_element_bridge_wamr_host.a"
 }
 val rustArchive = repositoryRoot.resolve(
     "target/aarch64-linux-android/release/$rustArchiveName"
 )
 val stagedRustDirectory = repositoryRoot.resolve("target/android-libs/$elementBridgeBackend")
+val wasmGuestPackage = if (elementBridgeBackend == "wasm-yew") {
+    "yew-lynx-counter"
+} else {
+    "lynx-element-bridge-dioxus-counter"
+}
+val wasmGuestFile = if (elementBridgeBackend == "wasm-yew") {
+    "yew_lynx_counter.wasm"
+} else {
+    "lynx_element_bridge_dioxus_counter.wasm"
+}
+val wasmInitialAssetName = if (elementBridgeBackend == "wasm-yew") {
+    "yew_counter.wasm"
+} else {
+    "dioxus_counter.wasm"
+}
+val wasmReplacementAssetName = if (elementBridgeBackend == "wasm-yew") {
+    "yew_counter_replacement.wasm"
+} else {
+    "dioxus_counter_replacement.wasm"
+}
+val wasmTargetDirectory = repositoryRoot.resolve("target/wasm-guests/$elementBridgeBackend")
+val initialWasmGuest = wasmTargetDirectory.resolve("initial/wasm32-wasip1/release/$wasmGuestFile")
+val replacementWasmGuest = wasmTargetDirectory.resolve(
+    "replacement/wasm32-wasip1/release/$wasmGuestFile"
+)
+val generatedAssetsDirectory = repositoryRoot.resolve("target/android-assets/$elementBridgeBackend")
+val androidSdkDirectory = file(
+    System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: error("ANDROID_HOME or ANDROID_SDK_ROOT must point to the Android SDK")
+)
+val androidLlvmBin = androidSdkDirectory.resolve(
+    "ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin"
+)
 buildDir = repositoryRoot.resolve("target/android-build/$elementBridgeBackend/app")
 val offlineBuild = providers.gradleProperty("lynxElementBridgeOffline")
     .map(String::toBoolean)
@@ -42,6 +76,17 @@ android {
         targetSdkVersion(33)
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("boolean", "LYNX_ELEMENT_BRIDGE_WASM", wasmMode.toString())
+        buildConfigField(
+            "String",
+            "LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET",
+            "\"$wasmInitialAssetName\""
+        )
+        buildConfigField(
+            "String",
+            "LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET",
+            "\"$wasmReplacementAssetName\""
+        )
 
         ndk {
             abiFilters.add("arm64-v8a")
@@ -82,11 +127,17 @@ android {
 
     sourceSets.getByName("main") {
         java.srcDir(androidAdapterDir.resolve("src/main/java"))
+        if (wasmMode) {
+            assets.srcDir(generatedAssetsDirectory)
+        }
     }
 }
 
 val buildLynxElementBridgeRustArm64 by tasks.registering(Exec::class) {
     workingDir(repositoryRoot)
+    environment("CC_aarch64_linux_android", androidLlvmBin.resolve("aarch64-linux-android24-clang"))
+    environment("AR_aarch64_linux_android", androidLlvmBin.resolve("llvm-ar"))
+    environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", androidLlvmBin.resolve("aarch64-linux-android24-clang"))
     val command = mutableListOf(
         "cargo",
         "build",
@@ -104,7 +155,52 @@ val buildLynxElementBridgeRustArm64 by tasks.registering(Exec::class) {
             rustPackage
         )
     )
+    if (wasmMode) {
+        command.addAll(listOf("--features", "wamr"))
+    }
     commandLine(command)
+}
+
+val buildInitialWasmGuest by tasks.registering(Exec::class) {
+    workingDir(repositoryRoot)
+    environment("CARGO_TARGET_DIR", wasmTargetDirectory.resolve("initial"))
+    val command = mutableListOf("cargo", "build", "--locked")
+    if (offlineBuild.get()) {
+        command.add("--offline")
+    }
+    command.addAll(listOf(
+        "--release",
+        "--target", "wasm32-wasip1",
+        "--package", wasmGuestPackage,
+    ))
+    commandLine(command)
+}
+
+val buildReplacementWasmGuest by tasks.registering(Exec::class) {
+    workingDir(repositoryRoot)
+    environment("CARGO_TARGET_DIR", wasmTargetDirectory.resolve("replacement"))
+    val command = mutableListOf("cargo", "build", "--locked")
+    if (offlineBuild.get()) {
+        command.add("--offline")
+    }
+    command.addAll(listOf(
+        "--release",
+        "--target", "wasm32-wasip1",
+        "--package", wasmGuestPackage,
+        "--features", "replacement-fixture",
+    ))
+    commandLine(command)
+}
+
+val stageWasmGuests by tasks.registering(Copy::class) {
+    dependsOn(buildInitialWasmGuest, buildReplacementWasmGuest)
+    from(initialWasmGuest) {
+        rename { wasmInitialAssetName }
+    }
+    from(replacementWasmGuest) {
+        rename { wasmReplacementAssetName }
+    }
+    into(generatedAssetsDirectory)
 }
 
 val stageLynxElementBridgeRustArm64 by tasks.registering(Copy::class) {
@@ -116,6 +212,9 @@ val stageLynxElementBridgeRustArm64 by tasks.registering(Copy::class) {
 
 tasks.named("preBuild") {
     dependsOn(stageLynxElementBridgeRustArm64)
+    if (wasmMode) {
+        dependsOn(stageWasmGuests)
+    }
 }
 tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
     dependsOn(stageLynxElementBridgeRustArm64)

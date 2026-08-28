@@ -76,10 +76,17 @@ The pinned source publishes two separate Maven products at version
   not depend on the stock `lynx` artifact.
 
 The native product POM and application runtime graph exclude stock `lynx`,
-Quick/PrimJS, NAPI, Wasm, V8, and LynxJSSDK. The APK likewise excludes
-`liblynx.so`, their runtime shared libraries, and `assets/lynx_core.js`. The
-native renderer ELF has no forbidden runtime `DT_NEEDED` entries or undefined
-runtime symbols, and exports `lynx_native_renderer_get_api`.
+Quick/PrimJS, NAPI, V8, LynxJSSDK, and standalone Wasm runtime artifacts. The
+APK likewise excludes `liblynx.so`, their runtime shared libraries, and
+`assets/lynx_core.js`. The opt-in `wasm-dioxus` and `wasm-yew` modes statically
+embed pinned WAMR in `liblynx_element_bridge.so` and package generated initial
+and replacement guest assets; native Yew and Dioxus modes package neither. Each
+framework builds both assets from its existing crate and the same DSL source;
+the `replacement-fixture` compile-time feature changes only the visible initial
+count from `0` to `100`. Both guests reuse their native adapter and implement the same
+mount/event/destroy protocol without timer dispatch. The native renderer ELF has
+no forbidden runtime `DT_NEEDED` entries or undefined runtime symbols, and
+exports `lynx_native_renderer_get_api`.
 Packaging does not change the runtime architecture: framework mutations still
 cross the versioned C function table in memory, with no MTS or template
 transport.
@@ -117,7 +124,7 @@ arm64-v8a:
 | Yew | `121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d` | `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final` | 9 | 4 | 9 |
 | Dioxus | `008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc` | `.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final` | 9 | 4 | 9 |
 
-Both runs passed fresh launch, timer, tap, recreation, force-stop/reopen, and
+Both runs passed fresh launch, tap, recreation, force-stop/reopen, and
 three repeated cycles, with every functional flag true and zero crash markers.
 Each recorded `onCreate=9`, `onDestroy=4`, nine native diagnostics, and nine
 selected-backend markers,
@@ -128,7 +135,7 @@ launch and after interaction: all five required libraries (`liblynx_native_rende
 `liblynxtrace.so`) were mapped at both points; the forbidden set was empty and
 Quick, NAPI, Wasm, and V8 mapping flags were false.
 
-Each evidence directory contains nine files. All 21 `NativeRendererApiTest`
+The current acceptance flow writes eight evidence files. All 21 `NativeRendererApiTest`
 cases pass (21/21), with no private test peer or helper; release behavior is
 tested through the production function table. All 11 public statuses cross the
 production boundary. `RESOURCE_EXHAUSTED` and `INTERNAL_ERROR` are returned by

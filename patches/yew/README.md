@@ -11,9 +11,11 @@ repository composes it with the core `Session`, in-memory `CommandBatch`, Rust
 - Commit: `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`
 - Required Rust version: 1.85
 
-The patch adds a `native_renderer` feature to `yew` and `yew-macro`. It is
-native-target only, cannot be combined with `csr` or `hydration`, and may be
-combined with `ssr` on a native target.
+The patch adds a `native_renderer` feature to `yew` and `yew-macro`. It supports
+native targets and `wasm32-wasip1`, cannot be combined with `csr` or
+`hydration`, and does not select Yew's browser DOM renderer. Browser-only Gloo,
+panic-hook, and `wasm-bindgen-futures` dependencies remain tied to CSR or
+hydration rather than the WASI guest.
 
 ## API
 
@@ -85,6 +87,7 @@ The patch updates Yew's lockfile with the base manifest's existing `matchit
 
 ```bash
 cargo check --locked -p yew --features native_renderer
+cargo check --locked --target wasm32-wasip1 -p yew --features native_renderer
 cargo test --locked -p yew --lib --features native_renderer native_renderer::tests
 cargo test --locked -p yew-macro --features native_renderer --test html_macro_test html_macro -- --exact
 cargo test --locked -p yew-macro --test html_macro_test html_macro -- --exact
@@ -95,7 +98,7 @@ lifecycle, Android JNI, real staticlib symbol, and Lynx patch/header checks.
 
 The composed Yew backend passed final patch-0015 binary-native device acceptance
 on 2026-08-22 on an anonymous Xiaomi Redmi K60 Pro physical device running
-Android 13/API 33, arm64-v8a. Fresh launch, timer, tap, recreation,
+Android 13/API 33, arm64-v8a. Fresh launch, tap, recreation,
 force-stop/reopen, and three cycles passed, with every functional result flag
 true. The run recorded
 `onCreate=9`, `onDestroy=4`, `diagnostics=9`, nine Yew backend markers,

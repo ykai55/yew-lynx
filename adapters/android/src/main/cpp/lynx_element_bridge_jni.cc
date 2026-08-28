@@ -6,8 +6,19 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <vector>
 
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+#include "lynx_wamr_application.h"
+#else
 #include "lynx_native_application.h"
+#endif
+
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+extern "C" JNIEXPORT const char lynx_element_bridge_wamr_backend_marker[] =
+    LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_MARKER;
+#endif
 
 namespace {
 
@@ -122,6 +133,19 @@ LynxNativeRendererGetApiFn ResolveNativeRendererApi(JNIEnv *env) {
 }
 
 jstring BackendName(JNIEnv *env) {
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+  static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:wasm-";
+  if (std::strncmp(lynx_element_bridge_wamr_backend_marker, kMarkerPrefix,
+                   sizeof(kMarkerPrefix) - 1) != 0 ||
+      std::strcmp(lynx_element_bridge_wamr_backend_marker +
+                      sizeof(kMarkerPrefix) - 1,
+                  LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME) != 0) {
+    Throw(env, "java/lang/IllegalStateException",
+          "WASM backend identity is invalid");
+    return nullptr;
+  }
+  return env->NewStringUTF(LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME);
+#else
   const char *backend = lynx_element_bridge_backend();
   const char *marker = lynx_element_bridge_backend_marker();
   static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:";
@@ -133,7 +157,37 @@ jstring BackendName(JNIEnv *env) {
     return nullptr;
   }
   return env->NewStringUTF(backend);
+#endif
 }
+
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+bool CopyModule(JNIEnv *env, jbyteArray module_bytes,
+                std::vector<uint8_t> *module) {
+  if (module_bytes == nullptr) {
+    Throw(env, "java/lang/NullPointerException", "moduleBytes");
+    return false;
+  }
+  const jsize length = env->GetArrayLength(module_bytes);
+  if (env->ExceptionCheck()) {
+    return false;
+  }
+  if (length == 0) {
+    Throw(env, "java/lang/IllegalArgumentException",
+          "WASM module bytes must not be empty");
+    return false;
+  }
+  try {
+    module->resize(static_cast<size_t>(length));
+  } catch (const std::bad_alloc &) {
+    Throw(env, "java/lang/OutOfMemoryError",
+          "could not copy WASM module bytes");
+    return false;
+  }
+  env->GetByteArrayRegion(module_bytes, 0, length,
+                          reinterpret_cast<jbyte *>(module->data()));
+  return !env->ExceptionCheck();
+}
+#endif
 
 } // namespace
 
@@ -146,6 +200,11 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(JNIEnv *env,
           "Lynx host token must not be zero");
     return 0;
   }
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+  Throw(env, "java/lang/UnsupportedOperationException",
+        "native mount is unavailable in WASM mode");
+  return 0;
+#else
   LynxNativeRendererGetApiFn get_api = ResolveNativeRendererApi(env);
   if (get_api == nullptr) {
     return 0;
@@ -163,6 +222,71 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(JNIEnv *env,
     return 0;
   }
   return static_cast<jlong>(mounted.session);
+#endif
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMountWasm(
+    JNIEnv *env, jclass, jlong host, jbyteArray module_bytes) {
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+  if (host == 0) {
+    Throw(env, "java/lang/IllegalArgumentException",
+          "Lynx host token must not be zero");
+    return 0;
+  }
+  std::vector<uint8_t> module;
+  if (!CopyModule(env, module_bytes, &module)) {
+    return 0;
+  }
+  LynxNativeRendererGetApiFn get_api = ResolveNativeRendererApi(env);
+  if (get_api == nullptr) {
+    return 0;
+  }
+  LynxElementBridgeNativeMountResult mounted = lynx_element_bridge_wamr_mount(
+      get_api, static_cast<LynxNativeHostHandle>(host), module.data(),
+      module.size());
+  if (mounted.status != LYNX_NATIVE_RENDERER_STATUS_OK) {
+    ThrowNativeStatus(env, mounted.status, "WAMR mount");
+    return 0;
+  }
+  if (mounted.session == 0) {
+    ThrowNativeStatus(env, LYNX_NATIVE_RENDERER_STATUS_HOST_ERROR,
+                      "WAMR mount");
+    return 0;
+  }
+  return static_cast<jlong>(mounted.session);
+#else
+  (void)host;
+  (void)module_bytes;
+  Throw(env, "java/lang/UnsupportedOperationException",
+        "WAMR mount is unavailable in a native backend");
+  return 0;
+#endif
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeReplaceWasm(
+    JNIEnv *env, jclass, jlong session, jbyteArray module_bytes) {
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+  LynxElementBridgeSession native_session = 0;
+  if (!SessionFromJLong(env, session, &native_session)) {
+    return;
+  }
+  std::vector<uint8_t> module;
+  if (!CopyModule(env, module_bytes, &module)) {
+    return;
+  }
+  LynxNativeRendererStatus status = lynx_element_bridge_wamr_replace(
+      native_session, module.data(), module.size());
+  if (status != LYNX_NATIVE_RENDERER_STATUS_OK) {
+    ThrowNativeStatus(env, status, "WAMR replace");
+  }
+#else
+  (void)session;
+  (void)module_bytes;
+  Throw(env, "java/lang/UnsupportedOperationException",
+        "WAMR replace is unavailable in a native backend");
+#endif
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -182,7 +306,11 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
     return;
   }
   LynxElementBridgeNativeDestroyResult destroyed =
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+      lynx_element_bridge_wamr_destroy(native_session);
+#else
       lynx_element_bridge_native_destroy_session(native_session);
+#endif
   const jboolean consumed = destroyed.consumed != 0 ? JNI_TRUE : JNI_FALSE;
   env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
   if (env->ExceptionCheck()) {
@@ -199,6 +327,13 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
 extern "C" JNIEXPORT void JNICALL
 Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
     JNIEnv *env, jclass, jlong session, jbooleanArray consumed_out) {
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+  (void)session;
+  (void)consumed_out;
+  Throw(env, "java/lang/UnsupportedOperationException",
+        "abandon is unavailable in wasm-dioxus mode");
+  return;
+#else
   if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
     Throw(env, "java/lang/IllegalArgumentException",
           "consumedOut must contain one element");
@@ -225,6 +360,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
     ThrowNativeStatus(env, LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR,
                       "native abandon");
   }
+#endif
 }
 
 extern "C" JNIEXPORT jstring JNICALL

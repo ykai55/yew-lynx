@@ -1,9 +1,9 @@
 # Standalone Android example
 
-This Kotlin app hosts either the Yew or Dioxus counter through Lynx's native
-renderer function table. It registers one native host per `LynxView`, links one
-backend-specific Rust arm64 archive, and does not render a template bundle or
-enable JS/MTS application execution.
+This Kotlin app hosts the Yew or Dioxus counter natively, or either framework as
+a guest in statically embedded WAMR, through Lynx's native renderer function table. It
+registers one native host per `LynxView`, links one backend-specific Rust arm64
+archive, and does not render a template bundle or enable JS/MTS execution.
 
 ## Build
 
@@ -12,6 +12,8 @@ From the repository root:
 ```bash
 ./scripts/build-android.sh --backend yew
 ./scripts/build-android.sh --backend dioxus
+./scripts/build-android.sh --backend wasm-dioxus
+./scripts/build-android.sh --backend wasm-yew
 ```
 
 `--clean` discards generated integration outputs. After a matching online build,
@@ -31,12 +33,18 @@ Requirements:
 - Android NDK 21.1.6352462 for Lynx AARs
 - Android NDK 25.2.9519653 for Rust/JNI linking
 - CMake 3.22.1
-- Rust 1.85.0 with `aarch64-linux-android`
+- Rust 1.85.0 with `aarch64-linux-android` and `wasm32-wasip1`
 - Node.js 22.18.0 for Lynx's source build tooling
 
 The app supports only `arm64-v8a`. APKs are written to
-`.deps/android/apks/lynx-element-bridge-{yew,dioxus}.apk`. The build rejects any
-packaged `.lynx.bundle`; stock `liblynx.so`; Quick/PrimJS, NAPI, Wasm, or V8
+`.deps/android/apks/lynx-element-bridge-{yew,dioxus,wasm-dioxus,wasm-yew}.apk`.
+The Wasm modes package initial and replacement variants of
+`assets/dioxus_counter.wasm` or `assets/yew_counter.wasm`, statically link WAMR into
+`liblynx_element_bridge.so`, and exposes `MainActivity.replaceWasmModule()` as a
+local replacement test hook. Both variants compile the same framework crate and
+DSL source; `replacement-fixture` changes the candidate's initial count to
+`Count: 100`. The build rejects any packaged `.lynx.bundle`;
+stock `liblynx.so`; Quick/PrimJS, NAPI, standalone Wasm runtime, or V8 shared
 libraries; and LynxJSSDK's `assets/lynx_core.js`. It also verifies the native
 product and app dependency graphs, the selected backend marker, forbidden ELF
 `DT_NEEDED`/undefined runtime symbols, and the exported C API. PrimJS lock and
@@ -56,16 +64,22 @@ python3 scripts/android-device-acceptance.py \
   --evidence-dir .deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final
 ```
 
-The script verifies timer-only update, tap update, rotation recreation,
-force-stop/reopen, repeated mount/tap/destroy cycles, backend identity, native
+Use the corresponding `wasm-dioxus` or `wasm-yew` backend and APK for a Wasm
+run. After tapping to `Count: 1`, the script sends an explicit acceptance intent
+to the foreground activity, which reads the packaged replacement asset and calls
+`replaceWasmModule()`. A passing run must visibly show the candidate's
+`Count: 100`, distinct from both `Count: 0` and `Count: 1`, and log the completed
+replacement; no network, second business crate, or state migration is involved.
+
+The script verifies tap update, rotation recreation, force-stop/reopen,
+repeated mount/tap/destroy cycles, backend identity, native/Wasm
 diagnostics, APK contents, and fresh/post-interaction process maps. It restores
 rotation settings and does not persist the ADB serial.
 
-Each successful evidence directory has exactly these nine files:
+The native acceptance flow writes these eight evidence files:
 
 ```text
 fresh-count-0.png
-after-timer-fired.png
 after-tap-count-1.png
 after-activity-recreation.png
 after-force-stop-reopen.png
@@ -74,6 +88,10 @@ maps-fresh.txt
 maps-after-interaction.txt
 summary.json
 ```
+
+Wasm runs additionally write `after-wasm-replace-count-100.png` and report
+`wasm_replacement_expected_count=100` and
+`wasm_replacement_candidate_detected=true` in `summary.json`.
 
 Final patch-0015 binary-native evidence from 2026-08-22 was recorded on an
 anonymous Xiaomi Redmi K60 Pro physical device running Android 13/API 33,
@@ -84,7 +102,7 @@ arm64-v8a:
 | Yew | `121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d` | `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final` | 9 | 4 | 9 |
 | Dioxus | `008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc` | `.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final` | 9 | 4 | 9 |
 
-Both runs passed fresh launch, timer, tap, recreation, force-stop/reopen, and
+Both runs passed fresh launch, tap, recreation, force-stop/reopen, and
 three cycles, with every functional result flag true and zero crash markers.
 Both recorded `renderer_mode=native`, `bts_runtime=false`, `mts_context=false`,
 and `template=false`. `proc_maps_checked` is true: the five required libraries

@@ -3,55 +3,104 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
-use lynx_element_bridge_core::{CallbackId, CommandBatch, EventMessage, NodeId, SessionId, Status};
+#[cfg(any(target_arch = "wasm32", test))]
+use lynx_element_bridge_core::BridgeError;
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId, Status};
+#[cfg(not(target_arch = "wasm32"))]
 use lynx_element_bridge_ffi::native_host::{NativeHostHandle, NativeRendererGetApiFn};
+#[cfg(not(target_arch = "wasm32"))]
 use lynx_element_bridge_ffi::{
     BackendError, BridgeBackend, LynxElementBridgeNativeDestroyResult,
-    LynxElementBridgeNativeMountResult, LynxElementBridgeSession, NativeTimerRequest,
+    LynxElementBridgeNativeMountResult, LynxElementBridgeSession,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use lynx_element_bridge_wasm_guest::{GuestApplication, MountRequest};
 use lynx_element_bridge_yew::{YewAdapter, YewAdapterError};
 use yew::{NativeAppHandle, NativeNode, NativeRenderer};
 
-use crate::app::{Counter, CounterMessage};
+use crate::app::Counter;
 
-const TIMER_CALLBACK_ID: u32 = 1;
-
-struct YewBackend {
+pub struct YewCounter {
     adapter: Rc<YewAdapter>,
     app: Option<NativeAppHandle<Counter>>,
 }
 
-impl BridgeBackend for YewBackend {
-    fn initial_native_timers(&self) -> Vec<NativeTimerRequest> {
-        vec![NativeTimerRequest {
-            delay_millis: 1_500,
-            repeating: false,
-            callback: CallbackId::new(TIMER_CALLBACK_ID).expect("timer callback ID is nonzero"),
-        }]
+impl YewCounter {
+    fn mount(session: SessionId, root: NodeId) -> Result<(Self, CommandBatch), YewAdapterError> {
+        let adapter = YewAdapter::new(session, root)?;
+        let rendered = catch_unwind(AssertUnwindSafe({
+            let adapter = Rc::clone(&adapter);
+            move || NativeRenderer::<Counter>::new(adapter, NativeNode(root.get().into())).render()
+        }));
+        let mut app = match rendered {
+            Ok(app) => app,
+            Err(payload) => {
+                adapter.discard_pending();
+                resume_unwind(payload);
+            }
+        };
+        let batch = match adapter.take_batch() {
+            Ok(batch) => batch,
+            Err(error) => {
+                let _ = catch_unwind(AssertUnwindSafe(|| app.destroy()));
+                return Err(error);
+            }
+        };
+        Ok((
+            Self {
+                adapter,
+                app: Some(app),
+            },
+            batch,
+        ))
     }
 
-    fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError> {
-        self.adapter.dispatch_event(&event).map_err(adapter_error)?;
-        self.adapter.take_batch().map_err(adapter_error)
+    fn dispatch(&mut self, event: EventMessage) -> Result<CommandBatch, YewAdapterError> {
+        self.adapter.dispatch_event(&event)?;
+        self.adapter.take_batch()
     }
 
-    fn dispatch_timer(&mut self, callback: CallbackId) -> Result<CommandBatch, BackendError> {
-        if callback.get() != TIMER_CALLBACK_ID {
-            return Err(BackendError::recoverable(
-                Status::InvalidArgument,
-                "Yew timer callback identity does not match",
-            ));
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn destroy(mut self) -> Result<CommandBatch, BridgeError> {
+        let mut app = self
+            .app
+            .take()
+            .expect("a mounted Yew counter must retain its application handle");
+        let destroyed = catch_unwind(AssertUnwindSafe(|| app.destroy()));
+        match destroyed {
+            Ok(Ok(())) => self.adapter.destroy().map_err(guest_error),
+            Ok(Err(error)) => {
+                app.abandon();
+                self.adapter.discard_pending();
+                Err(BridgeError::new(Status::InternalError, error.to_string()))
+            }
+            Err(payload) => {
+                self.adapter.discard_pending();
+                resume_unwind(payload);
+            }
         }
-        self.app
-            .as_ref()
-            .ok_or_else(|| {
-                BackendError::fatal(
-                    Status::InternalError,
-                    "Yew backend has no application handle",
-                )
-            })?
-            .send_message(CounterMessage::TimerFired);
-        self.adapter.take_batch().map_err(adapter_error)
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl GuestApplication for YewCounter {
+    fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
+        YewCounter::mount(request.session, request.root).map_err(guest_error)
+    }
+
+    fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BridgeError> {
+        self.dispatch(event).map_err(guest_error)
+    }
+
+    fn destroy(self) -> Result<CommandBatch, BridgeError> {
+        YewCounter::destroy(self)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl BridgeBackend for YewCounter {
+    fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError> {
+        self.dispatch(event).map_err(adapter_error)
     }
 
     fn destroy(mut self: Box<Self>, poisoned: bool) -> Result<CommandBatch, BackendError> {
@@ -98,6 +147,7 @@ impl BridgeBackend for YewBackend {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn adapter_error(error: YewAdapterError) -> BackendError {
     match error {
         YewAdapterError::InvalidListener(_) | YewAdapterError::EventMismatch { .. } => {
@@ -113,36 +163,29 @@ fn adapter_error(error: YewAdapterError) -> BackendError {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn guest_error(error: YewAdapterError) -> BridgeError {
+    match error {
+        YewAdapterError::Bridge(error) => error,
+        YewAdapterError::InvalidListener(_) | YewAdapterError::EventMismatch { .. } => {
+            BridgeError::new(Status::InvalidListener, error.to_string())
+        }
+        YewAdapterError::CallbackExhausted => {
+            BridgeError::new(Status::ResourceExhausted, error.to_string())
+        }
+        YewAdapterError::InvalidNode(_) | YewAdapterError::Borrowed(_) => {
+            BridgeError::new(Status::HostError, error.to_string())
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn create_backend(
     session: SessionId,
     root: NodeId,
 ) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError> {
-    let adapter = YewAdapter::new(session, root).map_err(adapter_error)?;
-    let rendered = catch_unwind(AssertUnwindSafe({
-        let adapter = Rc::clone(&adapter);
-        move || NativeRenderer::<Counter>::new(adapter, NativeNode(root.get().into())).render()
-    }));
-    let mut app = match rendered {
-        Ok(app) => app,
-        Err(payload) => {
-            adapter.discard_pending();
-            resume_unwind(payload);
-        }
-    };
-    let batch = match adapter.take_batch() {
-        Ok(batch) => batch,
-        Err(error) => {
-            let _ = catch_unwind(AssertUnwindSafe(|| app.destroy()));
-            return Err(adapter_error(error));
-        }
-    };
-    Ok((
-        Box::new(YewBackend {
-            adapter,
-            app: Some(app),
-        }),
-        batch,
-    ))
+    let (counter, batch) = YewCounter::mount(session, root).map_err(adapter_error)?;
+    Ok((Box::new(counter), batch))
 }
 
 /// Mounts the counter directly through the native renderer function table.
@@ -151,6 +194,7 @@ fn create_backend(
 ///
 /// `get_api` and `host` must obey the native renderer C ABI for the mounted session lifetime.
 #[unsafe(no_mangle)]
+#[cfg(not(target_arch = "wasm32"))]
 pub unsafe extern "C" fn lynx_element_bridge_native_mount(
     get_api: Option<NativeRendererGetApiFn>,
     host: NativeHostHandle,
@@ -160,6 +204,7 @@ pub unsafe extern "C" fn lynx_element_bridge_native_mount(
 }
 
 #[unsafe(no_mangle)]
+#[cfg(not(target_arch = "wasm32"))]
 pub extern "C" fn lynx_element_bridge_native_destroy_session(
     session: LynxElementBridgeSession,
 ) -> LynxElementBridgeNativeDestroyResult {
@@ -167,6 +212,7 @@ pub extern "C" fn lynx_element_bridge_native_destroy_session(
 }
 
 #[unsafe(no_mangle)]
+#[cfg(not(target_arch = "wasm32"))]
 pub extern "C" fn lynx_element_bridge_native_abandon_session(
     session: LynxElementBridgeSession,
 ) -> LynxElementBridgeNativeDestroyResult {
@@ -174,16 +220,22 @@ pub extern "C" fn lynx_element_bridge_native_abandon_session(
 }
 
 #[unsafe(no_mangle)]
+#[cfg(not(target_arch = "wasm32"))]
 pub extern "C" fn lynx_element_bridge_backend() -> *const std::ffi::c_char {
     c"yew".as_ptr()
 }
 
 #[unsafe(no_mangle)]
+#[cfg(not(target_arch = "wasm32"))]
 pub extern "C" fn lynx_element_bridge_backend_marker() -> *const std::ffi::c_char {
     c"lynx-element-bridge-backend:yew".as_ptr()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(unsafe_code)]
 #[path = "../../native_lifecycle_tests.rs"]
 mod native_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "../wasm_guest_lifecycle_tests.rs"]
+mod wasm_guest_lifecycle_tests;

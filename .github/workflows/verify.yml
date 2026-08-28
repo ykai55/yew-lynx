@@ -27,9 +27,14 @@ jobs:
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.85.0 --profile minimal \
-            --component clippy,rustfmt --target aarch64-linux-android
+            --component clippy,rustfmt \
+            --target aarch64-linux-android,wasm32-wasip1
           rustup default 1.85.0
           rustc --version
+
+      - name: Install Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;25.2.9519653"
 
       - name: Run repository verification
         run: ./scripts/verify.sh

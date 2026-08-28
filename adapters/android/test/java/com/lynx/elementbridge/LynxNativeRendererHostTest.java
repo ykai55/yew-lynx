@@ -14,6 +14,7 @@ public final class LynxNativeRendererHostTest {
     boolean throwOnDestroy;
     boolean throwOnAbandon;
     long nextSession = 91;
+    byte[] lastModule;
 
     @Override
     public boolean isAvailable() {
@@ -24,6 +25,19 @@ public final class LynxNativeRendererHostTest {
     public long mount(long host) {
       calls.add("mount:" + Long.toUnsignedString(host));
       return nextSession;
+    }
+
+    @Override
+    public long mountWasm(long host, byte[] moduleBytes) {
+      calls.add("mountWasm:" + Long.toUnsignedString(host));
+      lastModule = moduleBytes;
+      return nextSession;
+    }
+
+    @Override
+    public void replaceWasm(long session, byte[] moduleBytes) {
+      calls.add("replaceWasm:" + session);
+      lastModule = moduleBytes;
     }
 
     @Override
@@ -52,7 +66,7 @@ public final class LynxNativeRendererHostTest {
   }
 
   public static void main(String[] args) throws Exception {
-    lifecycleExposesOnlyNativeControlValues();
+    lifecycleExposesWasmByteInputWithoutByteOutput();
     mountReturnsBackendAndPreservesTokenBits();
     duplicateAndOutOfOrderCallsAreRejected();
     consumedDestroyFailureClosesTheOwner();
@@ -61,9 +75,10 @@ public final class LynxNativeRendererHostTest {
     consumedAbandonFailureClosesTheOwner();
     unconsumedAbandonFailureCanBeRetried();
     unavailableBridgeIsRejectedBeforeNativeCalls();
+    wasmMountReplaceAndDestroyAreOwnedByOneSession();
   }
 
-  private static void lifecycleExposesOnlyNativeControlValues() throws Exception {
+  private static void lifecycleExposesWasmByteInputWithoutByteOutput() throws Exception {
     Method mount = LynxNativeRendererHost.class.getMethod("mount", long.class);
     Method destroy = LynxNativeRendererHost.class.getMethod("destroy");
     Method abandon = LynxNativeRendererHost.class.getMethod("abandon");
@@ -73,10 +88,27 @@ public final class LynxNativeRendererHostTest {
     for (Method method : LynxNativeRendererHost.class.getDeclaredMethods()) {
       assertEquals(false, method.getReturnType().isArray()
           && method.getReturnType().getComponentType() == byte.class);
-      for (Class<?> parameter : method.getParameterTypes()) {
-        assertEquals(false, parameter.isArray() && parameter.getComponentType() == byte.class);
-      }
     }
+  }
+
+  private static void wasmMountReplaceAndDestroyAreOwnedByOneSession() {
+    FakeNativeCalls nativeCalls = new FakeNativeCalls();
+    LynxNativeRendererHost host = new LynxNativeRendererHost(nativeCalls);
+    byte[] first = {0, 97, 115, 109};
+    byte[] replacement = {0, 97, 115, 109, 1};
+
+    assertEquals("mock", host.mount(7, first));
+    assertEquals(first, nativeCalls.lastModule);
+    host.replace(replacement);
+    assertEquals(replacement, nativeCalls.lastModule);
+    assertThrows(IllegalStateException.class, () -> host.mount(8), "already mounted");
+    host.destroy();
+    assertEquals(Arrays.asList("backend", "mountWasm:7", "replaceWasm:91", "destroy:91"),
+        nativeCalls.calls);
+
+    LynxNativeRendererHost nativeHost = new LynxNativeRendererHost(new FakeNativeCalls());
+    nativeHost.mount(1);
+    assertThrows(IllegalStateException.class, () -> nativeHost.replace(first), "not a WAMR");
   }
 
   private static void mountReturnsBackendAndPreservesTokenBits() {

@@ -5,6 +5,8 @@ use std::fmt;
 use std::thread::{self, ThreadId};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct SessionId(u32);
 
 impl SessionId {
@@ -17,7 +19,23 @@ impl SessionId {
     }
 }
 
+impl TryFrom<u32> for SessionId {
+    type Error = BridgeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<SessionId> for u32 {
+    fn from(value: SessionId) -> Self {
+        value.get()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -30,7 +48,23 @@ impl NodeId {
     }
 }
 
+impl TryFrom<u32> for NodeId {
+    type Error = BridgeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<NodeId> for u32 {
+    fn from(value: NodeId) -> Self {
+        value.get()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct ListenerId(u32);
 
 impl ListenerId {
@@ -43,7 +77,23 @@ impl ListenerId {
     }
 }
 
+impl TryFrom<u32> for ListenerId {
+    type Error = BridgeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<ListenerId> for u32 {
+    fn from(value: ListenerId) -> Self {
+        value.get()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct CallbackId(u32);
 
 impl CallbackId {
@@ -53,6 +103,20 @@ impl CallbackId {
 
     pub const fn get(self) -> u32 {
         self.0
+    }
+}
+
+impl TryFrom<u32> for CallbackId {
+    type Error = BridgeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<CallbackId> for u32 {
+    fn from(value: CallbackId) -> Self {
+        value.get()
     }
 }
 
@@ -68,6 +132,7 @@ fn nonzero_id(value: u32, kind: &'static str) -> Result<u32, BridgeError> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum Status {
     Ok,
     InvalidArgument,
@@ -83,6 +148,7 @@ pub enum Status {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct BridgeError {
     pub status: Status,
     pub message: String,
@@ -106,6 +172,7 @@ impl fmt::Display for BridgeError {
 impl std::error::Error for BridgeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum Command {
     CreateElement {
         node: NodeId,
@@ -152,6 +219,7 @@ pub enum Command {
 
 /// An ordered, session-scoped set of in-memory renderer mutations.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CommandBatch {
     pub session: SessionId,
     pub sequence: u32,
@@ -160,6 +228,7 @@ pub struct CommandBatch {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct EventMessage {
     pub session: SessionId,
     pub listener: ListenerId,

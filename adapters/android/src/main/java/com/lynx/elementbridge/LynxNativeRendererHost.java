@@ -7,6 +7,10 @@ public final class LynxNativeRendererHost {
 
     long mount(long host);
 
+    long mountWasm(long host, byte[] moduleBytes);
+
+    void replaceWasm(long session, byte[] moduleBytes);
+
     void destroy(long session, boolean[] consumedOut);
 
     void abandon(long session, boolean[] consumedOut);
@@ -28,6 +32,16 @@ public final class LynxNativeRendererHost {
     }
 
     @Override
+    public long mountWasm(long host, byte[] moduleBytes) {
+      return nativeMountWasm(host, moduleBytes);
+    }
+
+    @Override
+    public void replaceWasm(long session, byte[] moduleBytes) {
+      nativeReplaceWasm(session, moduleBytes);
+    }
+
+    @Override
     public void destroy(long session, boolean[] consumedOut) {
       nativeDestroySession(session, consumedOut);
     }
@@ -46,6 +60,7 @@ public final class LynxNativeRendererHost {
   private final NativeCalls nativeCalls;
   private long nativeSession;
   private boolean destroyed;
+  private boolean wasmSession;
 
   public LynxNativeRendererHost() {
     this(JNI_NATIVE_CALLS);
@@ -60,6 +75,21 @@ public final class LynxNativeRendererHost {
 
   /** Mounts exactly once and returns the identity exported by the selected Rust backend. */
   public synchronized String mount(long host) {
+    return mount(host, null, false);
+  }
+
+  /** Mounts a WAMR session from a complete WebAssembly module. */
+  public synchronized String mount(long host, byte[] moduleBytes) {
+    if (moduleBytes == null) {
+      throw new NullPointerException("moduleBytes");
+    }
+    if (moduleBytes.length == 0) {
+      throw new IllegalArgumentException("WASM module bytes must not be empty");
+    }
+    return mount(host, moduleBytes, true);
+  }
+
+  private String mount(long host, byte[] moduleBytes, boolean wasm) {
     if (destroyed) {
       throw new IllegalStateException("Native renderer host is destroyed");
     }
@@ -77,12 +107,32 @@ public final class LynxNativeRendererHost {
     if (backend == null || backend.isEmpty()) {
       throw new IllegalStateException("Rust backend identity is invalid");
     }
-    long session = nativeCalls.mount(host);
+    long session = wasm
+        ? nativeCalls.mountWasm(host, moduleBytes)
+        : nativeCalls.mount(host);
     if (session == 0) {
       throw new IllegalStateException("Native mount returned a zero session");
     }
     nativeSession = session;
+    wasmSession = wasm;
     return backend;
+  }
+
+  /** Replaces the active WAMR module after candidate preflight. */
+  public synchronized void replace(byte[] moduleBytes) {
+    if (destroyed || nativeSession == 0) {
+      throw new IllegalStateException("Native renderer host is not mounted");
+    }
+    if (!wasmSession) {
+      throw new IllegalStateException("Native renderer host is not a WAMR session");
+    }
+    if (moduleBytes == null) {
+      throw new NullPointerException("moduleBytes");
+    }
+    if (moduleBytes.length == 0) {
+      throw new IllegalArgumentException("WASM module bytes must not be empty");
+    }
+    nativeCalls.replaceWasm(nativeSession, moduleBytes);
   }
 
   /** Destroys the Rust session; a consumed failure still permanently closes this owner. */
@@ -103,6 +153,7 @@ public final class LynxNativeRendererHost {
     } finally {
       if (consumedOut[0]) {
         nativeSession = 0;
+        wasmSession = false;
         destroyed = true;
       }
     }
@@ -126,6 +177,7 @@ public final class LynxNativeRendererHost {
     } finally {
       if (consumedOut[0]) {
         nativeSession = 0;
+        wasmSession = false;
         destroyed = true;
       }
     }
@@ -145,6 +197,10 @@ public final class LynxNativeRendererHost {
   }
 
   private static native long nativeMount(long host);
+
+  private static native long nativeMountWasm(long host, byte[] moduleBytes);
+
+  private static native void nativeReplaceWasm(long session, byte[] moduleBytes);
 
   private static native void nativeDestroySession(long session, boolean[] consumedOut);
 

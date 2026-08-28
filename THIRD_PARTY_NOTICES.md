@@ -59,6 +59,18 @@ JavaScript runtime artifacts.
 The Dioxus adapter uses the renderer-neutral core API and exposes a Lynx-native
 RSX vocabulary. Dioxus framework `Template` values remain in-memory VDOM data.
 
+## WebAssembly Micro Runtime
+
+- Upstream: <https://github.com/bytecodealliance/wasm-micro-runtime>
+- Pinned revision: `25bd7eb63e828e4bd242cc9b38d260b4b31c6605` (WAMR 2.4.5)
+- License: Apache-2.0 WITH LLVM-exception
+- License file: `third_party/wasm-micro-runtime/LICENSE`
+- Upstream attributions: `third_party/wasm-micro-runtime/ATTRIBUTIONS.md`
+
+The `wasm-dioxus` Android mode statically links the interpreter and WASI support
+from this exact gitlink into `liblynx_element_bridge.so`. It does not package a
+standalone WAMR or WebAssembly shared library.
+
 ## PrimJS
 
 - Upstream: <https://github.com/lynx-family/primjs>

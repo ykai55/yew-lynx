@@ -1,0 +1,31 @@
+[package]
+name = "lynx-element-bridge-wamr-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = []
+wamr = [
+  "dep:lynx-element-bridge-core",
+  "dep:lynx-element-bridge-ffi",
+  "dep:lynx-element-bridge-wasm-guest",
+]
+
+[dependencies]
+lynx-element-bridge-core = { workspace = true, optional = true }
+lynx-element-bridge-ffi = { workspace = true, optional = true }
+lynx-element-bridge-wasm-guest = { workspace = true, optional = true }
+
+[build-dependencies]
+cc = "1.2.16"
+
+[dev-dependencies]
+wat = "1.225.0"
