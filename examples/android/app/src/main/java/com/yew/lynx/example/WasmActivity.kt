@@ -225,14 +225,9 @@ class WasmActivity : Activity() {
     private fun connectReloadSocket() {
         val source = sourceUrl ?: return
         if (!started || destroyed || reloadSocket != null) return
-        val protocol = when (source.protocol) {
-            "http" -> "ws"
-            "https" -> "wss"
-            else -> return
-        }
+        if (source.protocol != "http" && source.protocol != "https") return
         val websocketUrl = HttpUrl.parse(source.toString())
             ?.newBuilder()
-            ?.scheme(protocol)
             ?.encodedPath(RELOAD_PATH)
             ?.query(null)
             ?.fragment(null)
