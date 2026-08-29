@@ -43,7 +43,7 @@ fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
         host.snapshot().children[0].children[0].children[0]
             .text
             .as_deref(),
-        Some(format!("Count: {INITIAL_COUNT}").as_str())
+        Some("Dioxus ❎ Lynx")
     );
     assert_eq!(host.listener_count(), 1);
 
@@ -66,7 +66,7 @@ fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
         host.snapshot().children[0].children[0].children[0]
             .text
             .as_deref(),
-        Some(format!("Count: {}", INITIAL_COUNT + 1).as_str())
+        Some("Dioxus ❎ Lynx")
     );
 
     host.apply(&batch(runtime.destroy())).unwrap();

@@ -30,6 +30,11 @@ pub(crate) fn counter(model: Rc<CounterModel>) -> Element {
             text {
                 id: "counter-value",
                 style: "font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;",
+                "Dioxus ❎ Lynx"
+            }
+            text {
+                id: "counter-value",
+                style: "font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;",
                 "Count: {count}"
             }
             view {
