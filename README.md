@@ -1,183 +1,282 @@
 # Lynx Element Bridge
 
+English | [简体中文](README.zh-CN.md)
+
 > [!WARNING]
 > **Experimental public preview.** This is an independent research project,
 > not an officially supported Lynx, Yew, or Dioxus integration. Compatibility
-> is limited to the pinned revisions and verification described here.
+> is limited to the pinned revisions and verified targets described below.
 
-Lynx Element Bridge mounts Rust UI frameworks directly into Lynx's Fiber DOM
-through a versioned native C function table. Yew and Dioxus produce the same
-in-memory Rust mutations; no template bundle, Java `LynxModule`, or serialized
-command transport participates in the application lifecycle.
+Lynx Element Bridge mounts Rust UI frameworks directly into Lynx's Fiber DOM.
+Yew and Dioxus render into a shared Rust mutation model, which is applied through
+a versioned native C function table. The application lifecycle does not use a
+Lynx template bundle, Java `LynxModule`, JavaScript/MTS, or a serialized native
+command channel.
 
-```text
-Yew NativeRendererBackend       Dioxus WriteMutations
-             \                    /
-              Session -> CommandBatch
-                        |
-                 Rust NativeHost
-                        |
-          LynxNativeRendererApiV1 C table
-                        |
-                  Lynx Fiber DOM
-```
+The repository currently provides:
 
-## Pinned Inputs
-
-- Lynx: `0df14207cebb060f1bed8de12b64a1119dee8f06`
-- Lynx tools_shared: `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea`
-- Yew patch base: `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3`
-- Dioxus: `0.7.10`
-- Rust: `1.85.0`
-
-`third_party/lynx` is the audited upstream gitlink. The 15-patch
-`patches/lynx` series (`0002-0016`) adds the native renderer API, Android host
-registry, lifecycle validation, diagnostics, event delivery, native-only Android
-product, and focused boundary tests. The pinned `patches/lynx-tools-shared`
-series makes native-only JNI registration filtering reproducible. `patches/yew`
-adds the host-independent native renderer used by the Yew adapter.
+- Yew and Dioxus adapters with equivalent observable behavior.
+- Native Android runtimes linked into the APK.
+- A WAMR runtime that loads external `wasm32-wasip1` applications.
+- A patched, native-renderer-only Lynx Android product.
+- Host, ABI, integration, artifact, and physical-device verification.
 
 ## Architecture
 
-- `crates/element-bridge-core/` owns nonzero IDs, owner-thread checks, tree and
-  listener validation, ordered `CommandBatch` mutations, opaque event payloads,
-  deterministic teardown, and `HostFake`.
-- `adapters/yew/` maps patched Yew renderer calls into the core session.
-- `adapters/dioxus/` provides Lynx-native `view`/`text` RSX vocabulary and maps
-  Dioxus 0.7.10 `WriteMutations` calls into the core session.
-- `examples/dioxus-counter/` authors the component with `rsx!`; its in-memory
-  Dioxus `Template` is compile-time VDOM data, not a Lynx runtime template.
-- `crates/adapter-conformance/` compares mount, event, update, and destroy
-  behavior across both frameworks.
-- `crates/element-bridge-ffi/` owns native sessions and contains panic,
-  reentry/busy, owner-thread, poison, destroy, and abandon boundaries.
-- `NativeHost` maps bridge IDs to opaque Lynx handles and applies each command
-  directly through a copied `LynxNativeRendererApiV1` table.
-- `include/lynx_native_renderer.h` is the host function-table contract mirrored
-  by the patched Lynx public header.
-- `include/lynx_native_application.h` is the self-contained application ABI:
-  native mount, destroy, abandon, and backend identity.
-- `adapters/android/` resolves the Lynx function table with `dlsym` and exposes
-  the native lifecycle to `LynxNativeRendererHost`.
+### Layered Design
 
-`CommandBatch` remains an in-memory Rust boundary. Its ordered `Vec<Command>`
-contains mutations only. Event payload bytes and content type are copied at the
-native callback boundary and remain opaque to the bridge. `CommandBatch` and
-`EventMessage` do not carry the native registry's session token; their owning
-backend and `NativeHost` objects provide message scope.
-
-## Android Products
-
-The pinned source publishes two separate Maven products at version
-`0.0.1-0df14207`; this app opts into the native product:
-
-- `org.lynxsdk.lynx:lynx` contains the stock `liblynx.so`. It is built and
-  published separately, and its JavaScript/template behavior is unchanged.
-- `org.lynxsdk.lynx:lynx-native-renderer` contains
-  `liblynx_native_renderer.so`. It is the product selected by this app and does
-  not depend on the stock `lynx` artifact.
-
-The native product POM and application runtime graph exclude stock `lynx`,
-Quick/PrimJS, NAPI, V8, LynxJSSDK, and standalone Wasm runtime artifacts. The
-APK likewise excludes `liblynx.so`, their runtime shared libraries, and
-`assets/lynx_core.js`. Each APK contains a build-variant-selected Yew or Dioxus
-Native runtime in `liblynx_element_bridge_native.so` and a framework-neutral
-WAMR host in `liblynx_element_bridge_wamr.so`. Guests are compiled externally,
-loaded only from a user-provided URL, and are never packaged in the APK. The native renderer ELF has
-no forbidden runtime `DT_NEEDED` entries or undefined runtime symbols, and
-exports `lynx_native_renderer_get_api`.
-Packaging does not change the runtime architecture: framework mutations still
-cross the versioned C function table in memory, with no MTS or template
-transport.
-
-## Public Native ABI
-
-Each framework static library exports only:
-
-```c
-LynxElementBridgeNativeMountResult lynx_element_bridge_native_mount(
-    LynxNativeRendererGetApiFn get_api,
-    LynxNativeHostHandle host);
-LynxElementBridgeNativeDestroyResult
-lynx_element_bridge_native_destroy_session(LynxElementBridgeSession session);
-LynxElementBridgeNativeDestroyResult
-lynx_element_bridge_native_abandon_session(LynxElementBridgeSession session);
-const char* lynx_element_bridge_backend(void);
-const char* lynx_element_bridge_backend_marker(void);
+```text
+Framework layer
+  Yew NativeRendererBackend          Dioxus WriteMutations
+                \                    /
+                 v                  v
+Bridge core
+  Session -> ordered CommandBatch -> tree/listener validation
+                              |
+Execution backend             |
+  Native Rust ----------------+---------------- WAMR-hosted Rust
+                              |
+Native boundary               v
+  FFI session registry -> NativeHost -> LynxNativeRendererApiV1
+                                             |
+Lynx platform                                v
+                                      Lynx Fiber DOM
 ```
 
-Native registry session tokens and host handles are opaque and nonzero. The
-session token is a lifecycle handle and is not part of renderer messages. Calls and callbacks are
-synchronous on the mounting thread. Normal destroy applies framework teardown
-before releasing the renderer. Abandon is an emergency path that consumes Rust
-state without applying teardown mutations. A consumed failure still invalidates
-the session token.
+The main boundaries are deliberately narrow:
 
-## Device Evidence
+1. **Framework adapters produce commands.** Yew and Dioxus translate their own
+   renderer mutations into the same framework-neutral `CommandBatch`.
+2. **The core owns correctness.** `Session` validates node ownership, tree shape,
+   listener identity, mutation order, thread ownership, and deterministic
+   teardown before commands reach Lynx.
+3. **The FFI layer owns lifecycle safety.** It manages opaque session tokens,
+   synchronous callbacks, reentry rejection, panic containment, poisoning after
+   partial native failures, normal destroy, and emergency abandon.
+4. **`NativeHost` owns the Lynx mapping.** It maps bridge IDs to opaque Lynx
+   handles and executes each batch through a copied and validated
+   `LynxNativeRendererApiV1` function table.
+5. **Patched Lynx owns rendering.** The native renderer creates Fiber elements,
+   applies mutations, delivers platform events, and flushes updates without a
+   template or JavaScript runtime.
 
-Final patch-0015 binary-native acceptance passed on 2026-08-22 for both backends
-on an anonymous Xiaomi Redmi K60 Pro physical device running Android 13/API 33,
-arm64-v8a:
+`CommandBatch` is an in-memory Rust boundary. Native applications do not
+serialize their commands. Event content type and payload bytes are copied at the
+native callback boundary but remain opaque to the bridge.
 
-| Backend | APK SHA-256 | Evidence | `onCreate` | `onDestroy` | diagnostics/backend |
-| --- | --- | --- | ---: | ---: | ---: |
-| Yew | `121c20a6bc82d1570eb24cfb37c84a5d82c414bc1b176c4b40ac8294fe45903d` | `.deps/android/device-acceptance-binary-native-yew-20260822-0015-final` | 9 | 4 | 9 |
-| Dioxus | `008d64415874bff997a47c1afcb25dc2e87c5fe4e6f513acaad2bf8273f3afdc` | `.deps/android/device-acceptance-binary-native-dioxus-20260822-0015-final` | 9 | 4 | 9 |
+### Native And WASM Modes
 
-Both runs passed fresh launch, tap, recreation, force-stop/reopen, and
-three repeated cycles, with every functional flag true and zero crash markers.
-Each recorded `onCreate=9`, `onDestroy=4`, nine native diagnostics, and nine
-selected-backend markers,
-`renderer_mode=native`, `bts_runtime=false`, `mts_context=false`, and
-`template=false` and `proc_maps_checked=true`. Maps were captured after fresh
-launch and after interaction: all five required libraries (`liblynx_native_renderer.so`,
-`liblynx_element_bridge.so`, `liblynxbase.so`, `liblynxgfx.so`, and
-`liblynxtrace.so`) were mapped at both points; the forbidden set was empty and
-Quick, NAPI, Wasm, and V8 mapping flags were false.
+Both runtime modes converge on the same `NativeHost` and Lynx C API:
 
-The current acceptance flow writes eight evidence files. All 21 `NativeRendererApiTest`
-cases pass (21/21), with no private test peer or helper; release behavior is
-tested through the production function table. All 11 public statuses cross the
-production boundary. `RESOURCE_EXHAUSTED` and `INTERNAL_ERROR` are returned by
-real repeating timer callbacks through the function table, and production
-task-runner behavior cancels each timer after one callback. Neither status uses
-allocator exhaustion or root rollback. The patch-0015 tests and final device
-evidence complete Issue #4's implementation and acceptance requirements, so
-the issue is closable. See `patches/lynx/README.md` for the status-by-status
-evidence.
+```text
+Native
+  Yew/Dioxus app staticlib
+      -> element-bridge-ffi
+      -> NativeHost
+      -> Lynx C API
 
-## Build And Verify
+WASM
+  Yew/Dioxus wasm32-wasip1 guest
+      -> Postcard guest ABI
+      -> WAMR host
+      -> element-bridge-ffi / NativeHost
+      -> Lynx C API
+```
 
-Prepare the pinned Yew checkout and run the complete host-independent suite:
+Serialization exists only between a WASM guest and its WAMR host. The Android
+APK contains the framework-neutral WAMR host, but no guest `.wasm`; guests are
+built separately and loaded from a URL. Native and WASM sessions otherwise use
+the same renderer lifecycle and safety model.
+
+### Render And Event Flow
+
+A mount or event follows one synchronous owner-thread transaction:
+
+```text
+framework render
+  -> adapter records mutations
+  -> Session validates and commits a CommandBatch
+  -> NativeHost applies commands and flushes Lynx
+
+platform event
+  -> Lynx native callback
+  -> FFI validates session/listener/callback identity
+  -> adapter dispatches the framework callback
+  -> framework renders the next CommandBatch
+  -> NativeHost applies and flushes it
+```
+
+There is no rollback after Lynx has accepted part of a batch. A partial host
+failure poisons the session so later calls cannot continue from an unknown
+state. Normal destroy renders framework teardown mutations before releasing the
+renderer; abandon only consumes bridge state and is reserved for emergency
+cleanup.
+
+### Repository Map
+
+| Path | Responsibility |
+| --- | --- |
+| `crates/element-bridge-core/` | Framework-neutral IDs, commands, events, session invariants, and `HostFake` |
+| `adapters/yew/` | Patched Yew `NativeRendererBackend` to core `Session` |
+| `adapters/dioxus/` | Dioxus `WriteMutations` and Lynx-native `view`/`text` RSX vocabulary |
+| `crates/adapter-conformance/` | Cross-framework mount, update, event, and destroy conformance |
+| `crates/element-bridge-ffi/` | Native session registry, C ABI lifecycle, and `NativeHost` |
+| `crates/element-bridge-wasm-guest/` | Versioned WASM guest ABI and Postcard protocol |
+| `crates/element-bridge-wamr-host/` | WAMR embedding and guest-to-native backend integration |
+| `adapters/android/` | JNI/CMake bridge that resolves the Lynx function table with `dlsym` |
+| `examples/counter/` | Yew Native and WASM counter application |
+| `examples/dioxus-counter/` | Dioxus Native and WASM counter application |
+| `examples/android/` | Android launcher and Native/WASM runtime hosts |
+| `tools/dev-wasm/` | WASM build, watch, HTTP serving, and reload notifications |
+| `include/` | Public Lynx renderer, Native application, and WAMR application C ABIs |
+| `patches/lynx/` | Ordered patch series implementing the Lynx native renderer |
+| `patches/yew/` | Ordered patch series adding Yew's native renderer interface |
+
+The effective Lynx and Yew integrations are the pinned upstream revisions plus
+these patch series; they are not upstream APIs that can be assumed on arbitrary
+versions.
+
+## Getting Started
+
+### 1. Run The Rust Tests
+
+The repository pins Rust `1.85.0` in `rust-toolchain.toml`. Initialize the
+submodules, prepare the patched Yew checkout, and run the host-side workspace
+tests:
 
 ```bash
+git submodule update --init --recursive
 ./scripts/bootstrap-yew.sh
-./scripts/verify.sh
+cargo test --workspace --all-targets --locked
 ```
 
-Verification covers Rust formatting/check/test/Clippy, Yew/Dioxus conformance,
-public native lifecycle tests, Android Java/JNI mocks, both real static-library
-links, required/forbidden exported symbols, sequential Lynx patch application,
-the pinned tools_shared JNI-filter patch, public-header identity, stock/native
-product separation, dependency/APK/ELF inspection, and patched-Yew tests.
-
-Build an Android APK only when needed:
+To include the real embedded WAMR lifecycle tests:
 
 ```bash
+cargo test -p lynx-element-bridge-wamr-host --features wamr -- --test-threads=1
+```
+
+### 2. Build And Run The Android Example
+
+The supported example target is Android API 24+ on `arm64-v8a`. The scripted
+build requires:
+
+- JDK 11.
+- Android SDK platform 33 and build-tools 33.0.1.
+- Android NDK 21.1.6352462 for Lynx and 25.2.9519653 for Rust/JNI linking.
+- CMake 3.22.1.
+- Rust 1.85.0 with `aarch64-linux-android` and `wasm32-wasip1`.
+- Node.js 22.18.0 for Lynx source preparation.
+
+Set `ANDROID_HOME` or `ANDROID_SDK_ROOT`, then build one Native framework
+variant from the repository root:
+
+```bash
+export ANDROID_HOME=/path/to/Android/sdk
 ./scripts/build-android.sh --backend yew
+# or
 ./scripts/build-android.sh --backend dioxus
 ```
 
-The Android build requires JDK 11, the documented Android SDK/NDK versions,
-Rust 1.85.0, and Node.js only for Lynx's own source build tooling. PrimJS lock
-and preparation inputs are used only to reproducibly build and test the
-preserved stock artifact; they are not dependencies of the native product or
-app. The application rendering path is native-only and the build rejects any
-packaged `.lynx.bundle`.
+The first online build initializes pinned sources, applies the patch series,
+builds and publishes the local Lynx artifacts, links both Native and WAMR bridge
+libraries, assembles the APK, and inspects its dependency and ELF boundaries.
+Later prepared builds can add `--offline`; use `--clean` to discard generated
+integration outputs. These two flags cannot be combined.
+
+Install and open the selected APK:
+
+```bash
+adb install -r .deps/android/apks/lynx-element-bridge-yew.apk
+adb shell am start -n com.yew.lynx.example/.LauncherActivity
+```
+
+For Dioxus, replace `yew` in the APK name with `dioxus`. The launcher lets you
+open either the compiled Native counter or the external WASM flow. See
+[`examples/android/README.md`](examples/android/README.md) for Android Studio,
+offline build, and device acceptance details.
+
+### 3. Run A WASM Guest
+
+Build and serve both example guests with the repository's development server:
+
+```bash
+./scripts/dev-wasm.sh
+adb reverse tcp:8000 tcp:8000
+```
+
+In the installed app, choose **WASM** and enter one of the URLs printed by the
+server, for example:
+
+```text
+http://127.0.0.1:8000/yew_lynx_counter.wasm
+http://127.0.0.1:8000/lynx_element_bridge_dioxus_counter.wasm
+```
+
+Use `./scripts/dev-wasm.sh --backend yew` or `--backend dioxus` to watch only
+one guest. `--bind IP` and `--port PORT` change the listener. After a successful
+rebuild, the app verifies the announced artifact and remounts it. Reload creates
+a new component tree and does not preserve application state.
+
+## Build Outputs
+
+The Android build keeps the stock and native Lynx products separate:
+
+| Product | Main library | Purpose |
+| --- | --- | --- |
+| `org.lynxsdk.lynx:lynx` | `liblynx.so` | Preserved stock JavaScript/template product |
+| `org.lynxsdk.lynx:lynx-native-renderer` | `liblynx_native_renderer.so` | Opt-in native Fiber renderer used by this app |
+
+Each example APK contains:
+
+- `liblynx_element_bridge_native.so`, linked to the selected Yew or Dioxus
+  Native runtime.
+- `liblynx_element_bridge_wamr.so`, the framework-neutral WAMR host.
+- `liblynx_native_renderer.so` and its native Lynx support libraries.
+
+The build rejects stock `liblynx.so`, Quick/PrimJS, NAPI, V8, LynxJSSDK's
+`assets/lynx_core.js`, packaged `.lynx.bundle` files, and packaged WASM guests.
+
+## Verification
+
+Run the complete repository verification after satisfying the Android build
+requirements:
+
+```bash
+./scripts/verify.sh
+```
+
+It covers formatting, checks, tests, Clippy, adapter conformance, public native
+lifecycle tests, real WAMR lifecycle tests, Android Java/JNI mocks, Rust Android
+static libraries, Lynx and Yew patch application, public-header identity, and
+artifact/dependency/ELF gates.
+
+Pinned and currently verified inputs:
+
+| Component | Version or revision |
+| --- | --- |
+| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` |
+| Lynx tools_shared | `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` |
+| WAMR | `25bd7eb63e828e4bd242cc9b38d260b4b31c6605` |
+| Yew patch base | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` |
+| Dioxus | `0.7.10` |
+| Rust | `1.85.0` |
 
 Do not infer compatibility across pin changes. See
-[`COMPATIBILITY.md`](COMPATIBILITY.md) and
-[`docs/adapter-authoring.md`](docs/adapter-authoring.md).
+[`COMPATIBILITY.md`](COMPATIBILITY.md) for the complete support matrix, runtime
+contract, physical-device evidence, and known limits. See
+[`docs/adapter-authoring.md`](docs/adapter-authoring.md) to add another Rust UI
+framework adapter.
+
+## Current Limits
+
+- This is a research preview, not a production-ready runtime.
+- Only Android API 24+ on `arm64-v8a` is currently supported and verified.
+- iOS, Harmony, desktop, web, accessibility, and performance are not covered.
+- Framework support is intentionally narrower than each framework's web
+  renderer; unsupported Yew/Dioxus features must not be assumed to work.
+- WASM reload replaces the complete guest/session and does not retain component
+  state.
 
 ## Licensing
 
