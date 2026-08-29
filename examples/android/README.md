@@ -79,15 +79,22 @@ each downloaded module in a new activity. Downloads are limited to 16 MiB, a
 History stores complete URLs in unencrypted application preferences, including
 query parameters; do not use credential-bearing URLs on a shared device.
 
-The guest is built outside the Android project. For local iteration, serve its
-output and forward the device port:
+The guest is built outside the Android project. Use the development script to
+build both guests, rebuild them when Rust sources change, and serve the release
+output:
 
 ```bash
-python3 -m http.server 8000 --directory /path/to/external/guest/output
+./scripts/dev-wasm.sh
 adb reverse tcp:8000 tcp:8000
 ```
 
-Then enter a URL such as `http://127.0.0.1:8000/page.wasm`. Downloaded modules
+On first use, the script installs its pinned `cargo-watch` version under
+`target/cargo-tools`; it does not modify the user-wide Cargo installation.
+Pass `--backend yew` or `--backend dioxus` to build only one guest, and use
+`--port PORT` to select a different server port.
+
+Then enter a URL printed by the script, such as
+`http://127.0.0.1:8000/yew_lynx_counter.wasm`. Downloaded modules
 must implement this repository's guest ABI and protocol and should come from a
 trusted source. WAMR isolates guest memory, but the app does not enforce a guest
 CPU execution timeout.
