@@ -77,6 +77,7 @@ if shasum_path="$(command -v shasum 2>/dev/null)"; then
     printf 'exec %q "$@"\n' "$shasum_path"
   } >"$fake_bin/shasum"
   chmod +x "$fake_bin/shasum"
+  # shellcheck disable=SC2016 # $1 must expand in the child Bash process.
   fallback_checksum="$(
     PATH="$fake_bin" "$BASH" -c \
       'source "$1"; printf abc | sha256_checksum' \
