@@ -15,7 +15,7 @@ fn batch(response: GuestResponse) -> lynx_element_bridge_core::CommandBatch {
 }
 
 #[test]
-fn real_yew_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
+fn yew_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() {
     let root = NodeId::new(1).unwrap();
     let mut runtime = GuestRuntime::<YewCounter>::new();
     let mut host = HostFake::new(root);
@@ -44,7 +44,7 @@ fn real_yew_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle(
         host.snapshot().children[0].children[0].children[0]
             .text
             .as_deref(),
-        Some("Yew ❎ Lynx")
+        Some(format!("Count: {INITIAL_COUNT}").as_str())
     );
     assert_eq!(host.listener_count(), 1);
 
@@ -67,7 +67,7 @@ fn real_yew_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle(
         host.snapshot().children[0].children[0].children[0]
             .text
             .as_deref(),
-        Some("Yew ❎ Lynx")
+        Some(format!("Count: {}", INITIAL_COUNT + 1).as_str())
     );
 
     host.apply(&batch(runtime.destroy())).unwrap();

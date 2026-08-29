@@ -14,7 +14,7 @@ fn batch(response: GuestResponse) -> lynx_element_bridge_core::CommandBatch {
 }
 
 #[test]
-fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
+fn dioxus_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() {
     let root = NodeId::new(1).unwrap();
     let mut runtime = GuestRuntime::<DioxusCounter>::new();
     let mut host = HostFake::new(root);
@@ -43,7 +43,7 @@ fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
         host.snapshot().children[0].children[0].children[0]
             .text
             .as_deref(),
-        Some("Dioxus ❎ Lynx")
+        Some(format!("Count: {INITIAL_COUNT}").as_str())
     );
     assert_eq!(host.listener_count(), 1);
 
@@ -66,7 +66,7 @@ fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
         host.snapshot().children[0].children[0].children[0]
             .text
             .as_deref(),
-        Some("Dioxus ❎ Lynx")
+        Some(format!("Count: {}", INITIAL_COUNT + 1).as_str())
     );
 
     host.apply(&batch(runtime.destroy())).unwrap();
