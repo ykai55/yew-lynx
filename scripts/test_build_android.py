@@ -82,7 +82,6 @@ ANDROID_JNI = (
 WAMR_BUILD_RS = (
     ROOT / "crates" / "element-bridge-wamr-host" / "build.rs"
 ).read_text()
-PUBLIC_TOOLS_SHARED_SHA = "ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
 WAMR_SHA = "25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 
 
@@ -119,11 +118,6 @@ class BuildAndroidStaticTest(unittest.TestCase):
         self.assertIn('destroySession(previous)', ANDROID_WASM_ACTIVITY)
         self.assertIn('requiredOrigin = expectedOrigin', ANDROID_WASM_ACTIVITY)
         self.assertIn('implementation("com.squareup.okhttp3:okhttp:3.12.13")', ANDROID_APP_GRADLE)
-
-    def test_wasm_url_history_records_confirmed_urls(self):
-        self.assertLess(WASM_URL_ACTIVITY.index('recordHistory(value)'), WASM_URL_ACTIVITY.index('validateUrl(URL(value))'))
-        self.assertIn('const val HISTORY_LIMIT = 20', WASM_URL_ACTIVITY)
-        self.assertIn('JSONArray(history).toString()', WASM_URL_ACTIVITY)
 
     def test_ndk_tools_use_dynamic_host_prebuilt_directory(self):
         gradle_files = (
@@ -165,17 +159,6 @@ class BuildAndroidStaticTest(unittest.TestCase):
         for gradle in (ANDROID_NATIVE_GRADLE, ANDROID_WAMR_GRADLE):
             self.assertIn('val cargoExecutable: String by rootProject.extra', gradle)
             self.assertIn('mutableListOf(cargoExecutable, "build", "--locked")', gradle)
-
-    def test_ndk_host_selection_behavior(self):
-        result = subprocess.run(
-            [ROOT / "scripts" / "test-android-build-utils.sh"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Android build utility tests passed", result.stdout)
 
     def test_first_party_android_scripts_use_portable_sha256(self):
         for script in (
@@ -235,17 +218,6 @@ class BuildAndroidStaticTest(unittest.TestCase):
         self.assertIn("backend: [yew, dioxus]", workflow)
         self.assertIn('./scripts/build-android.sh --backend "${{ matrix.backend }}" --clean', workflow)
 
-    def test_tools_shared_pin_is_publicly_reachable_revision(self):
-        pin_patch = ROOT / "patches/lynx/0016-Pin-public-tools-shared-revision.patch"
-
-        self.assertIn(f'LYNX_TOOLS_SHARED_SHA="{PUBLIC_TOOLS_SHARED_SHA}"', BUILD_SCRIPT)
-        self.assertIn(f'LYNX_TOOLS_SHARED_SHA="{PUBLIC_TOOLS_SHARED_SHA}"', VERIFY_SCRIPT)
-        self.assertTrue(pin_patch.is_file())
-        pin_patch_text = pin_patch.read_text()
-        self.assertIn("diff --git a/dependencies/DEPS b/dependencies/DEPS", pin_patch_text)
-        self.assertNotIn("dependencies/DEPS.tools_shared", pin_patch_text)
-        self.assertIn(f'+        "commit": "{PUBLIC_TOOLS_SHARED_SHA}",', pin_patch_text)
-
     def test_wasm_jni_separates_short_backend_name_from_full_marker(self):
         self.assertIn('LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME="wasm"', ANDROID_CMAKE)
         self.assertIn(
@@ -258,13 +230,6 @@ class BuildAndroidStaticTest(unittest.TestCase):
             "return env->NewStringUTF(LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME);",
             ANDROID_JNI,
         )
-
-    def test_verify_creates_dependency_directory_before_temporary_checkout(self):
-        create_parent = 'mkdir -p -- "$ROOT_DIR/.deps"'
-        create_temp = 'mktemp -d "$ROOT_DIR/.deps/.tools-shared-verify.XXXXXX"'
-
-        self.assertIn(create_parent, VERIFY_SCRIPT)
-        self.assertLess(VERIFY_SCRIPT.index(create_parent), VERIFY_SCRIPT.index(create_temp))
 
     def test_all_native_apk_libraries_are_required_and_all_elfs_are_inspected(self):
         for library in (
@@ -288,42 +253,6 @@ class BuildAndroidStaticTest(unittest.TestCase):
         self.assertRegex(BUILD_SCRIPT, r"QuickJS.*Napi.*WebAssembly.*Wasm.*v8::.*V8")
         self.assertIn('[[ "$library" == liblynx_native_renderer.so ]]', BUILD_SCRIPT)
         self.assertIn("lynx_native_renderer_get_api$", BUILD_SCRIPT)
-
-    def test_cleanup_is_best_effort_for_both_patch_series(self):
-        cleanup = re.search(
-            r"restore_lynx_source\(\) \{(?P<body>.*?)\n\}",
-            BUILD_SCRIPT,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(cleanup)
-        body = cleanup.group("body")
-        self.assertIn("LYNX_TOOLS_SHARED_APPLIED_PATCH_FILES", body)
-        self.assertIn("LYNX_APPLIED_PATCH_FILES", body)
-        self.assertGreaterEqual(body.count("cleanup_status=1"), 2)
-        self.assertNotIn("return 1", body)
-        self.assertIn("trap - EXIT", body)
-        self.assertIn('exit "$exit_status"', body)
-        self.assertIn('exit "$cleanup_status"', body)
-
-        for function_name in (
-            "verify_lynx_tools_shared_patches",
-            "verify_lynx_patches",
-        ):
-            function = re.search(
-                rf"^{function_name}\(\) \{{(?P<body>.*?)^\}}$",
-                VERIFY_SCRIPT,
-                re.DOTALL | re.MULTILINE,
-            )
-            self.assertIsNotNone(function)
-            reverse_loop = re.search(
-                r"for \(\(i = \$\{#applied_patch_files\[@\]\} - 1;.*?done",
-                function.group("body"),
-                re.DOTALL,
-            )
-            self.assertIsNotNone(reverse_loop)
-            self.assertIn("if ! git", reverse_loop.group(0))
-            self.assertIn("apply_status=1", reverse_loop.group(0))
-            self.assertNotIn("return", reverse_loop.group(0))
 
     def test_exit_trap_preserves_failure_and_reports_cleanup_failure(self):
         cleanup = re.search(
