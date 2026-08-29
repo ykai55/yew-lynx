@@ -2,6 +2,7 @@ package com.yew.lynx.example
 
 import android.content.Context
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 
 object WasmModuleFile {
@@ -29,4 +30,11 @@ object WasmModuleFile {
         }
         return file.readBytes()
     }
+
+    fun sha256(context: Context, fileName: String): String = sha256(read(context, fileName))
+
+    fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 }

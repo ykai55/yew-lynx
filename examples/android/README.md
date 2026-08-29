@@ -79,25 +79,31 @@ each downloaded module in a new activity. Downloads are limited to 16 MiB, a
 History stores complete URLs in unencrypted application preferences, including
 query parameters; do not use credential-bearing URLs on a shared device.
 
-The guest is built outside the Android project. Use the development script to
-build both guests, rebuild them when Rust sources change, and serve the release
-output:
+The guest is built outside the Android project. The Rust development server
+builds both guests, watches their source trees, serves the release output, and
+publishes successful builds over a same-origin WebSocket:
 
 ```bash
-./scripts/dev-wasm.sh
+cargo run --locked -p yew-lynx-dev-server
 adb reverse tcp:8000 tcp:8000
 ```
 
-On first use, the script installs its pinned `cargo-watch` version under
-`target/cargo-tools`; it does not modify the user-wide Cargo installation.
 Pass `--backend yew` or `--backend dioxus` to build only one guest, and use
-`--port PORT` to select a different server port.
+`--port PORT` or `--bind IP` to change the listener. No global development tool
+installation is required.
 
-Then enter a URL printed by the script, such as
+Then enter a URL printed by the development server, such as
 `http://127.0.0.1:8000/yew_lynx_counter.wasm`. Downloaded modules
 must implement this repository's guest ABI and protocol and should come from a
 trusted source. WAMR isolates guest memory, but the app does not enforce a guest
 CPU execution timeout.
+
+The page automatically connects to `/.well-known/yew-lynx/reload` on the
+download URL's origin. After a successful rebuild, the server announces the new
+artifact size and SHA-256. The app verifies both values, destroys the previous
+WAMR/Lynx session, and mounts the replacement module. A failed build or download
+leaves the current page running. Reloading recreates the component tree and does
+not preserve application state.
 
 The APK contains no guest `.wasm`. The build also rejects `.lynx.bundle`, stock
 `liblynx.so`, Quick/PrimJS, NAPI, standalone Wasm runtime, V8 shared libraries,

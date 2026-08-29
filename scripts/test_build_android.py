@@ -71,6 +71,10 @@ WASM_MODULE_FILE = (
     / "example"
     / "WasmModuleFile.kt"
 ).read_text()
+WASM_MODULE_DOWNLOADER = (
+    ROOT
+    / "examples/android/app/src/main/java/com/yew/lynx/example/WasmModuleDownloader.kt"
+).read_text()
 ANDROID_CMAKE = (ROOT / "adapters" / "android" / "CMakeLists.txt").read_text()
 ANDROID_JNI = (
     ROOT / "adapters" / "android" / "src" / "main" / "cpp" / "lynx_element_bridge_jni.cc"
@@ -88,22 +92,33 @@ class BuildAndroidStaticTest(unittest.TestCase):
         self.assertIn('android:name=".LauncherActivity"', ANDROID_MANIFEST)
         self.assertIn('android:usesCleartextTraffic="true"', ANDROID_MANIFEST)
         self.assertIn('const val MAX_BYTES = 16 * 1024 * 1024', WASM_MODULE_FILE)
-        self.assertIn('const val CONNECT_TIMEOUT_MS = 15_000', WASM_URL_ACTIVITY)
-        self.assertIn('const val READ_TIMEOUT_MS = 30_000', WASM_URL_ACTIVITY)
-        self.assertIn('const val MAX_REDIRECTS = 5', WASM_URL_ACTIVITY)
-        self.assertIn('url.protocol == "http" || url.protocol == "https"', WASM_URL_ACTIVITY)
-        self.assertIn('activeConnection?.disconnect()', WASM_URL_ACTIVITY)
-        self.assertIn('Thread.currentThread().isInterrupted', WASM_URL_ACTIVITY)
+        self.assertIn('const val CONNECT_TIMEOUT_MS = 15_000', WASM_MODULE_DOWNLOADER)
+        self.assertIn('const val READ_TIMEOUT_MS = 30_000', WASM_MODULE_DOWNLOADER)
+        self.assertIn('const val MAX_REDIRECTS = 5', WASM_MODULE_DOWNLOADER)
+        self.assertIn(
+            'url.protocol == "http" || url.protocol == "https"',
+            WASM_MODULE_DOWNLOADER,
+        )
+        self.assertIn('activeConnection?.disconnect()', WASM_MODULE_DOWNLOADER)
+        self.assertIn('Thread.currentThread().isInterrupted', WASM_MODULE_DOWNLOADER)
 
     def test_downloaded_wasm_uses_private_cache_and_a_new_activity(self):
         self.assertIn('fileNamePattern.matches(fileName)', WASM_MODULE_FILE)
         self.assertIn('context.cacheDir.canonicalFile', WASM_MODULE_FILE)
-        self.assertIn('java.io.File.createTempFile(', WASM_URL_ACTIVITY)
+        self.assertIn('java.io.File.createTempFile(', WASM_MODULE_DOWNLOADER)
         self.assertIn('Intent(this, WasmActivity::class.java)', WASM_URL_ACTIVITY)
-        self.assertIn('result.getOrNull()?.delete()', WASM_URL_ACTIVITY)
+        self.assertIn('result.getOrNull()?.file?.delete()', WASM_URL_ACTIVITY)
         self.assertIn('file.delete()', WASM_URL_ACTIVITY)
         self.assertIn('WasmModuleFile.read(this, fileName)', ANDROID_WASM_ACTIVITY)
         self.assertNotIn('assets.open(', ANDROID_WASM_ACTIVITY)
+
+    def test_wasm_pages_reload_from_verified_websocket_builds(self):
+        self.assertIn('"/.well-known/yew-lynx/reload"', ANDROID_WASM_ACTIVITY)
+        self.assertIn('expectedSha256 = artifact.sha256', ANDROID_WASM_ACTIVITY)
+        self.assertIn('module.file.length() != artifact.size', ANDROID_WASM_ACTIVITY)
+        self.assertIn('destroySession(previous)', ANDROID_WASM_ACTIVITY)
+        self.assertIn('requiredOrigin = expectedOrigin', ANDROID_WASM_ACTIVITY)
+        self.assertIn('implementation("com.squareup.okhttp3:okhttp:3.12.13")', ANDROID_APP_GRADLE)
 
     def test_wasm_url_history_records_confirmed_urls(self):
         self.assertLess(WASM_URL_ACTIVITY.index('recordHistory(value)'), WASM_URL_ACTIVITY.index('validateUrl(URL(value))'))
