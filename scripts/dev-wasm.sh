@@ -12,6 +12,12 @@ readonly CARGO_WATCH_BIN="$CARGO_WATCH_ROOT/bin/cargo-watch"
 backend=all
 port=8000
 server_pid=""
+watch_paths=(
+  "$ROOT_DIR/Cargo.toml"
+  "$ROOT_DIR/Cargo.lock"
+  "$ROOT_DIR/crates/element-bridge-core"
+  "$ROOT_DIR/crates/element-bridge-wasm-guest"
+)
 
 usage() {
   printf 'Usage: %s [--backend yew|dioxus|all] [--port PORT]\n' "${0##*/}"
@@ -62,10 +68,19 @@ case "$backend" in
   yew)
     packages=(--package yew-lynx-counter)
     wasm_files=(yew_lynx_counter.wasm)
+    watch_paths+=(
+      "$ROOT_DIR/examples/counter"
+      "$ROOT_DIR/adapters/yew"
+      "$ROOT_DIR/.deps/yew/packages/yew"
+    )
     ;;
   dioxus)
     packages=(--package lynx-element-bridge-dioxus-counter)
     wasm_files=(lynx_element_bridge_dioxus_counter.wasm)
+    watch_paths+=(
+      "$ROOT_DIR/examples/dioxus-counter"
+      "$ROOT_DIR/adapters/dioxus"
+    )
     ;;
   all)
     packages=(
@@ -75,6 +90,13 @@ case "$backend" in
     wasm_files=(
       yew_lynx_counter.wasm
       lynx_element_bridge_dioxus_counter.wasm
+    )
+    watch_paths+=(
+      "$ROOT_DIR/examples/counter"
+      "$ROOT_DIR/examples/dioxus-counter"
+      "$ROOT_DIR/adapters/yew"
+      "$ROOT_DIR/adapters/dioxus"
+      "$ROOT_DIR/.deps/yew/packages/yew"
     )
     ;;
   *)
@@ -125,5 +147,10 @@ watch_command='build --locked --release --target wasm32-wasip1'
 for ((i = 0; i < ${#packages[@]}; i += 2)); do
   watch_command+=" --package ${packages[$((i + 1))]}"
 done
-"$CARGO_WATCH_BIN" watch --postpone --watch "$ROOT_DIR" --ignore target \
-  -x "$watch_command"
+printf 'Watching:\n'
+watch_arguments=(watch --postpone --why --no-vcs-ignores --delay 0.2)
+for watch_path in "${watch_paths[@]}"; do
+  printf '  %s\n' "$watch_path"
+  watch_arguments+=(--watch "$watch_path")
+done
+"$CARGO_WATCH_BIN" "${watch_arguments[@]}" -x "$watch_command"
