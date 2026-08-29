@@ -41,5 +41,5 @@ extra["lynxVersion"] = lynxVersion
 
 tasks.register<Delete>("clean") {
     delete(rootProject.buildDir)
-    delete(project(":app").buildDir)
+    delete(subprojects.map { it.buildDir })
 }

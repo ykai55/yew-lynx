@@ -8,3 +8,5 @@ pluginManagement {
 
 rootProject.name = "LynxElementBridgeAndroid"
 include(":app")
+include(":bridge-native")
+include(":bridge-wamr")

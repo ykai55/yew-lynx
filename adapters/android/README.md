@@ -1,9 +1,9 @@
 # Android native host adapter
 
 This directory connects the Rust application ABI to the native renderer host
-added by the 15-patch `patches/lynx` series (`0002-0016`). It has one Java owner
-and one JNI lifecycle. Native Yew/Dioxus sessions remain direct; the explicit
-`wasm-dioxus` and `wasm-yew` modes accept module bytes for WAMR mount and replacement.
+added by the 15-patch `patches/lynx` series (`0002-0016`). The Android project
+builds separate Native and WAMR library modules with independent Java owners,
+JNI symbols, Rust archives, and shared libraries.
 
 The app opts into
 `org.lynxsdk.lynx:lynx-native-renderer:0.0.1-0df14207`, which packages
@@ -16,7 +16,7 @@ transport.
 ## Lifecycle
 
 1. `LynxView.registerNativeRendererHost()` returns an opaque 64-bit host token.
-2. `LynxNativeRendererHost.mount()` enters JNI.
+2. `NativeRendererHost.mount()` enters the Native JNI library.
 3. JNI resolves `lynx_native_renderer_get_api` from the loaded Lynx library.
 4. The selected Rust staticlib creates its framework backend and calls
    `lynx_element_bridge_native_mount`.
@@ -28,12 +28,10 @@ transport.
    destroy fails without consuming the token, `abandon()` is the emergency
    cleanup path.
 
-In either WASM mode, `mount(host, moduleBytes)` preflights and mounts a guest,
-`replace(moduleBytes)` preflights a candidate before cutover, and `destroy()`
-tears down the guest. WAMR is statically linked; no runtime shared library is
-loaded. The Android example packages initial and `replacement-fixture` builds
-from the same framework crate and DSL source; its acceptance intent reads the
-replacement asset, whose visible initial state is `Count: 100`.
+`WamrRendererHost.mount(host, moduleBytes)` preflights and mounts an external
+guest, and `destroy()` tears it down. WAMR is statically linked into
+`liblynx_element_bridge_wamr.so`; no standalone runtime or guest asset is
+packaged. The app downloads guest bytes from a user-provided URL.
 
 Java clears its session whenever native returns `consumed=1`, including status
 failures. Wrong-thread or busy calls return `consumed=0` and retain ownership.

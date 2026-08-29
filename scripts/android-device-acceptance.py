@@ -13,7 +13,8 @@ from pathlib import Path
 
 
 PACKAGE = "com.yew.lynx.example"
-COMPONENT = f"{PACKAGE}/.MainActivity"
+COMPONENT = f"{PACKAGE}/.LauncherActivity"
+OPEN_NATIVE_EXTRA = "com.yew.lynx.example.extra.OPEN_NATIVE"
 TAG = "LynxElementBridge"
 NATIVE_DIAGNOSTICS = (
     "Native renderer diagnostics mode=native "
@@ -27,10 +28,13 @@ WASM_REPLACEMENT_ASSETS = {
 }
 REQUIRED_NATIVE_LIBRARIES = (
     "liblynx_native_renderer.so",
-    "liblynx_element_bridge.so",
+    "liblynx_element_bridge_native.so",
     "liblynxbase.so",
     "liblynxgfx.so",
     "liblynxtrace.so",
+)
+REQUIRED_APK_LIBRARIES = REQUIRED_NATIVE_LIBRARIES + (
+    "liblynx_element_bridge_wamr.so",
 )
 
 
@@ -50,7 +54,17 @@ def shell(serial: str, *arguments: str) -> str:
 
 def launch(serial: str) -> None:
     shell(serial, "am", "force-stop", PACKAGE)
-    output = shell(serial, "am", "start", "-W", "-n", COMPONENT)
+    output = shell(
+        serial,
+        "am",
+        "start",
+        "-W",
+        "-n",
+        COMPONENT,
+        "--ez",
+        OPEN_NATIVE_EXTRA,
+        "true",
+    )
     if "Status: ok" not in output:
         raise RuntimeError(f"Activity launch failed:\n{output}")
 
@@ -323,7 +337,7 @@ def inspect_apk(apk: Path) -> dict[str, tuple[int, int]]:
 
             required_entries = {
                 library: entries.get(f"lib/arm64-v8a/{library}", [])
-                for library in REQUIRED_NATIVE_LIBRARIES
+                for library in REQUIRED_APK_LIBRARIES
             }
             missing = [
                 library for library, matches in required_entries.items() if not matches
@@ -452,7 +466,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run Lynx Element Bridge device acceptance")
     parser.add_argument(
         "--backend",
-        choices=("yew", "dioxus", "wasm-dioxus", "wasm-yew"),
+        choices=("yew", "dioxus"),
         default="yew",
     )
     parser.add_argument("--serial", required=True, help="ADB serial; never written to evidence")

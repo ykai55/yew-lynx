@@ -9,6 +9,16 @@
 #include <new>
 #include <vector>
 
+#define LYNX_ELEMENT_BRIDGE_CONCAT_INNER(left, right) left##right
+#define LYNX_ELEMENT_BRIDGE_CONCAT(left, right) \
+  LYNX_ELEMENT_BRIDGE_CONCAT_INNER(left, right)
+#ifndef LYNX_ELEMENT_BRIDGE_JNI_CLASS
+#define LYNX_ELEMENT_BRIDGE_JNI_CLASS \
+  Java_com_lynx_elementbridge_LynxNativeRendererHost_
+#endif
+#define LYNX_ELEMENT_BRIDGE_JNI_METHOD(name) \
+  LYNX_ELEMENT_BRIDGE_CONCAT(LYNX_ELEMENT_BRIDGE_JNI_CLASS, name)
+
 #if defined(LYNX_ELEMENT_BRIDGE_WAMR)
 #include "lynx_wamr_application.h"
 #else
@@ -134,7 +144,7 @@ LynxNativeRendererGetApiFn ResolveNativeRendererApi(JNIEnv *env) {
 
 jstring BackendName(JNIEnv *env) {
 #if defined(LYNX_ELEMENT_BRIDGE_WAMR)
-  static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:wasm-";
+  static constexpr char kMarkerPrefix[] = "lynx-element-bridge-backend:";
   if (std::strncmp(lynx_element_bridge_wamr_backend_marker, kMarkerPrefix,
                    sizeof(kMarkerPrefix) - 1) != 0 ||
       std::strcmp(lynx_element_bridge_wamr_backend_marker +
@@ -192,9 +202,7 @@ bool CopyModule(JNIEnv *env, jbyteArray module_bytes,
 } // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(JNIEnv *env,
-                                                               jclass,
-                                                               jlong host) {
+LYNX_ELEMENT_BRIDGE_JNI_METHOD(nativeMount)(JNIEnv *env, jclass, jlong host) {
   if (host == 0) {
     Throw(env, "java/lang/IllegalArgumentException",
           "Lynx host token must not be zero");
@@ -226,7 +234,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMount(JNIEnv *env,
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMountWasm(
+LYNX_ELEMENT_BRIDGE_JNI_METHOD(nativeMountWasm)(
     JNIEnv *env, jclass, jlong host, jbyteArray module_bytes) {
 #if defined(LYNX_ELEMENT_BRIDGE_WAMR)
   if (host == 0) {
@@ -265,7 +273,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeMountWasm(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeReplaceWasm(
+LYNX_ELEMENT_BRIDGE_JNI_METHOD(nativeReplaceWasm)(
     JNIEnv *env, jclass, jlong session, jbyteArray module_bytes) {
 #if defined(LYNX_ELEMENT_BRIDGE_WAMR)
   LynxElementBridgeSession native_session = 0;
@@ -290,7 +298,7 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeReplaceWasm(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
+LYNX_ELEMENT_BRIDGE_JNI_METHOD(nativeDestroySession)(
     JNIEnv *env, jclass, jlong session, jbooleanArray consumed_out) {
   if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
     Throw(env, "java/lang/IllegalArgumentException",
@@ -325,15 +333,8 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeDestroySession(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
+LYNX_ELEMENT_BRIDGE_JNI_METHOD(nativeAbandonSession)(
     JNIEnv *env, jclass, jlong session, jbooleanArray consumed_out) {
-#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
-  (void)session;
-  (void)consumed_out;
-  Throw(env, "java/lang/UnsupportedOperationException",
-        "abandon is unavailable in wasm-dioxus mode");
-  return;
-#else
   if (consumed_out == nullptr || env->GetArrayLength(consumed_out) < 1) {
     Throw(env, "java/lang/IllegalArgumentException",
           "consumedOut must contain one element");
@@ -348,7 +349,11 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
     return;
   }
   LynxElementBridgeNativeDestroyResult abandoned =
+#if defined(LYNX_ELEMENT_BRIDGE_WAMR)
+      lynx_element_bridge_wamr_abandon(native_session);
+#else
       lynx_element_bridge_native_abandon_session(native_session);
+#endif
   const jboolean consumed = abandoned.consumed != 0 ? JNI_TRUE : JNI_FALSE;
   env->SetBooleanArrayRegion(consumed_out, 0, 1, &consumed);
   if (env->ExceptionCheck()) {
@@ -360,11 +365,9 @@ Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeAbandonSession(
     ThrowNativeStatus(env, LYNX_NATIVE_RENDERER_STATUS_INTERNAL_ERROR,
                       "native abandon");
   }
-#endif
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_lynx_elementbridge_LynxNativeRendererHost_nativeBackend(JNIEnv *env,
-                                                                 jclass) {
+LYNX_ELEMENT_BRIDGE_JNI_METHOD(nativeBackend)(JNIEnv *env, jclass) {
   return BackendName(env);
 }

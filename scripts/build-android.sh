@@ -39,7 +39,8 @@ readonly LYNX_NATIVE_GRADLE_TASKS=(
   :LynxAndroid:assembleNoasanRelease
 )
 readonly NATIVE_APK_LIBRARIES=(
-  liblynx_element_bridge.so
+  liblynx_element_bridge_native.so
+  liblynx_element_bridge_wamr.so
   liblynx_native_renderer.so
   liblynx_service_api.so
   liblynxbase.so
@@ -48,6 +49,7 @@ readonly NATIVE_APK_LIBRARIES=(
 )
 clean=0
 offline=0
+prepare_only=0
 lynx_patches_applied=0
 lynx_tools_shared_patches_applied=0
 elf_inspect_dir=""
@@ -132,7 +134,7 @@ apply_lynx_tools_shared_patches() {
 trap restore_lynx_source EXIT
 
 usage() {
-  printf 'Usage: %s [--backend yew|dioxus|wasm-dioxus|wasm-yew] [--clean] [--offline]\n' "${0##*/}"
+  printf 'Usage: %s [--backend yew|dioxus] [--clean] [--offline] [--prepare-only]\n' "${0##*/}"
 }
 
 remove_generated_android_outputs() {
@@ -185,7 +187,7 @@ while (($#)); do
     --backend)
       shift
       if (($# == 0)); then
-        printf -- '--backend requires yew, dioxus, wasm-dioxus, or wasm-yew\n' >&2
+        printf -- '--backend requires yew or dioxus\n' >&2
         exit 2
       fi
       backend="$1"
@@ -198,6 +200,9 @@ while (($#)); do
       ;;
     --offline)
       offline=1
+      ;;
+    --prepare-only)
+      prepare_only=1
       ;;
     --help|-h)
       usage
@@ -213,7 +218,7 @@ while (($#)); do
 done
 
 case "$backend" in
-  yew|dioxus|wasm-dioxus|wasm-yew) ;;
+  yew|dioxus) ;;
   *)
     printf 'Unsupported backend: %s\n' "$backend" >&2
     usage >&2
@@ -221,56 +226,32 @@ case "$backend" in
     ;;
 esac
 readonly backend
-readonly GRADLE_APK="$ROOT_DIR/target/android-build/$backend/app/outputs/apk/debug/app-debug.apk"
+readonly GRADLE_APK="$ROOT_DIR/target/android-build/app/outputs/apk/$backend/debug/app-$backend-debug.apk"
 readonly APK="$ROOT_DIR/.deps/android/apks/lynx-element-bridge-$backend.apk"
 readonly EVIDENCE="$ROOT_DIR/.deps/android/build-evidence-$backend.txt"
 readonly CACHE_KEY_FILE="$ROOT_DIR/.deps/android/build-inputs-$backend.sha256"
-readonly STAGED_RUST_ARCHIVE="$ROOT_DIR/target/android-libs/$backend/arm64-v8a/liblynx_element_bridge_backend.a"
+readonly STAGED_RUST_ARCHIVE="$ROOT_DIR/target/android-libs/native-$backend/arm64-v8a/liblynx_element_bridge_backend.a"
+readonly STAGED_WAMR_ARCHIVE="$ROOT_DIR/target/android-libs/wamr/arm64-v8a/liblynx_element_bridge_backend.a"
 case "$backend" in
   yew)
+    GRADLE_FLAVOR=Yew
     RUST_PACKAGE=yew-lynx-counter
     EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:yew
     FORBIDDEN_BACKEND_MARKERS=(
-      lynx-element-bridge-backend:dioxus
-      lynx-element-bridge-backend:wasm-dioxus
-      lynx-element-bridge-backend:wasm-yew)
+      lynx-element-bridge-backend:dioxus)
     ;;
   dioxus)
+    GRADLE_FLAVOR=Dioxus
     RUST_PACKAGE=lynx-element-bridge-dioxus-counter
     EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:dioxus
     FORBIDDEN_BACKEND_MARKERS=(
-      lynx-element-bridge-backend:yew
-      lynx-element-bridge-backend:wasm-dioxus
-      lynx-element-bridge-backend:wasm-yew)
-    ;;
-  wasm-dioxus)
-    RUST_PACKAGE=lynx-element-bridge-wamr-host
-    EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:wasm-dioxus
-    FORBIDDEN_BACKEND_MARKERS=(
-      lynx-element-bridge-backend:yew
-      lynx-element-bridge-backend:dioxus
-      lynx-element-bridge-backend:wasm-yew)
-    WASM_ASSET=dioxus_counter.wasm
-    WASM_REPLACEMENT_ASSET=dioxus_counter_replacement.wasm
-    ;;
-  wasm-yew)
-    RUST_PACKAGE=lynx-element-bridge-wamr-host
-    EXPECTED_BACKEND_MARKER=lynx-element-bridge-backend:wasm-yew
-    FORBIDDEN_BACKEND_MARKERS=(
-      lynx-element-bridge-backend:yew
-      lynx-element-bridge-backend:dioxus
-      lynx-element-bridge-backend:wasm-dioxus)
-    WASM_ASSET=yew_counter.wasm
-    WASM_REPLACEMENT_ASSET=yew_counter_replacement.wasm
+      lynx-element-bridge-backend:yew)
     ;;
 esac
 readonly RUST_PACKAGE
+readonly GRADLE_FLAVOR
 readonly EXPECTED_BACKEND_MARKER
 readonly FORBIDDEN_BACKEND_MARKERS
-WASM_ASSET=${WASM_ASSET:-}
-readonly WASM_ASSET
-WASM_REPLACEMENT_ASSET=${WASM_REPLACEMENT_ASSET:-}
-readonly WASM_REPLACEMENT_ASSET
 
 [[ -f "$LYNX_PATCH_SERIES" ]] || {
   printf 'Missing Lynx patch series: %s\n' "$LYNX_PATCH_SERIES" >&2
@@ -360,18 +341,15 @@ if ((offline)); then
     printf -- '--offline requires the prepared patched Yew checkout\n' >&2
     exit 1
   fi
-  if [[ "$backend" == wasm-* \
-      && ! -d "$WAMR_SOURCE_DIR/.git" && ! -f "$WAMR_SOURCE_DIR/.git" ]]; then
-    printf -- '--offline WASM backends require the initialized WAMR submodule\n' >&2
+  if [[ ! -d "$WAMR_SOURCE_DIR/.git" && ! -f "$WAMR_SOURCE_DIR/.git" ]]; then
+    printf -- '--offline requires the initialized WAMR submodule\n' >&2
     exit 1
   fi
 else
   printf '==> Initializing pinned Lynx submodule\n'
   git -C "$ROOT_DIR" submodule update --init --recursive -- third_party/lynx
-  if [[ "$backend" == wasm-* ]]; then
-    printf '==> Initializing pinned WAMR submodule\n'
-    git -C "$ROOT_DIR" submodule update --init -- third_party/wasm-micro-runtime
-  fi
+  printf '==> Initializing pinned WAMR submodule\n'
+  git -C "$ROOT_DIR" submodule update --init -- third_party/wasm-micro-runtime
 fi
 
 if [[ ! -d "$LYNX_SOURCE_DIR/.git" && ! -f "$LYNX_SOURCE_DIR/.git" ]]; then
@@ -393,13 +371,11 @@ if [[ -n "$tracked_lynx_changes" ]]; then
     "$tracked_lynx_changes" >&2
   exit 1
 fi
-if [[ "$backend" == wasm-* ]]; then
-  actual_wamr_sha="$(git -C "$WAMR_SOURCE_DIR" rev-parse HEAD)"
-  if [[ "$actual_wamr_sha" != "$WAMR_SHA" ]]; then
-    printf 'WAMR submodule mismatch: expected %s, got %s\n' \
-      "$WAMR_SHA" "$actual_wamr_sha" >&2
-    exit 1
-  fi
+actual_wamr_sha="$(git -C "$WAMR_SOURCE_DIR" rev-parse HEAD)"
+if [[ "$actual_wamr_sha" != "$WAMR_SHA" ]]; then
+  printf 'WAMR submodule mismatch: expected %s, got %s\n' \
+    "$WAMR_SHA" "$actual_wamr_sha" >&2
+  exit 1
 fi
 for patch_file in "${LYNX_PATCH_FILES[@]}"; do
   if ! git -C "$LYNX_SOURCE_DIR" apply --check "$patch_file"; then
@@ -593,20 +569,23 @@ if grep -Eiq '<artifactId>(primjs|primjsWasm|lynx-jssdk|lynx|v8so)</artifactId>'
   printf 'Published native renderer POM contains a forbidden runtime dependency\n' >&2
   exit 1
 fi
+if ((prepare_only)); then
+  printf 'Android IDE dependencies are ready in %s\n' "$LYNX_REPOSITORY"
+  exit 0
+fi
 
 printf '==> Checking standalone Android application dependency graph\n'
 gradle_arguments=(
   --project-dir "$ANDROID_PROJECT"
   --no-daemon
   --dependency-verification strict
-  "-PlynxElementBridgeBackend=$backend"
 )
 if ((offline)); then
   gradle_arguments+=(--offline -PlynxElementBridgeOffline=true)
 fi
 app_dependency_graph="$(
   "$ANDROID_PROJECT/gradlew" "${gradle_arguments[@]}" \
-    :app:dependencies --configuration debugRuntimeClasspath
+    :app:dependencies --configuration "${backend}DebugRuntimeClasspath"
 )"
 if ! grep -Fq "org.lynxsdk.lynx:lynx-native-renderer:$LYNX_VERSION" \
     <<<"$app_dependency_graph"; then
@@ -620,7 +599,7 @@ if grep -Eiq 'org\.lynxsdk\.lynx:(lynx|lynx-jssdk|primjs|primjsWasm|v8so):|(^|[^
 fi
 
 printf '==> Assembling standalone Android application\n'
-gradle_arguments+=( :app:assembleDebug )
+gradle_arguments+=( ":app:assemble${GRADLE_FLAVOR}Debug" )
 "$ANDROID_PROJECT/gradlew" "${gradle_arguments[@]}"
 
 if ((!offline)); then
@@ -659,18 +638,9 @@ if grep -q '\.lynx\.bundle$' <<<"$apk_entries"; then
   printf 'Native-only APK unexpectedly contains a Lynx template bundle\n' >&2
   exit 1
 fi
-if [[ "$backend" == wasm-* ]]; then
-  for wasm_asset in "$WASM_ASSET" "$WASM_REPLACEMENT_ASSET"; do
-    if ! grep -Fq "assets/$wasm_asset" <<<"$apk_entries"; then
-      printf '%s APK is missing assets/%s\n' "$backend" "$wasm_asset" >&2
-      exit 1
-    fi
-  done
-else
-  if grep -Eq '^assets/.*\.wasm$' <<<"$apk_entries"; then
-    printf 'Native APK unexpectedly contains a WebAssembly guest\n' >&2
-    exit 1
-  fi
+if grep -Eq '^assets/.*\.wasm$' <<<"$apk_entries"; then
+  printf 'APK unexpectedly contains a WebAssembly guest\n' >&2
+  exit 1
 fi
 
 elf_inspect_dir="$(mktemp -d "$ROOT_DIR/.deps/android/.elf-check.XXXXXX")"
@@ -708,7 +678,7 @@ for elf_entry in "${native_apk_elf_entries[@]}"; do
   fi
 done
 backend_strings="$(
-  unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge.so |
+  unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge_native.so |
     "$llvm_bin/llvm-strings"
 )"
 if ! grep -Fq "$EXPECTED_BACKEND_MARKER" <<<"$backend_strings"; then
@@ -723,6 +693,14 @@ for forbidden_marker in "${FORBIDDEN_BACKEND_MARKERS[@]}"; do
     exit 1
   fi
 done
+wamr_strings="$(
+  unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge_wamr.so |
+    "$llvm_bin/llvm-strings"
+)"
+if ! grep -Fq 'lynx-element-bridge-backend:wasm' <<<"$wamr_strings"; then
+  printf 'APK WAMR library does not contain its backend marker\n' >&2
+  exit 1
+fi
 
 mkdir -p -- "$(dirname -- "$EVIDENCE")"
 cat >"$EVIDENCE" <<EOF
@@ -746,8 +724,8 @@ lynx_android_ndk=21.1.6352462
 app_android_ndk=25.2.9519653
 android_platform=33
 rust_archive_sha256=$(sha256_checksum "$STAGED_RUST_ARCHIVE" | cut -d ' ' -f 1)
-wasm_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_ASSET" | sha256_checksum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
-wasm_replacement_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_REPLACEMENT_ASSET" | sha256_checksum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
+wamr_archive_sha256=$(sha256_checksum "$STAGED_WAMR_ARCHIVE" | cut -d ' ' -f 1)
+wasm_guest_sha256=external-url-only
 apk_sha256=$(sha256_checksum "$APK" | cut -d ' ' -f 1)
 apk=$APK
 android_input_cache_key=$cache_key

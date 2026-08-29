@@ -10,34 +10,26 @@
         android:label="Lynx Element Bridge Counter"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:usesCleartextTraffic="${wasmUrlCleartextEnabled}">
+        android:usesCleartextTraffic="true">
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="unspecified" />
         <activity
+            android:name=".WasmActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified" />
+        <activity
             android:name=".WasmUrlActivity"
             android:exported="false"
             android:screenOrientation="unspecified" />
-        <activity-alias
-            android:name=".NativeLauncher"
-            android:enabled="${nativeLauncherEnabled}"
-            android:exported="true"
-            android:targetActivity=".MainActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-        <activity-alias
-            android:name=".WasmUrlLauncher"
-            android:enabled="${wasmUrlLauncherEnabled}"
-            android:exported="true"
-            android:targetActivity=".WasmUrlActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
     </application>
 </manifest>
