@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
+# shellcheck source=android-build-utils.sh
+source "$ROOT_DIR/scripts/android-build-utils.sh"
 readonly LOCK_FILE="$ROOT_DIR/android/primjs.lock"
 readonly REPOSITORY_DIR="${1:-$ROOT_DIR/.deps/android/primjs-maven}"
 readonly REMOTE_BASE="https://central.sonatype.com/repository/maven-snapshots/org/lynxsdk/lynx"
@@ -19,7 +21,7 @@ download_locked() {
   local temporary
 
   if [[ -f "$output" ]]; then
-    actual_sha256="$(sha256sum "$output" | cut -d ' ' -f 1)"
+    actual_sha256="$(sha256_checksum "$output" | cut -d ' ' -f 1)"
     if [[ "$actual_sha256" == "$expected_sha256" ]]; then
       return
     fi
@@ -31,7 +33,7 @@ download_locked() {
     rm -f -- "$temporary"
     return 1
   fi
-  actual_sha256="$(sha256sum "$temporary" | cut -d ' ' -f 1)"
+  actual_sha256="$(sha256_checksum "$temporary" | cut -d ' ' -f 1)"
   if [[ "$actual_sha256" != "$expected_sha256" ]]; then
     rm -f -- "$temporary"
     printf 'PrimJS checksum mismatch for %s: expected %s, got %s\n' \

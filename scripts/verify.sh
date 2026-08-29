@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
+# shellcheck source=android-build-utils.sh
+source "$ROOT_DIR/scripts/android-build-utils.sh"
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
 readonly LYNX_SHA="0df14207cebb060f1bed8de12b64a1119dee8f06"
 readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
@@ -12,11 +14,13 @@ readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
 readonly WAMR_SHA="25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 readonly SCRIPTS=(
   "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
+  "$ROOT_DIR/scripts/android-build-utils.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
   "$ROOT_DIR/scripts/build-android.sh"
   "$ROOT_DIR/scripts/prepare-hab.sh"
   "$ROOT_DIR/scripts/prepare-primjs.sh"
   "$ROOT_DIR/scripts/publish-lynx-maven.sh"
+  "$ROOT_DIR/scripts/test-android-build-utils.sh"
   "$ROOT_DIR/scripts/verify.sh"
 )
 
@@ -372,7 +376,8 @@ if [[ -z "$ANDROID_HOME" || ! -d "$ANDROID_HOME" ]]; then
   printf 'verify: ANDROID_HOME must point to an installed Android SDK\n' >&2
   exit 1
 fi
-android_llvm_bin="$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin"
+android_llvm_bin="$(resolve_android_ndk_prebuilt_dir \
+  "$ANDROID_HOME/ndk/25.2.9519653")/bin"
 for tool in aarch64-linux-android24-clang llvm-ar; do
   [[ -x "$android_llvm_bin/$tool" ]] || {
     printf 'verify: missing Android NDK tool: %s\n' "$android_llvm_bin/$tool" >&2

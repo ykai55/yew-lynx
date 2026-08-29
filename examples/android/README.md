@@ -36,6 +36,11 @@ Requirements:
 - Rust 1.85.0 with `aarch64-linux-android` and `wasm32-wasip1`
 - Node.js 22.18.0 for Lynx's source build tooling
 
+Android builds are supported on Linux and macOS. The build selects an installed
+`linux-x86_64`, `darwin-arm64`, or `darwin-x86_64` NDK prebuilt host directory.
+Set `ANDROID_NDK_HOST_TAG` (for example, `darwin-x86_64`) to override automatic
+selection when using a translated or nonstandard NDK installation.
+
 The app supports only `arm64-v8a`. APKs are written to
 `.deps/android/apks/lynx-element-bridge-{yew,dioxus,wasm-dioxus,wasm-yew}.apk`.
 The Wasm modes package initial and replacement variants of
