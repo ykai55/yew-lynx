@@ -40,6 +40,10 @@ Android builds are supported on Linux and macOS. The build selects an installed
 `linux-x86_64`, `darwin-arm64`, or `darwin-x86_64` NDK prebuilt host directory.
 Set `ANDROID_NDK_HOST_TAG` (for example, `darwin-x86_64`) to override automatic
 selection when using a translated or nonstandard NDK installation.
+Gradle tasks resolve the configured SDK and NDK through AGP, so Android Studio's
+standard `local.properties` `sdk.dir` setting is supported without an SDK
+environment variable. The top-level shell build still requires `ANDROID_HOME`
+or `ANDROID_SDK_ROOT` because it invokes SDK tools before Gradle starts.
 
 The app supports only `arm64-v8a`. APKs are written to
 `.deps/android/apks/lynx-element-bridge-{yew,dioxus,wasm-dioxus,wasm-yew}.apk`.

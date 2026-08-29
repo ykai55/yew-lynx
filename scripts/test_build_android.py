@@ -115,8 +115,11 @@ class BuildAndroidStaticTest(unittest.TestCase):
         for gradle_file in gradle_files:
             gradle = gradle_file.read_text()
             self.assertIn('System.getenv("ANDROID_NDK_HOST_TAG")', gradle)
+            self.assertIn("androidComponents.sdkComponents.sdkDirectory", gradle)
             self.assertIn('listOf("darwin-arm64", "darwin-x86_64")', gradle)
             self.assertIn('listOf("linux-x86_64")', gradle)
+            self.assertNotIn('System.getenv("ANDROID_HOME")', gradle)
+            self.assertNotIn('System.getenv("ANDROID_SDK_ROOT")', gradle)
             self.assertNotIn("prebuilt/linux-x86_64", gradle)
 
     def test_ndk_host_selection_behavior(self):

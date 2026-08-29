@@ -5,6 +5,7 @@ val elementBridgeBackend = providers.gradleProperty("lynxElementBridgeBackend")
     .orElse("yew").get()
 require(elementBridgeBackend in setOf("yew", "dioxus", "wasm-dioxus", "wasm-yew"))
 val elementBridgeWasmMode = elementBridgeBackend.startsWith("wasm-")
+val elementBridgeNdkVersion = "25.2.9519653"
 val elementBridgeRustPackage = when (elementBridgeBackend) {
   "yew" -> "yew-lynx-counter"
   "dioxus" -> "lynx-element-bridge-dioxus-counter"
@@ -35,11 +36,6 @@ val elementBridgeWasmAsset = if (elementBridgeBackend == "wasm-yew") {
 } else {
   "dioxus_counter.wasm"
 }
-val elementBridgeAndroidSdk = rootProject.file(
-    System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
-        ?: error("ANDROID_HOME or ANDROID_SDK_ROOT must point to the Android SDK"))
-val elementBridgeNdkPrebuiltDir = elementBridgeAndroidSdk.resolve(
-    "ndk/25.2.9519653/toolchains/llvm/prebuilt")
 val elementBridgeNdkHostTags = System.getenv("ANDROID_NDK_HOST_TAG")
     ?.takeIf(String::isNotBlank)
     ?.let(::listOf)
@@ -54,22 +50,25 @@ val elementBridgeNdkHostTags = System.getenv("ANDROID_NDK_HOST_TAG")
           listOf("linux-x86_64")
       else -> error("Unsupported Android NDK host OS: ${System.getProperty("os.name")}")
     }
-val elementBridgeNdkPrebuiltCandidates =
-    elementBridgeNdkHostTags.map { elementBridgeNdkPrebuiltDir.resolve(it) }
-val elementBridgeAndroidLlvmBin = elementBridgeNdkPrebuiltCandidates
-    .firstOrNull { it.isDirectory }
-    ?.resolve("bin")
-    ?: error(
-        "Unable to locate Android NDK prebuilt host directory. Tried:\n" +
-            elementBridgeNdkPrebuiltCandidates.joinToString("\n") { "  ${it.absolutePath}" })
+val elementBridgeAndroidLlvmBin = androidComponents.sdkComponents.sdkDirectory.map { sdkDirectory ->
+  val prebuiltDirectory = sdkDirectory.asFile.resolve(
+      "ndk/$elementBridgeNdkVersion/toolchains/llvm/prebuilt")
+  val candidates = elementBridgeNdkHostTags.map(prebuiltDirectory::resolve)
+  candidates.firstOrNull(File::isDirectory)
+      ?.resolve("bin")
+      ?: error(
+          "Unable to locate Android NDK prebuilt host directory. Tried:\n" +
+              candidates.joinToString("\n") { "  ${it.absolutePath}" })
+}
 
 val buildElementBridgeRustArm64 by tasks.registering(org.gradle.api.tasks.Exec::class) {
   workingDir(rootProject.projectDir)
+  val llvmBin = elementBridgeAndroidLlvmBin.get()
   environment("CC_aarch64_linux_android",
-      elementBridgeAndroidLlvmBin.resolve("aarch64-linux-android24-clang"))
-  environment("AR_aarch64_linux_android", elementBridgeAndroidLlvmBin.resolve("llvm-ar"))
+      llvmBin.resolve("aarch64-linux-android24-clang"))
+  environment("AR_aarch64_linux_android", llvmBin.resolve("llvm-ar"))
   environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
-      elementBridgeAndroidLlvmBin.resolve("aarch64-linux-android24-clang"))
+      llvmBin.resolve("aarch64-linux-android24-clang"))
   val command = mutableListOf(
       "cargo", "build", "--locked", "--release",
       "--target", "aarch64-linux-android",
