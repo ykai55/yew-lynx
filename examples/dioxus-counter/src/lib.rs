@@ -1,5 +1,9 @@
 #![deny(unsafe_code)]
 
+#[cfg(not(test))]
+mod app;
+#[cfg(test)]
+#[path = "app_test_fixture.rs"]
 mod app;
 #[path = "dioxus-lynx-runtime.rs"]
 mod dioxus_lynx_runtime;

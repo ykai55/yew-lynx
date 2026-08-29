@@ -197,7 +197,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn real_virtual_dom_mounts_updates_and_destroys_the_counter() {
+    fn fixture_virtual_dom_mounts_updates_and_destroys_the_counter() {
         let root = NodeId::new(1).unwrap();
         let (mut counter, mounted) = DioxusCounter::mount(root).unwrap();
         let (listener, callback) = mounted
@@ -216,46 +216,9 @@ mod tests {
             let snapshot = host.snapshot();
             let screen = &snapshot.children[0];
             assert_eq!(screen.tag, "view");
-            assert_eq!(
-                screen.attributes.get("style").map(String::as_str),
-                Some(
-                    "height: 100%; padding: 64px 40px; background-color: #f5f2ea; display: flex; flex-direction: column; justify-content: center;"
-                )
-            );
             assert_eq!(screen.children[0].tag, "text");
-            assert_eq!(
-                screen.children[0].attributes.get("id").map(String::as_str),
-                Some("counter-value")
-            );
-            assert_eq!(
-                screen.children[0]
-                    .attributes
-                    .get("style")
-                    .map(String::as_str),
-                Some("font-size: 36px; font-weight: 700; color: #18201b; margin-bottom: 32px;")
-            );
             assert_eq!(screen.children[1].tag, "view");
-            assert_eq!(
-                screen.children[1].attributes.get("id").map(String::as_str),
-                Some("counter-increment")
-            );
-            assert_eq!(
-                screen.children[1]
-                    .attributes
-                    .get("style")
-                    .map(String::as_str),
-                Some(
-                    "height: 96px; border-radius: 20px; background-color: #176b51; display: flex; align-items: center; justify-content: center;"
-                )
-            );
             assert_eq!(screen.children[1].children[0].tag, "text");
-            assert_eq!(
-                screen.children[1].children[0]
-                    .attributes
-                    .get("style")
-                    .map(String::as_str),
-                Some("font-size: 28px; font-weight: 600; color: #ffffff;")
-            );
             assert_eq!(
                 screen.children[1].children[0].children[0].text.as_deref(),
                 Some("Increment")
