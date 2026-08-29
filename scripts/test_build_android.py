@@ -12,6 +12,7 @@ VERIFY_SCRIPT = (ROOT / "scripts" / "verify.sh").read_text()
 BUILD_UTILS = (ROOT / "scripts" / "android-build-utils.sh").read_text()
 BOOTSTRAP_YEW = (ROOT / "scripts" / "bootstrap-yew.sh").read_text()
 ANDROID_APP_GRADLE = (ROOT / "examples" / "android" / "app" / "build.gradle.kts").read_text()
+ANDROID_ROOT_GRADLE = (ROOT / "examples" / "android" / "build.gradle.kts").read_text()
 ANDROID_NATIVE_GRADLE = (
     ROOT / "examples" / "android" / "bridge-native" / "build.gradle.kts"
 ).read_text()
@@ -130,6 +131,25 @@ class BuildAndroidStaticTest(unittest.TestCase):
             self.assertNotIn('System.getenv("ANDROID_HOME")', gradle)
             self.assertNotIn('System.getenv("ANDROID_SDK_ROOT")', gradle)
             self.assertNotIn("prebuilt/linux-x86_64", gradle)
+
+    def test_android_gradle_supports_local_cargo_path(self):
+        self.assertIn('rootDir.resolve("local.properties")', ANDROID_ROOT_GRADLE)
+        self.assertIn('getProperty("cargo.path")', ANDROID_ROOT_GRADLE)
+        self.assertIn('System.getenv("PATH")', ANDROID_ROOT_GRADLE)
+        self.assertIn('File(it, "cargo")', ANDROID_ROOT_GRADLE)
+        self.assertIn('".cargo/bin/cargo"', ANDROID_ROOT_GRADLE)
+        self.assertLess(
+            ANDROID_ROOT_GRADLE.index('getProperty("cargo.path")'),
+            ANDROID_ROOT_GRADLE.index('System.getenv("PATH")'),
+        )
+        self.assertLess(
+            ANDROID_ROOT_GRADLE.index('System.getenv("PATH")'),
+            ANDROID_ROOT_GRADLE.index('".cargo/bin/cargo"'),
+        )
+        self.assertIn('extra["cargoExecutable"]', ANDROID_ROOT_GRADLE)
+        for gradle in (ANDROID_NATIVE_GRADLE, ANDROID_WAMR_GRADLE):
+            self.assertIn('val cargoExecutable: String by rootProject.extra', gradle)
+            self.assertIn('mutableListOf(cargoExecutable, "build", "--locked")', gradle)
 
     def test_ndk_host_selection_behavior(self):
         result = subprocess.run(
