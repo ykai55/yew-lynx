@@ -113,6 +113,7 @@ class BuildAndroidStaticTest(unittest.TestCase):
 
     def test_wasm_pages_reload_from_verified_websocket_builds(self):
         self.assertIn('"/.well-known/yew-lynx/reload"', ANDROID_WASM_ACTIVITY)
+        self.assertNotIn('.scheme(protocol)', ANDROID_WASM_ACTIVITY)
         self.assertIn('expectedSha256 = artifact.sha256', ANDROID_WASM_ACTIVITY)
         self.assertIn('module.file.length() != artifact.size', ANDROID_WASM_ACTIVITY)
         self.assertIn('destroySession(previous)', ANDROID_WASM_ACTIVITY)
