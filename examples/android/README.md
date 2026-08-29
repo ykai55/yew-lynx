@@ -57,7 +57,11 @@ AGP, so the standard `examples/android/local.properties` setting works:
 
 ```properties
 sdk.dir=/path/to/Android/sdk
+cargo.path=/absolute/path/to/cargo
 ```
+
+`cargo.path` is optional. Gradle resolves Cargo in this order: the explicit
+`cargo.path`, the Android Studio or shell `PATH`, then `~/.cargo/bin/cargo`.
 
 Set `ANDROID_NDK_HOST_TAG` (for example, `darwin-x86_64`) only for a translated
 or nonstandard NDK installation. The top-level shell build still requires

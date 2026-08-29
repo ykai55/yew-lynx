@@ -4,6 +4,7 @@ plugins {
 
 val repositoryRoot = rootProject.projectDir.parentFile.parentFile
 val androidAdapterDir = repositoryRoot.resolve("adapters/android")
+val cargoExecutable: String by rootProject.extra
 val androidNdkVersion = "25.2.9519653"
 val offlineBuild = providers.gradleProperty("lynxElementBridgeOffline")
     .map(String::toBoolean)
@@ -75,7 +76,7 @@ val buildWamrRustArm64 by tasks.registering(Exec::class) {
         "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
         llvmBin.resolve("aarch64-linux-android24-clang"),
     )
-    val command = mutableListOf("cargo", "build", "--locked")
+    val command = mutableListOf(cargoExecutable, "build", "--locked")
     if (offlineBuild.get()) command.add("--offline")
     command.addAll(listOf(
         "--release", "--target", "aarch64-linux-android", "--package",
