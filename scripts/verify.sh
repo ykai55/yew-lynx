@@ -16,6 +16,7 @@ readonly SCRIPTS=(
   "$ROOT_DIR/scripts/android-build-utils.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
   "$ROOT_DIR/scripts/build-android.sh"
+  "$ROOT_DIR/scripts/dev-wasm.sh"
   "$ROOT_DIR/scripts/prepare-hab.sh"
   "$ROOT_DIR/scripts/prepare-primjs.sh"
   "$ROOT_DIR/scripts/publish-lynx-maven.sh"

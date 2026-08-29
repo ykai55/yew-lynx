@@ -84,13 +84,16 @@ builds both guests, watches their source trees, serves the release output, and
 publishes successful builds over a same-origin WebSocket:
 
 ```bash
-cargo run --locked -p yew-lynx-dev-server
+./scripts/dev-wasm.sh
 adb reverse tcp:8000 tcp:8000
 ```
 
 Pass `--backend yew` or `--backend dioxus` to build only one guest, and use
 `--port PORT` or `--bind IP` to change the listener. No global development tool
 installation is required.
+The script is only a convenience wrapper around the `yew-lynx-dev-server`
+workspace binary; all watching, building, HTTP, and WebSocket behavior is
+implemented in Rust.
 
 Then enter a URL printed by the development server, such as
 `http://127.0.0.1:8000/yew_lynx_counter.wasm`. Downloaded modules
