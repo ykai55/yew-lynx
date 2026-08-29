@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::sync::OnceLock;
 
-use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId, Status};
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, Status};
 use lynx_element_bridge_ffi::native_host::{
     NATIVE_STATUS_PANIC, NativeHostHandle, NativeRendererGetApiFn, NativeStatus, status_to_native,
 };
@@ -13,7 +13,7 @@ use lynx_element_bridge_ffi::{
     native_destroy_session, native_mount, native_replace_backend,
 };
 use lynx_element_bridge_wasm_guest::{
-    EventRequest, GuestResponse, GuestResult, MountRequest, PROTOCOL_VERSION_V1,
+    EventRequest, GuestResponse, GuestResult, MountRequest, PROTOCOL_VERSION_V2,
     decode_guest_response, encode_event_request, encode_mount_request,
 };
 
@@ -227,7 +227,7 @@ impl WamrGuest {
             guest.call(initialize, 0, &mut cells)?;
         }
         let actual = guest.call_i32(version, &[])?;
-        if actual != PROTOCOL_VERSION_V1 {
+        if actual != PROTOCOL_VERSION_V2 {
             return Err(BackendError::recoverable(
                 Status::Unsupported,
                 format!("unsupported guest protocol version {actual}"),
@@ -415,23 +415,14 @@ impl WamrBackend {
         })
     }
 
-    pub fn mount(
-        mut self,
-        session: SessionId,
-        root: NodeId,
-    ) -> Result<(Self, CommandBatch), BackendError> {
-        let batch = self.mount_application(session, root)?;
+    pub fn mount(mut self, root: NodeId) -> Result<(Self, CommandBatch), BackendError> {
+        let batch = self.mount_application(root)?;
         Ok((self, batch))
     }
 
-    fn mount_application(
-        &mut self,
-        session: SessionId,
-        root: NodeId,
-    ) -> Result<CommandBatch, BackendError> {
+    fn mount_application(&mut self, root: NodeId) -> Result<CommandBatch, BackendError> {
         let request = encode_mount_request(&MountRequest {
-            protocol_version: PROTOCOL_VERSION_V1,
-            session,
+            protocol_version: PROTOCOL_VERSION_V2,
             root,
         })
         .map_err(|error| BackendError::fatal(Status::InternalError, error.to_string()))?;
@@ -441,8 +432,8 @@ impl WamrBackend {
 }
 
 impl BridgeBackendCandidate for WamrBackend {
-    fn mount(&mut self, session: SessionId, root: NodeId) -> Result<CommandBatch, BackendError> {
-        self.mount_application(session, root)
+    fn mount(&mut self, root: NodeId) -> Result<CommandBatch, BackendError> {
+        self.mount_application(root)
     }
 
     fn activate(self: Box<Self>) -> Box<dyn BridgeBackend> {
@@ -453,7 +444,7 @@ impl BridgeBackendCandidate for WamrBackend {
 impl BridgeBackend for WamrBackend {
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError> {
         let request = encode_event_request(&EventRequest {
-            protocol_version: PROTOCOL_VERSION_V1,
+            protocol_version: PROTOCOL_VERSION_V2,
             event,
         })
         .map_err(|error| BackendError::fatal(Status::InternalError, error.to_string()))?;
@@ -480,9 +471,9 @@ pub unsafe fn mount_module(
 ) -> LynxElementBridgeNativeMountResult {
     // SAFETY: The renderer obligations are forwarded to `native_mount`.
     unsafe {
-        native_mount(get_api, host, |session, root| {
+        native_mount(get_api, host, |root| {
             let backend = WamrBackend::preflight(module)?;
-            let (backend, batch) = backend.mount(session, root)?;
+            let (backend, batch) = backend.mount(root)?;
             Ok((Box::new(backend), batch))
         })
     }

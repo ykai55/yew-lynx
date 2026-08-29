@@ -9,8 +9,7 @@ use std::rc::Rc;
 use std::thread::{self, ThreadId};
 
 use lynx_element_bridge_core::{
-    BridgeError, CallbackId, Command, CommandBatch, EventMessage, ListenerId, NodeId, SessionId,
-    Status,
+    BridgeError, CallbackId, Command, CommandBatch, EventMessage, ListenerId, NodeId, Status,
 };
 
 pub const NATIVE_RENDERER_ABI_VERSION: u32 = 1;
@@ -191,7 +190,6 @@ struct TimerMapping {
 pub struct NativeHost {
     api: NativeRendererApiV1,
     renderer: Option<NativeRendererHandle>,
-    session: SessionId,
     root: NodeId,
     owner: ThreadId,
     nodes: HashMap<NodeId, NativeNodeHandle>,
@@ -213,7 +211,6 @@ impl NativeHost {
     pub unsafe fn acquire(
         get_api: NativeRendererGetApiFn,
         host: NativeHostHandle,
-        session: SessionId,
         root: NodeId,
         callbacks: NativeRendererCallbacksV1,
     ) -> Result<Self, BridgeError> {
@@ -321,7 +318,6 @@ impl NativeHost {
         Ok(Self {
             api,
             renderer: Some(renderer),
-            session,
             root,
             owner: thread::current().id(),
             nodes: HashMap::from([(root, native_root)]),
@@ -336,12 +332,6 @@ impl NativeHost {
 
     pub fn apply(&mut self, batch: &CommandBatch) -> Result<(), BridgeError> {
         let renderer = self.ensure_usable()?;
-        if batch.session != self.session {
-            return Err(BridgeError::new(
-                Status::InvalidSession,
-                "command batch session does not match the native host",
-            ));
-        }
         if self
             .last_sequence
             .is_some_and(|sequence| batch.sequence <= sequence)
@@ -414,7 +404,6 @@ impl NativeHost {
             ));
         }
         Ok(EventMessage {
-            session: self.session,
             listener: mapping.listener,
             callback: mapping.callback,
             content_type,
@@ -1230,17 +1219,9 @@ mod tests {
         }
     }
 
-    fn acquire_host(session: u32, root: u32) -> Result<NativeHost, BridgeError> {
+    fn acquire_host(_session: u32, root: u32) -> Result<NativeHost, BridgeError> {
         // SAFETY: The recording table implements the production ABI for the test lifetime.
-        unsafe {
-            NativeHost::acquire(
-                get_api,
-                TEST_HOST,
-                SessionId::new(session).unwrap(),
-                NodeId::new(root).unwrap(),
-                callbacks(),
-            )
-        }
+        unsafe { NativeHost::acquire(get_api, TEST_HOST, NodeId::new(root).unwrap(), callbacks()) }
     }
 
     fn recording_host(session: u32, root: u32) -> NativeHost {
@@ -1253,13 +1234,12 @@ mod tests {
     }
 
     fn batch(
-        session: u32,
+        _session: u32,
         sequence: u32,
         commands: Vec<Command>,
         final_commit: bool,
     ) -> CommandBatch {
         CommandBatch {
-            session: SessionId::new(session).unwrap(),
             sequence,
             commands,
             final_commit,
@@ -1661,14 +1641,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_session_and_nonincreasing_sequences() {
+    fn rejects_nonincreasing_sequences() {
         let mut host = recording_host(7, 1);
         clear_calls();
 
-        assert_eq!(
-            error_status(host.apply(&batch(8, 10, Vec::new(), false))),
-            Status::InvalidSession
-        );
         host.apply(&batch(7, 10, Vec::new(), false)).unwrap();
         assert_eq!(
             error_status(host.apply(&batch(7, 10, Vec::new(), false))),

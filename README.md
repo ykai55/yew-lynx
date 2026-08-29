@@ -62,7 +62,9 @@ adds the host-independent native renderer used by the Yew adapter.
 
 `CommandBatch` remains an in-memory Rust boundary. Its ordered `Vec<Command>`
 contains mutations only. Event payload bytes and content type are copied at the
-native callback boundary and remain opaque to the bridge.
+native callback boundary and remain opaque to the bridge. `CommandBatch` and
+`EventMessage` do not carry the native registry's session token; their owning
+backend and `NativeHost` objects provide message scope.
 
 ## Android Products
 
@@ -104,7 +106,8 @@ const char* lynx_element_bridge_backend(void);
 const char* lynx_element_bridge_backend_marker(void);
 ```
 
-Sessions and host handles are opaque and nonzero. Calls and callbacks are
+Native registry session tokens and host handles are opaque and nonzero. The
+session token is a lifecycle handle and is not part of renderer messages. Calls and callbacks are
 synchronous on the mounting thread. Normal destroy applies framework teardown
 before releasing the renderer. Abandon is an emergency path that consumes Rust
 state without applying teardown mutations. A consumed failure still invalidates

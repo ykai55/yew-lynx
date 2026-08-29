@@ -9,11 +9,11 @@ use std::process::Command;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 
-use lynx_element_bridge_core::{NodeId, SessionId, Status};
+use lynx_element_bridge_core::{NodeId, Status};
 use lynx_element_bridge_ffi::native_host::*;
 use lynx_element_bridge_wamr_host::{WamrBackend, mount_module, replace_module};
 use lynx_element_bridge_wasm_guest::{
-    GuestResponse, GuestResult, PROTOCOL_VERSION_V1, encode_guest_response,
+    GuestResponse, GuestResult, PROTOCOL_VERSION_V2, encode_guest_response,
 };
 
 const HOST: NativeHostHandle = 7;
@@ -323,7 +323,7 @@ fn real_wamr_runs_mount_event_replace_and_destroy_through_native_renderer() {
     );
 
     let missing =
-        wat::parse_str("(module (func (export \"version\") (result i32) i32.const 1))").unwrap();
+        wat::parse_str("(module (func (export \"version\") (result i32) i32.const 2))").unwrap();
     assert_eq!(
         replace_module(mounted.session, &missing),
         NATIVE_STATUS_UNSUPPORTED
@@ -459,23 +459,23 @@ fn real_wamr_runs_yew_guest_mount_event_and_destroy_through_native_renderer() {
 #[test]
 fn preflight_rejects_bad_version_and_missing_exports_and_contains_traps() {
     let _serial = TEST_LOCK.lock().unwrap();
-    let bad_version = wat::parse_str(module_wat("(i32.const 2)", "(i64.const 0)")).unwrap();
+    let bad_version = wat::parse_str(module_wat("(i32.const 1)", "(i64.const 0)")).unwrap();
     assert_eq!(
         WamrBackend::preflight(&bad_version).err().unwrap().status,
         Status::Unsupported
     );
 
     let missing =
-        wat::parse_str("(module (func (export \"version\") (result i32) i32.const 1))").unwrap();
+        wat::parse_str("(module (func (export \"version\") (result i32) i32.const 2))").unwrap();
     assert_eq!(
         WamrBackend::preflight(&missing).err().unwrap().status,
         Status::Unsupported
     );
 
-    let trapped = wat::parse_str(module_wat("(i32.const 1)", "unreachable")).unwrap();
+    let trapped = wat::parse_str(module_wat("(i32.const 2)", "unreachable")).unwrap();
     let error = match WamrBackend::preflight(&trapped)
         .unwrap()
-        .mount(SessionId::new(99).unwrap(), NodeId::new(1).unwrap())
+        .mount(NodeId::new(1).unwrap())
     {
         Ok(_) => panic!("trapping guest unexpectedly mounted"),
         Err(error) => error,
@@ -513,7 +513,7 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
     let _serial = TEST_LOCK.lock().unwrap();
     let truncated = {
         let mut response = encode_guest_response(&GuestResponse {
-            protocol_version: PROTOCOL_VERSION_V1,
+            protocol_version: PROTOCOL_VERSION_V2,
             result: GuestResult::Err {
                 status: Status::HostError,
                 message: "guest failure".into(),
@@ -523,6 +523,14 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
         response.pop();
         response
     };
+    let v1_response = encode_guest_response(&GuestResponse {
+        protocol_version: 1,
+        result: GuestResult::Err {
+            status: Status::HostError,
+            message: "v1 response".into(),
+        },
+    })
+    .unwrap();
     let cases = [
         (
             "zero descriptor",
@@ -541,6 +549,12 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
             output_module(&[], (u64::from(u32::MAX - 1) << 32) | 4, 1),
             Status::InvalidArgument,
             "guest memory range 4294967294..+4 is invalid",
+        ),
+        (
+            "v1 response",
+            output_module(&v1_response, (1024_u64 << 32) | v1_response.len() as u64, 1),
+            Status::Unsupported,
+            "unsupported protocol version 1",
         ),
         (
             "malformed postcard",
@@ -565,7 +579,7 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
     for (name, module, expected_status, expected_message) in cases {
         let error = match WamrBackend::preflight(&module)
             .unwrap()
-            .mount(SessionId::new(99).unwrap(), NodeId::new(1).unwrap())
+            .mount(NodeId::new(1).unwrap())
         {
             Ok(_) => panic!("{name} unexpectedly mounted"),
             Err(error) => error,
@@ -648,7 +662,7 @@ fn fixture_module() -> Vec<u8> {
 
 fn error_with_ok_status_module() -> Vec<u8> {
     let response = encode_guest_response(&GuestResponse {
-        protocol_version: PROTOCOL_VERSION_V1,
+        protocol_version: PROTOCOL_VERSION_V2,
         result: GuestResult::Err {
             status: Status::Ok,
             message: "invalid guest error".into(),
@@ -667,7 +681,7 @@ fn output_module(bytes: &[u8], descriptor: u64, output_dealloc_result: u32) -> V
         r#"(module
             (memory 1)
             (data (i32.const 1024) "{data}")
-            (func (export "version") (result i32) i32.const 1)
+            (func (export "version") (result i32) i32.const 2)
             (func (export "alloc") (param i32) (result i32) i32.const 8)
             (func (export "dealloc") (param i32 i32) (result i32) i32.const 1)
             (func (export "mount") (param i32 i32) (result i64)

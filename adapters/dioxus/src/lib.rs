@@ -7,8 +7,7 @@ use dioxus_core::{
     AttributeValue, ElementId, Template, TemplateAttribute, TemplateNode, WriteMutations,
 };
 use lynx_element_bridge_core::{
-    BridgeError, CallbackId, CommandBatch, EventMessage, ListenerId, NodeId, Session, SessionId,
-    Status,
+    BridgeError, CallbackId, CommandBatch, EventMessage, ListenerId, NodeId, Session, Status,
 };
 
 pub mod dioxus_elements;
@@ -121,8 +120,8 @@ impl fmt::Debug for DioxusAdapter {
 }
 
 impl DioxusAdapter {
-    pub fn new(session_id: SessionId, root: NodeId) -> Result<Self, DioxusAdapterError> {
-        let session = Session::create(session_id, root)?;
+    pub fn new(root: NodeId) -> Result<Self, DioxusAdapterError> {
+        let session = Session::create(root)?;
         Ok(Self {
             session,
             root,
@@ -720,14 +719,13 @@ mod tests {
 
     #[test]
     fn rsx_authors_lynx_elements_attributes_dynamic_text_and_tap() {
-        let session = SessionId::new(6).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let mut adapter = DioxusAdapter::new(root).unwrap();
         let received_payload = Rc::new(RefCell::new(Vec::new()));
         let mut dom = VirtualDom::new_with_props(lynx_rsx_fixture, Rc::clone(&received_payload));
         dom.rebuild(&mut adapter);
 
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         let mounted = adapter.take_batch().unwrap();
         let (listener, callback) = mounted
             .commands
@@ -757,7 +755,6 @@ mod tests {
         assert_eq!(host.listener_count(), 1);
 
         let event = EventMessage {
-            session,
             listener,
             callback,
             content_type: "application/vnd.lynx.tap".into(),
@@ -771,9 +768,8 @@ mod tests {
 
     #[test]
     fn write_mutations_lowers_lynx_templates_and_stack_operations() {
-        let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let mut adapter = DioxusAdapter::new(root).unwrap();
         adapter.load_template(TEMPLATE, 0, ElementId(1));
         adapter.assign_node_id(&[0], ElementId(2));
         adapter.append_children(ElementId(0), 1);
@@ -783,7 +779,7 @@ mod tests {
             &AttributeValue::Text("active".into()),
             ElementId(2),
         );
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&adapter.take_batch().unwrap()).unwrap();
         let snapshot = host.snapshot();
         assert_eq!(snapshot.children[0].tag, "view");
@@ -800,9 +796,8 @@ mod tests {
 
     #[test]
     fn dioxus_events_keep_payload_opaque_and_destroy_releases_state() {
-        let session = SessionId::new(2).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let mut adapter = DioxusAdapter::new(root).unwrap();
         adapter.load_template(TEMPLATE, 0, ElementId(1));
         adapter.append_children(ElementId(0), 1);
         adapter.create_event_listener("tap", ElementId(1));
@@ -820,7 +815,7 @@ mod tests {
         );
         assert_eq!(event.payload, vec![0, 255]);
 
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&adapter.take_batch().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 1);
         host.apply(&adapter.destroy().unwrap()).unwrap();
@@ -830,9 +825,8 @@ mod tests {
 
     #[test]
     fn event_resolution_requires_the_exact_live_listener_and_callback() {
-        let session = SessionId::new(3).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let mut adapter = DioxusAdapter::new(root).unwrap();
         adapter.load_template(TEMPLATE, 0, ElementId(1));
         adapter.append_children(ElementId(0), 1);
         adapter.create_event_listener("tap", ElementId(1));
@@ -862,7 +856,6 @@ mod tests {
             .copied()
             .unwrap();
         let valid = EventMessage {
-            session,
             listener: tap_listener,
             callback: tap_callback,
             content_type: "application/vnd.lynx.tap".into(),
@@ -902,9 +895,8 @@ mod tests {
 
     #[test]
     fn removed_subtrees_and_destroyed_adapters_reject_stale_events() {
-        let session = SessionId::new(4).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let mut adapter = DioxusAdapter::new(root).unwrap();
         adapter.load_template(TEMPLATE, 0, ElementId(1));
         adapter.append_children(ElementId(0), 1);
         adapter.create_event_listener("tap", ElementId(1));
@@ -927,7 +919,7 @@ mod tests {
             Err(DioxusAdapterError::InvalidListener(_))
         ));
 
-        let mut destroyed = DioxusAdapter::new(SessionId::new(5).unwrap(), root).unwrap();
+        let mut destroyed = DioxusAdapter::new(root).unwrap();
         destroyed.load_template(TEMPLATE, 0, ElementId(1));
         destroyed.append_children(ElementId(0), 1);
         destroyed.create_event_listener("tap", ElementId(1));

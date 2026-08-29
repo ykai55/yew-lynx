@@ -7,35 +7,6 @@ use std::thread::{self, ThreadId};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
-pub struct SessionId(u32);
-
-impl SessionId {
-    pub fn new(value: u32) -> Result<Self, BridgeError> {
-        nonzero_id(value, "session").map(Self)
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
-
-impl TryFrom<u32> for SessionId {
-    type Error = BridgeError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<SessionId> for u32 {
-    fn from(value: SessionId) -> Self {
-        value.get()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -217,11 +188,10 @@ pub enum Command {
     },
 }
 
-/// An ordered, session-scoped set of in-memory renderer mutations.
+/// An ordered set of in-memory renderer mutations scoped by its owning runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CommandBatch {
-    pub session: SessionId,
     pub sequence: u32,
     pub commands: Vec<Command>,
     pub final_commit: bool,
@@ -230,7 +200,6 @@ pub struct CommandBatch {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct EventMessage {
-    pub session: SessionId,
     pub listener: ListenerId,
     pub callback: CallbackId,
     pub content_type: String,
@@ -260,7 +229,6 @@ struct ListenerState {
 
 #[derive(Debug)]
 pub struct Session {
-    id: SessionId,
     root: NodeId,
     owner: ThreadId,
     next_node: u32,
@@ -273,13 +241,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn create(id: SessionId, root: NodeId) -> Result<Self, BridgeError> {
+    pub fn create(root: NodeId) -> Result<Self, BridgeError> {
         let mut next_node = 1;
         if root.get() == next_node {
             next_node += 1;
         }
         Ok(Self {
-            id,
             root,
             owner: thread::current().id(),
             next_node,
@@ -297,10 +264,6 @@ impl Session {
             pending: Vec::new(),
             destroyed: false,
         })
-    }
-
-    pub const fn id(&self) -> SessionId {
-        self.id
     }
 
     pub const fn root(&self) -> NodeId {
@@ -541,7 +504,6 @@ impl Session {
             ));
         }
         Ok(EventMessage {
-            session: self.id,
             listener,
             callback: state.callback,
             content_type,
@@ -591,14 +553,10 @@ impl Session {
         if self.owner != thread::current().id() {
             return Err(BridgeError::new(
                 Status::WrongThread,
-                format!(
-                    "session {} was called from a non-owner thread",
-                    self.id.get()
-                ),
+                "session was called from a non-owner thread",
             ));
         }
         let batch = CommandBatch {
-            session: self.id,
             sequence: self.sequence,
             commands: std::mem::take(&mut self.pending),
             final_commit: true,
@@ -613,16 +571,13 @@ impl Session {
         if self.destroyed {
             return Err(BridgeError::new(
                 Status::InvalidSession,
-                format!("session {} is destroyed", self.id.get()),
+                "session is destroyed",
             ));
         }
         if self.owner != thread::current().id() {
             return Err(BridgeError::new(
                 Status::WrongThread,
-                format!(
-                    "session {} was called from a non-owner thread",
-                    self.id.get()
-                ),
+                "session was called from a non-owner thread",
             ));
         }
         Ok(())
@@ -681,7 +636,6 @@ pub struct TreeSnapshot {
 
 #[derive(Debug)]
 pub struct HostFake {
-    session: SessionId,
     root: NodeId,
     nodes: HashMap<NodeId, NodeState>,
     attributes: HashMap<NodeId, HashMap<String, String>>,
@@ -690,9 +644,8 @@ pub struct HostFake {
 }
 
 impl HostFake {
-    pub fn new(session: SessionId, root: NodeId) -> Self {
+    pub fn new(root: NodeId) -> Self {
         Self {
-            session,
             root,
             nodes: HashMap::from([(
                 root,
@@ -709,9 +662,6 @@ impl HostFake {
     }
 
     pub fn apply(&mut self, batch: &CommandBatch) -> Result<(), BridgeError> {
-        if batch.session != self.session {
-            return Err(BridgeError::new(Status::InvalidSession, "session mismatch"));
-        }
         for command in &batch.commands {
             self.apply_command(command)?;
         }
@@ -891,9 +841,8 @@ mod tests {
 
     #[test]
     fn ordered_mutations_mount_and_update_a_tree() {
-        let session_id = SessionId::new(7).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut session = Session::create(session_id, root).unwrap();
+        let mut session = Session::create(root).unwrap();
         let view = session.create_element("view").unwrap();
         let text = session.create_element("text").unwrap();
         let raw = session.create_text("Count: 0").unwrap();
@@ -907,7 +856,7 @@ mod tests {
             command,
             Command::DestroyNode { .. } | Command::RemoveElement { .. }
         )));
-        let mut host = HostFake::new(session_id, root);
+        let mut host = HostFake::new(root);
         host.apply(&batch).unwrap();
 
         assert_eq!(host.commits(), 1);
@@ -925,9 +874,8 @@ mod tests {
 
     #[test]
     fn event_payload_is_opaque_and_destroy_releases_host_state() {
-        let session_id = SessionId::new(3).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut session = Session::create(session_id, root).unwrap();
+        let mut session = Session::create(root).unwrap();
         let button = session.create_element("view").unwrap();
         session.insert_before(root, button, None).unwrap();
         let callback = CallbackId::new(9).unwrap();
@@ -938,7 +886,7 @@ mod tests {
         assert_eq!(event.callback, callback);
         assert_eq!(event.payload, vec![0, 255, 7]);
 
-        let mut host = HostFake::new(session_id, root);
+        let mut host = HostFake::new(root);
         host.apply(&session.take_batch().unwrap()).unwrap();
         assert_eq!(host.listener_count(), 1);
         host.apply(&session.destroy().unwrap()).unwrap();
@@ -948,8 +896,7 @@ mod tests {
 
     #[test]
     fn sessions_reject_calls_from_non_owner_threads() {
-        let session =
-            Session::create(SessionId::new(11).unwrap(), NodeId::new(1).unwrap()).unwrap();
+        let session = Session::create(NodeId::new(1).unwrap()).unwrap();
         let error = std::thread::spawn(move || {
             session
                 .event(

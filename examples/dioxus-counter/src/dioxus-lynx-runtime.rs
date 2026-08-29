@@ -3,7 +3,7 @@ use std::rc::Rc;
 use dioxus_core::{Event, VirtualDom};
 #[cfg(any(target_arch = "wasm32", test))]
 use lynx_element_bridge_core::BridgeError;
-use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId, Status};
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, Status};
 use lynx_element_bridge_dioxus::{DioxusAdapter, DioxusAdapterError};
 #[cfg(not(target_arch = "wasm32"))]
 use lynx_element_bridge_ffi::native_host::{NativeHostHandle, NativeRendererGetApiFn};
@@ -24,11 +24,8 @@ pub struct DioxusCounter {
 }
 
 impl DioxusCounter {
-    pub fn mount(
-        session: SessionId,
-        root: NodeId,
-    ) -> Result<(Self, CommandBatch), DioxusAdapterError> {
-        let mut adapter = DioxusAdapter::new(session, root)?;
+    pub fn mount(root: NodeId) -> Result<(Self, CommandBatch), DioxusAdapterError> {
+        let mut adapter = DioxusAdapter::new(root)?;
         let model = Rc::new(CounterModel::new(INITIAL_COUNT));
         let mut dom = VirtualDom::new_with_props(counter, Rc::clone(&model));
         dom.rebuild(&mut adapter);
@@ -58,7 +55,7 @@ impl DioxusCounter {
 #[cfg(any(target_arch = "wasm32", test))]
 impl GuestApplication for DioxusCounter {
     fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
-        DioxusCounter::mount(request.session, request.root).map_err(guest_error)
+        DioxusCounter::mount(request.root).map_err(guest_error)
     }
 
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BridgeError> {
@@ -140,11 +137,8 @@ fn adapter_error(error: DioxusAdapterError) -> BackendError {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn create_backend(
-    session: SessionId,
-    root: NodeId,
-) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError> {
-    let (counter, batch) = DioxusCounter::mount(session, root).map_err(adapter_error)?;
+fn create_backend(root: NodeId) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError> {
+    let (counter, batch) = DioxusCounter::mount(root).map_err(adapter_error)?;
     Ok((Box::new(DioxusBackend(Some(counter))), batch))
 }
 
@@ -204,9 +198,8 @@ mod tests {
 
     #[test]
     fn real_virtual_dom_mounts_updates_and_destroys_the_counter() {
-        let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let (mut counter, mounted) = DioxusCounter::mount(session, root).unwrap();
+        let (mut counter, mounted) = DioxusCounter::mount(root).unwrap();
         let (listener, callback) = mounted
             .commands
             .iter()
@@ -217,7 +210,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&mounted).unwrap();
         {
             let snapshot = host.snapshot();
@@ -276,7 +269,6 @@ mod tests {
         );
         let updated = counter
             .dispatch(EventMessage {
-                session,
                 listener,
                 callback,
                 content_type: "application/vnd.lynx.tap".into(),
@@ -292,7 +284,6 @@ mod tests {
         );
 
         let mismatch = counter.dispatch(EventMessage {
-            session,
             listener,
             callback: CallbackId::new(callback.get() + 1).unwrap(),
             content_type: "application/vnd.lynx.tap".into(),
@@ -304,7 +295,6 @@ mod tests {
         ));
         let updated = counter
             .dispatch(EventMessage {
-                session,
                 listener,
                 callback,
                 content_type: "application/vnd.lynx.tap".into(),
@@ -327,9 +317,8 @@ mod tests {
 
     #[test]
     fn fixture_rejects_unknown_listener_without_updating() {
-        let session = SessionId::new(2).unwrap();
         let root = NodeId::new(1).unwrap();
-        let (mut counter, mounted) = DioxusCounter::mount(session, root).unwrap();
+        let (mut counter, mounted) = DioxusCounter::mount(root).unwrap();
         let callback = mounted
             .commands
             .iter()
@@ -340,7 +329,6 @@ mod tests {
             .unwrap();
         assert!(matches!(
             counter.dispatch(EventMessage {
-                session,
                 listener: ListenerId::new(999).unwrap(),
                 callback,
                 content_type: "application/vnd.lynx.tap".into(),

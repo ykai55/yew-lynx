@@ -1,23 +1,16 @@
-use lynx_element_bridge_core::{
-    BridgeError, CommandBatch, EventMessage, NodeId, SessionId, Status,
-};
+use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage, NodeId, Status};
 use lynx_element_bridge_wasm_guest::{
-    AbiRuntime, EventRequest, GuestApplication, GuestResult, MountRequest, PROTOCOL_VERSION_V1,
+    AbiRuntime, EventRequest, GuestApplication, GuestResult, MountRequest, PROTOCOL_VERSION_V2,
     decode_guest_response, encode_event_request, encode_mount_request,
 };
 
-struct TestApplication {
-    session: SessionId,
-}
+struct TestApplication;
 
 impl GuestApplication for TestApplication {
-    fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
+    fn mount(_: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
         Ok((
-            Self {
-                session: request.session,
-            },
+            Self,
             CommandBatch {
-                session: request.session,
                 sequence: 1,
                 commands: Vec::new(),
                 final_commit: true,
@@ -27,7 +20,6 @@ impl GuestApplication for TestApplication {
 
     fn dispatch_event(&mut self, _: EventMessage) -> Result<CommandBatch, BridgeError> {
         Ok(CommandBatch {
-            session: self.session,
             sequence: 2,
             commands: Vec::new(),
             final_commit: true,
@@ -36,7 +28,6 @@ impl GuestApplication for TestApplication {
 
     fn destroy(self) -> Result<CommandBatch, BridgeError> {
         Ok(CommandBatch {
-            session: self.session,
             sequence: 3,
             commands: Vec::new(),
             final_commit: true,
@@ -56,8 +47,7 @@ fn put_input(runtime: &mut AbiRuntime<TestApplication>, input: &[u8]) -> usize {
 fn abi_buffers_remain_owned_until_the_matching_deallocator_runs() {
     let mut runtime = AbiRuntime::<TestApplication>::new();
     let mount = encode_mount_request(&MountRequest {
-        protocol_version: PROTOCOL_VERSION_V1,
-        session: SessionId::new(8).unwrap(),
+        protocol_version: PROTOCOL_VERSION_V2,
         root: NodeId::new(1).unwrap(),
     })
     .unwrap();
@@ -95,8 +85,7 @@ fn lifecycle_supports_repeated_calls_and_deterministic_errors() {
     assert!(runtime.output_dealloc(invalid.pointer, invalid.length));
 
     let mount = encode_mount_request(&MountRequest {
-        protocol_version: PROTOCOL_VERSION_V1,
-        session: SessionId::new(9).unwrap(),
+        protocol_version: PROTOCOL_VERSION_V2,
         root: NodeId::new(1).unwrap(),
     })
     .unwrap();
@@ -110,9 +99,8 @@ fn lifecycle_supports_repeated_calls_and_deterministic_errors() {
     ));
 
     let event = encode_event_request(&EventRequest {
-        protocol_version: PROTOCOL_VERSION_V1,
+        protocol_version: PROTOCOL_VERSION_V2,
         event: EventMessage {
-            session: SessionId::new(9).unwrap(),
             listener: lynx_element_bridge_core::ListenerId::new(2).unwrap(),
             callback: lynx_element_bridge_core::CallbackId::new(3).unwrap(),
             content_type: "application/octet-stream".into(),
