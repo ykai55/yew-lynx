@@ -43,6 +43,26 @@ selection when using a translated or nonstandard NDK installation.
 
 The app supports only `arm64-v8a`. APKs are written to
 `.deps/android/apks/lynx-element-bridge-{yew,dioxus,wasm-dioxus,wasm-yew}.apk`.
+The `wasm-dioxus` and `wasm-yew` APKs open a URL launcher. It accepts HTTP and
+HTTPS URLs for compatible Lynx Element Bridge `wasm32-wasip1` modules, records
+the 20 most recently confirmed URLs, and opens each downloaded module in a new
+activity. Downloads are limited to 16 MiB, a 15-second connection timeout, a
+30-second read timeout, and five redirects. History stores complete URLs in
+unencrypted application preferences, including query parameters; do not use
+credential-bearing URLs on a shared device.
+
+For local iteration, serve a guest and forward the device port:
+
+```bash
+python3 -m http.server 8000 --directory target/wasm-guests/wasm-yew/initial/wasm32-wasip1/release
+adb reverse tcp:8000 tcp:8000
+```
+
+Then enter `http://127.0.0.1:8000/yew_lynx_counter.wasm`. The URL launcher is a
+development tool: downloaded modules must implement this repository's guest ABI
+and protocol, and should come from a trusted source. WAMR isolates guest memory,
+but the app does not currently enforce a guest CPU execution timeout.
+
 The Wasm modes package initial and replacement variants of
 `assets/dioxus_counter.wasm` or `assets/yew_counter.wasm`, statically link WAMR into
 `liblynx_element_bridge.so`, and exposes `MainActivity.replaceWasmModule()` as a

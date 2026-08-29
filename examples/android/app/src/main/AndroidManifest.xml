@@ -1,21 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.yew.lynx.example">
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".LynxElementBridgeApplication"
         android:allowBackup="false"
         android:hardwareAccelerated="true"
         android:label="Lynx Element Bridge Counter"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="${wasmUrlCleartextEnabled}">
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="unspecified">
+            android:screenOrientation="unspecified" />
+        <activity
+            android:name=".WasmUrlActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified" />
+        <activity-alias
+            android:name=".NativeLauncher"
+            android:enabled="${nativeLauncherEnabled}"
+            android:exported="true"
+            android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias
+            android:name=".WasmUrlLauncher"
+            android:enabled="${wasmUrlLauncherEnabled}"
+            android:exported="true"
+            android:targetActivity=".WasmUrlActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
     </application>
 </manifest>

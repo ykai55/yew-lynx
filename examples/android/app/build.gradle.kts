@@ -97,6 +97,9 @@ android {
         targetSdkVersion(33)
         versionCode = 1
         versionName = "1.0"
+        manifestPlaceholders["nativeLauncherEnabled"] = (!wasmMode).toString()
+        manifestPlaceholders["wasmUrlLauncherEnabled"] = wasmMode.toString()
+        manifestPlaceholders["wasmUrlCleartextEnabled"] = wasmMode.toString()
         buildConfigField("boolean", "LYNX_ELEMENT_BRIDGE_WASM", wasmMode.toString())
         buildConfigField(
             "String",

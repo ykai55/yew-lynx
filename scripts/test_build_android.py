@@ -11,6 +11,52 @@ BUILD_SCRIPT = (ROOT / "scripts" / "build-android.sh").read_text()
 VERIFY_SCRIPT = (ROOT / "scripts" / "verify.sh").read_text()
 BUILD_UTILS = (ROOT / "scripts" / "android-build-utils.sh").read_text()
 BOOTSTRAP_YEW = (ROOT / "scripts" / "bootstrap-yew.sh").read_text()
+ANDROID_APP_GRADLE = (ROOT / "examples" / "android" / "app" / "build.gradle.kts").read_text()
+ANDROID_MANIFEST = (
+    ROOT / "examples" / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
+).read_text()
+ANDROID_MAIN_ACTIVITY = (
+    ROOT
+    / "examples"
+    / "android"
+    / "app"
+    / "src"
+    / "main"
+    / "java"
+    / "com"
+    / "yew"
+    / "lynx"
+    / "example"
+    / "MainActivity.kt"
+).read_text()
+WASM_URL_ACTIVITY = (
+    ROOT
+    / "examples"
+    / "android"
+    / "app"
+    / "src"
+    / "main"
+    / "java"
+    / "com"
+    / "yew"
+    / "lynx"
+    / "example"
+    / "WasmUrlActivity.kt"
+).read_text()
+WASM_MODULE_FILE = (
+    ROOT
+    / "examples"
+    / "android"
+    / "app"
+    / "src"
+    / "main"
+    / "java"
+    / "com"
+    / "yew"
+    / "lynx"
+    / "example"
+    / "WasmModuleFile.kt"
+).read_text()
 ANDROID_CMAKE = (ROOT / "adapters" / "android" / "CMakeLists.txt").read_text()
 ANDROID_JNI = (
     ROOT / "adapters" / "android" / "src" / "main" / "cpp" / "lynx_element_bridge_jni.cc"
@@ -23,6 +69,37 @@ WAMR_SHA = "25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 
 
 class BuildAndroidStaticTest(unittest.TestCase):
+    def test_wasm_url_launcher_is_scoped_and_bounded(self):
+        self.assertIn('android.permission.INTERNET', ANDROID_MANIFEST)
+        self.assertIn('android:enabled="${wasmUrlLauncherEnabled}"', ANDROID_MANIFEST)
+        self.assertIn('android:usesCleartextTraffic="${wasmUrlCleartextEnabled}"', ANDROID_MANIFEST)
+        self.assertIn(
+            'manifestPlaceholders["wasmUrlLauncherEnabled"] = wasmMode.toString()',
+            ANDROID_APP_GRADLE,
+        )
+        self.assertIn('const val MAX_BYTES = 16 * 1024 * 1024', WASM_MODULE_FILE)
+        self.assertIn('const val CONNECT_TIMEOUT_MS = 15_000', WASM_URL_ACTIVITY)
+        self.assertIn('const val READ_TIMEOUT_MS = 30_000', WASM_URL_ACTIVITY)
+        self.assertIn('const val MAX_REDIRECTS = 5', WASM_URL_ACTIVITY)
+        self.assertIn('url.protocol == "http" || url.protocol == "https"', WASM_URL_ACTIVITY)
+        self.assertIn('activeConnection?.disconnect()', WASM_URL_ACTIVITY)
+        self.assertIn('Thread.currentThread().isInterrupted', WASM_URL_ACTIVITY)
+
+    def test_downloaded_wasm_uses_private_cache_and_a_new_activity(self):
+        self.assertIn('fileNamePattern.matches(fileName)', WASM_MODULE_FILE)
+        self.assertIn('context.cacheDir.canonicalFile', WASM_MODULE_FILE)
+        self.assertIn('java.io.File.createTempFile(', WASM_URL_ACTIVITY)
+        self.assertIn('Intent(this, MainActivity::class.java)', WASM_URL_ACTIVITY)
+        self.assertIn('result.getOrNull()?.delete()', WASM_URL_ACTIVITY)
+        self.assertIn('file.delete()', WASM_URL_ACTIVITY)
+        self.assertIn('WasmModuleFile.read(this, it)', ANDROID_MAIN_ACTIVITY)
+        self.assertIn('readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET)', ANDROID_MAIN_ACTIVITY)
+
+    def test_wasm_url_history_records_confirmed_urls(self):
+        self.assertLess(WASM_URL_ACTIVITY.index('recordHistory(value)'), WASM_URL_ACTIVITY.index('validateUrl(URL(value))'))
+        self.assertIn('const val HISTORY_LIMIT = 20', WASM_URL_ACTIVITY)
+        self.assertIn('JSONArray(history).toString()', WASM_URL_ACTIVITY)
+
     def test_ndk_tools_use_dynamic_host_prebuilt_directory(self):
         gradle_files = (
             ROOT / "examples" / "android" / "app" / "build.gradle.kts",
