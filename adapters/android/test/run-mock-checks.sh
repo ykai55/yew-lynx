@@ -6,7 +6,10 @@ REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
 BUILD_DIR=$(mktemp -d "$ROOT_DIR/test/.mock-build.XXXXXX")
 JAVA_HOME=${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}
 APP_ACTIVITY="$REPO_ROOT/examples/android/app/src/main/java/com/yew/lynx/example/MainActivity.kt"
+WASM_URL_ACTIVITY="$REPO_ROOT/examples/android/app/src/main/java/com/yew/lynx/example/WasmUrlActivity.kt"
+WASM_MODULE_FILE="$REPO_ROOT/examples/android/app/src/main/java/com/yew/lynx/example/WasmModuleFile.kt"
 APP_GRADLE="$REPO_ROOT/examples/android/app/build.gradle.kts"
+APP_MANIFEST="$REPO_ROOT/examples/android/app/src/main/AndroidManifest.xml"
 
 mkdir -p "$BUILD_DIR/classes" "$BUILD_DIR/native"
 trap 'rm -rf "$BUILD_DIR"' EXIT
@@ -23,7 +26,8 @@ grep -Fq 'error.addSuppressed(cleanupError)' "$APP_ACTIVITY"
 grep -Fq 'throw lifecycleFailure' "$APP_ACTIVITY"
 grep -Fq 'lynxView?.onEnterForeground()' "$APP_ACTIVITY"
 grep -Fq 'lynxView?.onEnterBackground()' "$APP_ACTIVITY"
-grep -Fq 'readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET)' "$APP_ACTIVITY"
+grep -Fq 'readWasmModule()' "$APP_ACTIVITY"
+grep -Fq 'WasmModuleFile.read(this, it)' "$APP_ACTIVITY"
 grep -Fq 'nativeRendererHost?.replace(moduleBytes)' "$APP_ACTIVITY"
 grep -Fq 'readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET)' "$APP_ACTIVITY"
 grep -Fq 'assets.open(assetName)' "$APP_ACTIVITY"
@@ -32,6 +36,15 @@ grep -Fq 'assets.srcDir(generatedAssetsDirectory)' "$APP_GRADLE"
 grep -Fq 'replacement-fixture' "$APP_GRADLE"
 grep -Fq 'buildInitialWasmGuest' "$APP_GRADLE"
 grep -Fq 'buildReplacementWasmGuest' "$APP_GRADLE"
+grep -Fq 'manifestPlaceholders["wasmUrlLauncherEnabled"] = wasmMode.toString()' "$APP_GRADLE"
+grep -Fq 'const val MAX_BYTES = 16 * 1024 * 1024' "$WASM_MODULE_FILE"
+grep -Fq 'connection.connectTimeout = CONNECT_TIMEOUT_MS' "$WASM_URL_ACTIVITY"
+grep -Fq 'connection.readTimeout = READ_TIMEOUT_MS' "$WASM_URL_ACTIVITY"
+grep -Fq 'repeat(MAX_REDIRECTS + 1)' "$WASM_URL_ACTIVITY"
+grep -Fq 'getSharedPreferences(HISTORY_PREFERENCES, MODE_PRIVATE)' "$WASM_URL_ACTIVITY"
+grep -Fq 'putExtra(MainActivity.EXTRA_WASM_CACHE_FILE, file.name)' "$WASM_URL_ACTIVITY"
+grep -Fq '<uses-permission android:name="android.permission.INTERNET" />' "$APP_MANIFEST"
+grep -Fq 'android:enabled="${wasmUrlLauncherEnabled}"' "$APP_MANIFEST"
 if grep -Eq 'renderTemplate|setEnableMTSModule|registerModule|\.lynx\.bundle' \
     "$APP_ACTIVITY"; then
   printf 'MainActivity still references the dormant MTS/template path\n' >&2

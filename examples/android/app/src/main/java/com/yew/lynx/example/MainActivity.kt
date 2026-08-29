@@ -5,7 +5,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.TextView
 import com.lynx.elementbridge.LynxNativeRendererHost
 import com.lynx.tasm.LynxView
 import com.lynx.tasm.LynxViewBuilder
@@ -15,6 +17,7 @@ class MainActivity : Activity() {
     private var lynxView: LynxView? = null
     private var nativeRendererHost: LynxNativeRendererHost? = null
     private var nativeHostToken = 0L
+    private var cachedWasmFileName: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,10 +45,15 @@ class MainActivity : Activity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 ),
             )
+            cachedWasmFileName = if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) {
+                intent.getStringExtra(EXTRA_WASM_CACHE_FILE)
+            } else {
+                null
+            }
             val backend = if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) {
                 rendererHost.mount(
                     hostToken,
-                    readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET),
+                    readWasmModule(),
                 )
             } else {
                 rendererHost.mount(hostToken)
@@ -88,7 +96,9 @@ class MainActivity : Activity() {
             } catch (cleanupError: Throwable) {
                 error.addSuppressed(cleanupError)
             }
-            throw error
+            if (cachedWasmFileName == null) throw error
+            Log.e(TAG, "Unable to open downloaded WASM module", error)
+            showWasmError(error)
         }
     }
 
@@ -139,6 +149,11 @@ class MainActivity : Activity() {
         }
 
         val lifecycleFailure = failure
+        if (isFinishing) {
+            cachedWasmFileName?.let { fileName ->
+                runCatching { WasmModuleFile.resolve(this, fileName).delete() }
+            }
+        }
         if (lifecycleFailure != null) {
             Log.e(TAG, "MainActivity onDestroy failed", lifecycleFailure)
             throw lifecycleFailure
@@ -182,9 +197,29 @@ class MainActivity : Activity() {
     private fun readWasmAsset(assetName: String): ByteArray =
         assets.open(assetName).use { it.readBytes() }
 
-    private companion object {
+    private fun readWasmModule(): ByteArray = cachedWasmFileName
+        ?.let { WasmModuleFile.read(this, it) }
+        ?: readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET)
+
+    private fun showWasmError(error: Throwable) {
+        title = intent.getStringExtra(EXTRA_WASM_SOURCE_URL) ?: "WASM page"
+        setContentView(TextView(this).apply {
+            text = "Unable to open WASM page\n\n${error.message ?: error.javaClass.simpleName}"
+            textSize = 17f
+            gravity = Gravity.CENTER
+            setPadding(48, 48, 48, 48)
+            setBackgroundColor(Color.rgb(245, 242, 234))
+            setTextColor(Color.rgb(128, 48, 40))
+        })
+    }
+
+    companion object {
         const val TAG = "LynxElementBridge"
         const val EXTRA_REPLACE_WASM_MODULE =
             "com.yew.lynx.example.extra.REPLACE_WASM_MODULE"
+        const val EXTRA_WASM_CACHE_FILE =
+            "com.yew.lynx.example.extra.WASM_CACHE_FILE"
+        const val EXTRA_WASM_SOURCE_URL =
+            "com.yew.lynx.example.extra.WASM_SOURCE_URL"
     }
 }
