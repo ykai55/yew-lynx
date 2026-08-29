@@ -123,6 +123,10 @@ verify_android_metadata() {
     "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
   grep -q '<component group="com.android.tools.build" name="gradle" version="7.4.2">' \
     "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
+  grep -q '<artifact name="aapt2-7.4.2-8841542-osx.jar">' \
+    "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
+  grep -q '1a69bd767bb6f8e71ca9faac52229e6a773814d36493b9423b4600a310028e5d' \
+    "$ROOT_DIR/examples/android/gradle/verification-metadata.xml"
 }
 
 verify_lynx_tools_shared_patches() {
