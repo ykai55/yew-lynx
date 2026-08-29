@@ -8,7 +8,7 @@ mod tests {
     use dioxus_core::{
         AttributeValue, ElementId, Template, TemplateAttribute, TemplateNode, WriteMutations,
     };
-    use lynx_element_bridge_core::{HostFake, NodeId, SessionId, TreeSnapshot};
+    use lynx_element_bridge_core::{HostFake, NodeId, TreeSnapshot};
     use lynx_element_bridge_dioxus::DioxusAdapter;
     use lynx_element_bridge_yew::YewAdapter;
     use yew::{NativeListener, NativeNode, NativeRendererBackend};
@@ -57,9 +57,8 @@ mod tests {
     }
 
     fn run_yew() -> ScenarioResult {
-        let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let adapter = YewAdapter::new(session, root).unwrap();
+        let adapter = YewAdapter::new(root).unwrap();
         let button = adapter.create_element("view");
         adapter.set_attribute(button, "id", Some("counter"));
         let text = adapter.create_element("text");
@@ -73,7 +72,7 @@ mod tests {
             Box::new(move |_| tapped.set(true))
         });
         adapter.flush(NativeNode(1));
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&adapter.take_batch().unwrap()).unwrap();
         let mounted = host.snapshot();
 
@@ -97,13 +96,12 @@ mod tests {
     }
 
     fn run_dioxus() -> ScenarioResult {
-        let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let mut adapter = DioxusAdapter::new(session, root).unwrap();
+        let mut adapter = DioxusAdapter::new(root).unwrap();
         adapter.load_template(COUNTER_TEMPLATE, 0, ElementId(1));
         adapter.append_children(ElementId(0), 1);
         adapter.create_event_listener("tap", ElementId(1));
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&adapter.take_batch().unwrap()).unwrap();
         let mounted = host.snapshot();
 

@@ -11,9 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::{self, ThreadId};
 
-use lynx_element_bridge_core::{
-    BridgeError, CommandBatch, EventMessage, NodeId, SessionId, Status,
-};
+use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage, NodeId, Status};
 
 use native_host::{
     NATIVE_STATUS_OK, NATIVE_STATUS_PANIC, NATIVE_STATUS_UNSUPPORTED, NativeBytes,
@@ -79,7 +77,7 @@ pub trait BridgeBackend {
 }
 
 pub trait BridgeBackendCandidate {
-    fn mount(&mut self, session: SessionId, root: NodeId) -> Result<CommandBatch, BackendError>;
+    fn mount(&mut self, root: NodeId) -> Result<CommandBatch, BackendError>;
 
     fn activate(self: Box<Self>) -> Box<dyn BridgeBackend>;
 }
@@ -316,10 +314,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 unsafe fn native_mount_internal(
     get_api: Option<NativeRendererGetApiFn>,
     host: NativeHostHandle,
-    create_backend: impl FnOnce(
-        SessionId,
-        NodeId,
-    ) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError>,
+    create_backend: impl FnOnce(NodeId) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError>,
 ) -> Result<LynxElementBridgeSession, BackendError> {
     let get_api = get_api.ok_or_else(|| {
         BackendError::recoverable(
@@ -336,23 +331,21 @@ unsafe fn native_mount_internal(
 
     let session_id = next_session_id()?;
     let reservation = SessionReservation::new(session_id);
-    let session = SessionId::new(session_id).map_err(BackendError::from)?;
     let root = NodeId::new(NATIVE_BRIDGE_ROOT_ID).map_err(BackendError::from)?;
-    let (mut backend, initial_batch) = create_backend(session, root)?;
+    let (mut backend, initial_batch) = create_backend(root)?;
     let callbacks = NativeRendererCallbacksV1 {
         context: session_id as usize as *mut c_void,
         on_event: Some(native_on_event),
         on_timer: Some(native_on_timer),
     };
     // SAFETY: The caller guarantees that the resolver and host follow the native renderer ABI.
-    let mut native_host =
-        match unsafe { NativeHost::acquire(get_api, host, session, root, callbacks) } {
-            Ok(host) => host,
-            Err(error) => {
-                backend.abandon();
-                return Err(BackendError::from(error));
-            }
-        };
+    let mut native_host = match unsafe { NativeHost::acquire(get_api, host, root, callbacks) } {
+        Ok(host) => host,
+        Err(error) => {
+            backend.abandon();
+            return Err(BackendError::from(error));
+        }
+    };
     if let Err(error) = native_host.apply(&initial_batch) {
         backend.abandon();
         return Err(BackendError::from(error));
@@ -394,10 +387,7 @@ unsafe fn native_mount_internal(
 pub unsafe fn native_mount(
     get_api: Option<NativeRendererGetApiFn>,
     host: NativeHostHandle,
-    create_backend: impl FnOnce(
-        SessionId,
-        NodeId,
-    ) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError>,
+    create_backend: impl FnOnce(NodeId) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError>,
 ) -> LynxElementBridgeNativeMountResult {
     let mounted = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: This forwards the caller obligations documented on this function.
@@ -650,7 +640,6 @@ pub fn native_replace_backend(
                 ));
             }
 
-            let bridge_session = SessionId::new(session_id).map_err(BackendError::from)?;
             let root = NodeId::new(NATIVE_BRIDGE_ROOT_ID).map_err(BackendError::from)?;
             let mut candidate = preflight_candidate()?;
 
@@ -687,23 +676,22 @@ pub fn native_replace_backend(
                 return Err(BackendError::from(error));
             }
 
-            let initial_batch =
-                match catch_unwind(AssertUnwindSafe(|| candidate.mount(bridge_session, root))) {
-                    Ok(Ok(batch)) => batch,
-                    Ok(Err(error)) => {
-                        session.backend = Some(candidate.activate());
-                        session.poison();
-                        return Err(error);
-                    }
-                    Err(payload) => {
-                        session.backend = Some(candidate.activate());
-                        session.poison();
-                        return Err(BackendError::recoverable(
-                            Status::Panic,
-                            panic_message(payload.as_ref()),
-                        ));
-                    }
-                };
+            let initial_batch = match catch_unwind(AssertUnwindSafe(|| candidate.mount(root))) {
+                Ok(Ok(batch)) => batch,
+                Ok(Err(error)) => {
+                    session.backend = Some(candidate.activate());
+                    session.poison();
+                    return Err(error);
+                }
+                Err(payload) => {
+                    session.backend = Some(candidate.activate());
+                    session.poison();
+                    return Err(BackendError::recoverable(
+                        Status::Panic,
+                        panic_message(payload.as_ref()),
+                    ));
+                }
+            };
             session.backend = Some(candidate.activate());
             if let Err(error) = session.native_host.apply(&initial_batch) {
                 session.poison();

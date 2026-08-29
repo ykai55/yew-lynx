@@ -1,6 +1,6 @@
-use lynx_element_bridge_core::{Command, EventMessage, HostFake, NodeId, SessionId};
+use lynx_element_bridge_core::{Command, EventMessage, HostFake, NodeId};
 use lynx_element_bridge_wasm_guest::{
-    EventRequest, GuestResponse, GuestResult, GuestRuntime, MountRequest, PROTOCOL_VERSION_V1,
+    EventRequest, GuestResponse, GuestResult, GuestRuntime, MountRequest, PROTOCOL_VERSION_V2,
     encode_event_request, encode_mount_request,
 };
 
@@ -15,16 +15,14 @@ fn batch(response: GuestResponse) -> lynx_element_bridge_core::CommandBatch {
 
 #[test]
 fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
-    let session = SessionId::new(17).unwrap();
     let root = NodeId::new(1).unwrap();
     let mut runtime = GuestRuntime::<DioxusCounter>::new();
-    let mut host = HostFake::new(session, root);
+    let mut host = HostFake::new(root);
 
     let mounted = batch(
         runtime.mount(
             &encode_mount_request(&MountRequest {
-                protocol_version: PROTOCOL_VERSION_V1,
-                session,
+                protocol_version: PROTOCOL_VERSION_V2,
                 root,
             })
             .unwrap(),
@@ -52,9 +50,8 @@ fn wasm_guest_mount_event_and_destroy_conform_to_the_host_command_lifecycle() {
     let updated = batch(
         runtime.dispatch_event(
             &encode_event_request(&EventRequest {
-                protocol_version: PROTOCOL_VERSION_V1,
+                protocol_version: PROTOCOL_VERSION_V2,
                 event: EventMessage {
-                    session,
                     listener,
                     callback,
                     content_type: "application/vnd.lynx.tap".into(),

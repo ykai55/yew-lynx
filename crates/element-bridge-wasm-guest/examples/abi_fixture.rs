@@ -11,7 +11,7 @@ struct Fixture {
 
 impl GuestApplication for Fixture {
     fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
-        let mut session = Session::create(request.session, request.root)?;
+        let mut session = Session::create(request.root)?;
         let view = session.create_element("view")?;
         session.set_attribute(view, "data-state", Some("mounted"))?;
         session.insert_before(request.root, view, None)?;
@@ -28,10 +28,7 @@ impl GuestApplication for Fixture {
     }
 
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BridgeError> {
-        if event.session != self.session.id()
-            || event.listener != self.listener
-            || event.callback != CallbackId::new(1)?
-        {
+        if event.listener != self.listener || event.callback != CallbackId::new(1)? {
             return Err(BridgeError::new(
                 Status::InvalidListener,
                 "fixture event identity mismatch",

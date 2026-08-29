@@ -6,8 +6,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use lynx_element_bridge_core::{
-    BridgeError, CallbackId, CommandBatch, EventMessage, ListenerId, NodeId, Session, SessionId,
-    Status,
+    BridgeError, CallbackId, CommandBatch, EventMessage, ListenerId, NodeId, Session, Status,
 };
 use yew::{NativeEvent, NativeListener, NativeNode, NativeRendererBackend};
 
@@ -68,8 +67,8 @@ impl fmt::Debug for YewAdapter {
 }
 
 impl YewAdapter {
-    pub fn new(session: SessionId, root: NodeId) -> Result<Rc<Self>, YewAdapterError> {
-        let session = Session::create(session, root)?;
+    pub fn new(root: NodeId) -> Result<Rc<Self>, YewAdapterError> {
+        let session = Session::create(root)?;
         Ok(Rc::new(Self {
             session: RefCell::new(session),
             next_callback: Cell::new(1),
@@ -355,9 +354,8 @@ mod tests {
 
     #[test]
     fn yew_backend_records_framework_neutral_batches_and_opaque_events() {
-        let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let adapter = YewAdapter::new(session, root).unwrap();
+        let adapter = YewAdapter::new(root).unwrap();
         let view = adapter.create_element("view");
         adapter.set_attribute(view, "id", Some("button"));
         adapter.insert_before(NativeNode(1), view, None);
@@ -373,7 +371,7 @@ mod tests {
             command,
             Command::CreateElement { tag, .. } if tag == "view"
         )));
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&batch).unwrap();
         let event = adapter
             .event(listener, "tap", "application/vnd.lynx.tap", vec![0, 255])
@@ -385,9 +383,8 @@ mod tests {
 
     #[test]
     fn removed_callbacks_are_stale_and_destroy_cleans_the_tree() {
-        let session = SessionId::new(1).unwrap();
         let root = NodeId::new(1).unwrap();
-        let adapter = YewAdapter::new(session, root).unwrap();
+        let adapter = YewAdapter::new(root).unwrap();
         let view = adapter.create_element("view");
         adapter.insert_before(NativeNode(1), view, None);
         let listener = adapter.add_event_listener(view, "tap", Box::new(|_| {}));
@@ -401,7 +398,7 @@ mod tests {
         ));
         adapter.remove(NativeNode(1), view);
         adapter.destroy_node(view);
-        let mut host = HostFake::new(session, root);
+        let mut host = HostFake::new(root);
         host.apply(&adapter.take_batch().unwrap()).unwrap();
         assert!(host.snapshot().children.is_empty());
     }

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use lynx_element_bridge_core::BridgeError;
-use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, SessionId, Status};
+use lynx_element_bridge_core::{CommandBatch, EventMessage, NodeId, Status};
 #[cfg(not(target_arch = "wasm32"))]
 use lynx_element_bridge_ffi::native_host::{NativeHostHandle, NativeRendererGetApiFn};
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,8 +26,8 @@ pub struct YewCounter {
 }
 
 impl YewCounter {
-    fn mount(session: SessionId, root: NodeId) -> Result<(Self, CommandBatch), YewAdapterError> {
-        let adapter = YewAdapter::new(session, root)?;
+    fn mount(root: NodeId) -> Result<(Self, CommandBatch), YewAdapterError> {
+        let adapter = YewAdapter::new(root)?;
         let rendered = catch_unwind(AssertUnwindSafe({
             let adapter = Rc::clone(&adapter);
             move || NativeRenderer::<Counter>::new(adapter, NativeNode(root.get().into())).render()
@@ -85,7 +85,7 @@ impl YewCounter {
 #[cfg(any(target_arch = "wasm32", test))]
 impl GuestApplication for YewCounter {
     fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
-        YewCounter::mount(request.session, request.root).map_err(guest_error)
+        YewCounter::mount(request.root).map_err(guest_error)
     }
 
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BridgeError> {
@@ -180,11 +180,8 @@ fn guest_error(error: YewAdapterError) -> BridgeError {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn create_backend(
-    session: SessionId,
-    root: NodeId,
-) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError> {
-    let (counter, batch) = YewCounter::mount(session, root).map_err(adapter_error)?;
+fn create_backend(root: NodeId) -> Result<(Box<dyn BridgeBackend>, CommandBatch), BackendError> {
+    let (counter, batch) = YewCounter::mount(root).map_err(adapter_error)?;
     Ok((Box::new(counter), batch))
 }
 

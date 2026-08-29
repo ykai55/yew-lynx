@@ -11,7 +11,7 @@ An adapter translates one synchronous framework render turn into
 
 The core owns:
 
-- Session, node, listener, and callback IDs.
+- Node, listener, and callback IDs.
 - Owner-thread, tree ownership, and exact listener validation.
 - Batch sequencing and final commit boundaries.
 - Opaque event content type and payload bytes.
@@ -30,10 +30,12 @@ opaque handles only while applying a batch through `LynxNativeRendererApiV1`.
 
 ## Session And Rendering
 
-Create a session with a nonzero session ID and caller-owned root:
+Create a session with a caller-owned root. The enclosing native registry entry or
+WASM runtime instance provides lifecycle isolation; messages do not carry that
+outer handle:
 
 ```rust
-let session = Session::create(session_id, root)?;
+let session = Session::create(root)?;
 ```
 
 Call the corresponding `Session` mutation method in framework order and finish

@@ -2,17 +2,14 @@
 
 use std::collections::HashMap;
 
-use lynx_element_bridge_core::{
-    BridgeError, CommandBatch, EventMessage, NodeId, SessionId, Status,
-};
+use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage, NodeId, Status};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION_V1: u32 = 1;
+pub const PROTOCOL_VERSION_V2: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct MountRequest {
     pub protocol_version: u32,
-    pub session: SessionId,
     pub root: NodeId,
 }
 
@@ -37,7 +34,7 @@ pub enum GuestResult {
 impl GuestResponse {
     pub fn from_result(result: Result<CommandBatch, BridgeError>) -> Self {
         Self {
-            protocol_version: PROTOCOL_VERSION_V1,
+            protocol_version: PROTOCOL_VERSION_V2,
             result: match result {
                 Ok(batch) => GuestResult::Ok(batch),
                 Err(error) => GuestResult::Err {
@@ -84,7 +81,7 @@ fn decode_versioned<T: DeserializeOwned>(
         )
     })?;
     let actual = version(&value);
-    if actual != PROTOCOL_VERSION_V1 {
+    if actual != PROTOCOL_VERSION_V2 {
         return Err(BridgeError::new(
             Status::Unsupported,
             format!("unsupported protocol version {actual}"),
@@ -283,7 +280,7 @@ macro_rules! export_guest {
 
             #[unsafe(no_mangle)]
             pub extern "C" fn version() -> u32 {
-                $crate::PROTOCOL_VERSION_V1
+                $crate::PROTOCOL_VERSION_V2
             }
 
             #[unsafe(no_mangle)]

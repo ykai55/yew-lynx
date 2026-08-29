@@ -14,12 +14,15 @@ the exact source revisions, native ABI, Android target, and evidence below.
 | Rust | `1.85.0` | Locked workspace format/check/test/Clippy and arm64 staticlibs |
 | Android app | API 24+, tested arm64-v8a | Native Java/JNI lifecycle, both real staticlib links, dependency/APK/ELF and process-map checks |
 | Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, release |
+| WASM guest protocol | Postcard guest ABI, version 2 | Runtime-scoped mount, event, command, error, and teardown round trips |
 
 ## Runtime Contract
 
 - `CommandBatch` is an ordered in-memory `Vec<Command>` mutation boundary.
-- Sessions, nodes, listeners, callbacks, and native handles are nonzero opaque
-  IDs scoped to one session.
+- Native registry session tokens remain nonzero opaque lifecycle handles, but
+  are not carried by `CommandBatch`, `EventMessage`, or WASM protocol messages.
+- Nodes, listeners, callbacks, and native handles are nonzero opaque IDs scoped
+  by their owning backend and host objects.
 - Session operations, function-table calls, and callbacks stay synchronous on
   the mounting thread; wrong-thread and reentrant calls are rejected.
 - Session tree ownership and exact listener identity are validated before each
