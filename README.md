@@ -78,13 +78,10 @@ The pinned source publishes two separate Maven products at version
 The native product POM and application runtime graph exclude stock `lynx`,
 Quick/PrimJS, NAPI, V8, LynxJSSDK, and standalone Wasm runtime artifacts. The
 APK likewise excludes `liblynx.so`, their runtime shared libraries, and
-`assets/lynx_core.js`. The opt-in `wasm-dioxus` and `wasm-yew` modes statically
-embed pinned WAMR in `liblynx_element_bridge.so` and package generated initial
-and replacement guest assets; native Yew and Dioxus modes package neither. Each
-framework builds both assets from its existing crate and the same DSL source;
-the `replacement-fixture` compile-time feature changes only the visible initial
-count from `0` to `100`. Both guests reuse their native adapter and implement the same
-mount/event/destroy protocol without timer dispatch. The native renderer ELF has
+`assets/lynx_core.js`. Each APK contains a build-variant-selected Yew or Dioxus
+Native runtime in `liblynx_element_bridge_native.so` and a framework-neutral
+WAMR host in `liblynx_element_bridge_wamr.so`. Guests are compiled externally,
+loaded only from a user-provided URL, and are never packaged in the APK. The native renderer ELF has
 no forbidden runtime `DT_NEEDED` entries or undefined runtime symbols, and
 exports `lynx_native_renderer_get_api`.
 Packaging does not change the runtime architecture: framework mutations still

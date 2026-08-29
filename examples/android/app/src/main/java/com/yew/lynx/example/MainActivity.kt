@@ -1,43 +1,37 @@
 package com.yew.lynx.example
 
 import android.app.Activity
-import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
-import android.view.Gravity
 import android.view.ViewGroup
-import android.widget.TextView
-import com.lynx.elementbridge.LynxNativeRendererHost
+import com.lynx.elementbridge.nativebridge.NativeRendererHost
 import com.lynx.tasm.LynxView
 import com.lynx.tasm.LynxViewBuilder
 import com.lynx.tasm.ThreadStrategyForRendering
 
 class MainActivity : Activity() {
     private var lynxView: LynxView? = null
-    private var nativeRendererHost: LynxNativeRendererHost? = null
+    private var rendererHost: NativeRendererHost? = null
     private var nativeHostToken = 0L
-    private var cachedWasmFileName: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "MainActivity onCreate")
-
         var view: LynxView? = null
-        var rendererHost: LynxNativeRendererHost? = null
+        var host: NativeRendererHost? = null
         var hostToken = 0L
         var hostRegistered = false
         var rustMounted = false
         try {
-            val builder = LynxViewBuilder().apply {
+            view = LynxViewBuilder().apply {
                 setEnableJSRuntime(false)
                 setThreadStrategyForRendering(ThreadStrategyForRendering.ALL_ON_UI)
-            }
-            view = builder.build(this)
+            }.build(this)
             view.setBackgroundColor(Color.rgb(245, 242, 234))
             hostToken = view.registerNativeRendererHost()
             hostRegistered = true
-            rendererHost = LynxNativeRendererHost()
+            host = NativeRendererHost()
             setContentView(
                 view,
                 ViewGroup.LayoutParams(
@@ -45,136 +39,62 @@ class MainActivity : Activity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 ),
             )
-            cachedWasmFileName = if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) {
-                intent.getStringExtra(EXTRA_WASM_CACHE_FILE)
-            } else {
-                null
-            }
-            val backend = if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) {
-                rendererHost.mount(
-                    hostToken,
-                    readWasmModule(),
-                )
-            } else {
-                rendererHost.mount(hostToken)
-            }
+            val backend = host.mount(hostToken)
             rustMounted = true
             lynxView = view
-            nativeRendererHost = rendererHost
+            rendererHost = host
             nativeHostToken = hostToken
             Log.i(TAG, "Native renderer backend=$backend")
-            Log.i(
-                TAG,
-                "Native renderer diagnostics mode=${if (BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) "wasm" else "native"} bts_runtime=false mts_context=false template=false",
-            )
+            Log.i(TAG, "Native renderer diagnostics mode=native bts_runtime=false mts_context=false template=false")
         } catch (error: Throwable) {
-            lynxView = null
-            nativeRendererHost = null
-            nativeHostToken = 0
-
             if (rustMounted) {
                 try {
-                    rendererHost?.destroy()
+                    host?.destroy()
                 } catch (cleanupError: Throwable) {
                     error.addSuppressed(cleanupError)
-                    try {
-                        rendererHost?.abandon()
-                    } catch (abandonError: Throwable) {
-                        cleanupError.addSuppressed(abandonError)
-                    }
+                    runCatching { host?.abandon() }.exceptionOrNull()?.let(cleanupError::addSuppressed)
                 }
             }
             if (hostRegistered) {
-                try {
-                    view?.unregisterNativeRendererHost(hostToken)
-                } catch (cleanupError: Throwable) {
-                    error.addSuppressed(cleanupError)
-                }
+                runCatching { view?.unregisterNativeRendererHost(hostToken) }
+                    .exceptionOrNull()?.let(error::addSuppressed)
             }
-            try {
-                view?.destroy()
-            } catch (cleanupError: Throwable) {
-                error.addSuppressed(cleanupError)
-            }
-            if (cachedWasmFileName == null) throw error
-            Log.e(TAG, "Unable to open downloaded WASM module", error)
-            showWasmError(error)
+            runCatching { view?.destroy() }.exceptionOrNull()?.let(error::addSuppressed)
+            throw error
         }
     }
 
     override fun onDestroy() {
         val view = lynxView
-        val rendererHost = nativeRendererHost
+        val host = rendererHost
         val hostToken = nativeHostToken
         lynxView = null
-        nativeRendererHost = null
+        rendererHost = null
         nativeHostToken = 0
-
         var failure: Throwable? = null
-        fun recordFailure(error: Throwable) {
-            val current = failure
-            if (current == null) {
-                failure = error
-            } else if (current !== error) {
-                current.addSuppressed(error)
-            }
-        }
-
-        try {
-            rendererHost?.destroy()
-        } catch (error: Throwable) {
-            recordFailure(error)
-            try {
-                rendererHost?.abandon()
-            } catch (cleanupError: Throwable) {
-                error.addSuppressed(cleanupError)
-            }
+        fun record(error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
-            if (view != null && hostToken != 0L) {
-                view.unregisterNativeRendererHost(hostToken)
-            }
+            host?.destroy()
         } catch (error: Throwable) {
-            recordFailure(error)
+            record(error)
+            runCatching { host?.abandon() }.exceptionOrNull()?.let(error::addSuppressed)
         }
-        try {
-            view?.destroy()
-        } catch (error: Throwable) {
-            recordFailure(error)
-        }
+        runCatching {
+            if (view != null && hostToken != 0L) view.unregisterNativeRendererHost(hostToken)
+        }.exceptionOrNull()?.let(::record)
+        runCatching { view?.destroy() }.exceptionOrNull()?.let(::record)
         try {
             super.onDestroy()
         } catch (error: Throwable) {
-            recordFailure(error)
+            record(error)
         }
-
-        val lifecycleFailure = failure
-        if (isFinishing) {
-            cachedWasmFileName?.let { fileName ->
-                runCatching { WasmModuleFile.resolve(this, fileName).delete() }
-            }
-        }
-        if (lifecycleFailure != null) {
-            Log.e(TAG, "MainActivity onDestroy failed", lifecycleFailure)
-            throw lifecycleFailure
+        failure?.let {
+            Log.e(TAG, "MainActivity onDestroy failed", it)
+            throw it
         }
         Log.i(TAG, "MainActivity onDestroy complete")
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        if (
-            BuildConfig.LYNX_ELEMENT_BRIDGE_WASM &&
-                intent.getBooleanExtra(EXTRA_REPLACE_WASM_MODULE, false)
-        ) {
-            replaceWasmModule(
-                readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET),
-            )
-            Log.i(
-                TAG,
-                "WASM module replacement complete asset=${BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_REPLACEMENT_ASSET}",
-            )
-        }
     }
 
     override fun onResume() {
@@ -187,39 +107,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    /** Test hook for replacing the active module without download or persistence behavior. */
-    fun replaceWasmModule(moduleBytes: ByteArray) {
-        check(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) { "App is not built in a WASM mode" }
-        nativeRendererHost?.replace(moduleBytes)
-            ?: error("WAMR session is not mounted")
-    }
-
-    private fun readWasmAsset(assetName: String): ByteArray =
-        assets.open(assetName).use { it.readBytes() }
-
-    private fun readWasmModule(): ByteArray = cachedWasmFileName
-        ?.let { WasmModuleFile.read(this, it) }
-        ?: readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET)
-
-    private fun showWasmError(error: Throwable) {
-        title = intent.getStringExtra(EXTRA_WASM_SOURCE_URL) ?: "WASM page"
-        setContentView(TextView(this).apply {
-            text = "Unable to open WASM page\n\n${error.message ?: error.javaClass.simpleName}"
-            textSize = 17f
-            gravity = Gravity.CENTER
-            setPadding(48, 48, 48, 48)
-            setBackgroundColor(Color.rgb(245, 242, 234))
-            setTextColor(Color.rgb(128, 48, 40))
-        })
-    }
-
     companion object {
         const val TAG = "LynxElementBridge"
-        const val EXTRA_REPLACE_WASM_MODULE =
-            "com.yew.lynx.example.extra.REPLACE_WASM_MODULE"
-        const val EXTRA_WASM_CACHE_FILE =
-            "com.yew.lynx.example.extra.WASM_CACHE_FILE"
-        const val EXTRA_WASM_SOURCE_URL =
-            "com.yew.lynx.example.extra.WASM_SOURCE_URL"
     }
 }

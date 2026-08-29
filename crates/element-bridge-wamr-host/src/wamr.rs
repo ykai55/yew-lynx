@@ -9,8 +9,8 @@ use lynx_element_bridge_ffi::native_host::{
 };
 use lynx_element_bridge_ffi::{
     BackendError, BridgeBackend, BridgeBackendCandidate, LynxElementBridgeNativeDestroyResult,
-    LynxElementBridgeNativeMountResult, LynxElementBridgeSession, native_destroy_session,
-    native_mount, native_replace_backend,
+    LynxElementBridgeNativeMountResult, LynxElementBridgeSession, native_abandon_session,
+    native_destroy_session, native_mount, native_replace_backend,
 };
 use lynx_element_bridge_wasm_guest::{
     EventRequest, GuestResponse, GuestResult, MountRequest, PROTOCOL_VERSION_V1,
@@ -553,6 +553,13 @@ pub extern "C" fn lynx_element_bridge_wamr_destroy(
     session: LynxElementBridgeSession,
 ) -> LynxElementBridgeNativeDestroyResult {
     native_destroy_session(session)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lynx_element_bridge_wamr_abandon(
+    session: LynxElementBridgeSession,
+) -> LynxElementBridgeNativeDestroyResult {
+    native_abandon_session(session)
 }
 
 unsafe fn native_span<'a>(data: *const u8, len: usize) -> Result<&'a [u8], BackendError> {

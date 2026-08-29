@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [yew, dioxus, wasm-dioxus, wasm-yew]
+        backend: [yew, dioxus]
 
     steps:
       - name: Check out repository and Lynx submodule
@@ -44,7 +44,7 @@ jobs:
           rustup default 1.85.0
 
       - name: Run real WAMR lifecycle tests
-        if: matrix.backend == 'wasm-dioxus'
+        if: matrix.backend == 'yew'
         run: cargo test -p lynx-element-bridge-wamr-host --features wamr -- --test-threads=1
 
       - name: Install Android toolchains

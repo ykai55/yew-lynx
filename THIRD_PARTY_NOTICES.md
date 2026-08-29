@@ -67,8 +67,8 @@ RSX vocabulary. Dioxus framework `Template` values remain in-memory VDOM data.
 - License file: `third_party/wasm-micro-runtime/LICENSE`
 - Upstream attributions: `third_party/wasm-micro-runtime/ATTRIBUTIONS.md`
 
-The `wasm-dioxus` Android mode statically links the interpreter and WASI support
-from this exact gitlink into `liblynx_element_bridge.so`. It does not package a
+The Android WAMR bridge statically links the interpreter and WASI support
+from this exact gitlink into `liblynx_element_bridge_wamr.so`. It does not package a
 standalone WAMR or WebAssembly shared library.
 
 ## PrimJS

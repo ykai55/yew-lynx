@@ -39,9 +39,6 @@ class WasmUrlActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        check(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM) {
-            "The WASM URL launcher is available only in wasm-* builds"
-        }
         title = "Open WASM page"
         setContentView(buildContentView())
         refreshHistory()
@@ -177,9 +174,9 @@ class WasmUrlActivity : Activity() {
                     onSuccess = { file ->
                         try {
                             startActivity(
-                                Intent(this, MainActivity::class.java)
-                                    .putExtra(MainActivity.EXTRA_WASM_CACHE_FILE, file.name)
-                                    .putExtra(MainActivity.EXTRA_WASM_SOURCE_URL, value),
+                                Intent(this, WasmActivity::class.java)
+                                    .putExtra(WasmActivity.EXTRA_WASM_CACHE_FILE, file.name)
+                                    .putExtra(WasmActivity.EXTRA_WASM_SOURCE_URL, value),
                             )
                             setDownloading(false, "")
                         } catch (error: Throwable) {

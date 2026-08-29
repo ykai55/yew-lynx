@@ -12,6 +12,13 @@ VERIFY_SCRIPT = (ROOT / "scripts" / "verify.sh").read_text()
 BUILD_UTILS = (ROOT / "scripts" / "android-build-utils.sh").read_text()
 BOOTSTRAP_YEW = (ROOT / "scripts" / "bootstrap-yew.sh").read_text()
 ANDROID_APP_GRADLE = (ROOT / "examples" / "android" / "app" / "build.gradle.kts").read_text()
+ANDROID_NATIVE_GRADLE = (
+    ROOT / "examples" / "android" / "bridge-native" / "build.gradle.kts"
+).read_text()
+ANDROID_WAMR_GRADLE = (
+    ROOT / "examples" / "android" / "bridge-wamr" / "build.gradle.kts"
+).read_text()
+ANDROID_SETTINGS = (ROOT / "examples" / "android" / "settings.gradle.kts").read_text()
 ANDROID_MANIFEST = (
     ROOT / "examples" / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
 ).read_text()
@@ -43,6 +50,12 @@ WASM_URL_ACTIVITY = (
     / "example"
     / "WasmUrlActivity.kt"
 ).read_text()
+ANDROID_LAUNCHER_ACTIVITY = (
+    ROOT / "examples/android/app/src/main/java/com/yew/lynx/example/LauncherActivity.kt"
+).read_text()
+ANDROID_WASM_ACTIVITY = (
+    ROOT / "examples/android/app/src/main/java/com/yew/lynx/example/WasmActivity.kt"
+).read_text()
 WASM_MODULE_FILE = (
     ROOT
     / "examples"
@@ -71,12 +84,8 @@ WAMR_SHA = "25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 class BuildAndroidStaticTest(unittest.TestCase):
     def test_wasm_url_launcher_is_scoped_and_bounded(self):
         self.assertIn('android.permission.INTERNET', ANDROID_MANIFEST)
-        self.assertIn('android:enabled="${wasmUrlLauncherEnabled}"', ANDROID_MANIFEST)
-        self.assertIn('android:usesCleartextTraffic="${wasmUrlCleartextEnabled}"', ANDROID_MANIFEST)
-        self.assertIn(
-            'manifestPlaceholders["wasmUrlLauncherEnabled"] = wasmMode.toString()',
-            ANDROID_APP_GRADLE,
-        )
+        self.assertIn('android:name=".LauncherActivity"', ANDROID_MANIFEST)
+        self.assertIn('android:usesCleartextTraffic="true"', ANDROID_MANIFEST)
         self.assertIn('const val MAX_BYTES = 16 * 1024 * 1024', WASM_MODULE_FILE)
         self.assertIn('const val CONNECT_TIMEOUT_MS = 15_000', WASM_URL_ACTIVITY)
         self.assertIn('const val READ_TIMEOUT_MS = 30_000', WASM_URL_ACTIVITY)
@@ -89,11 +98,11 @@ class BuildAndroidStaticTest(unittest.TestCase):
         self.assertIn('fileNamePattern.matches(fileName)', WASM_MODULE_FILE)
         self.assertIn('context.cacheDir.canonicalFile', WASM_MODULE_FILE)
         self.assertIn('java.io.File.createTempFile(', WASM_URL_ACTIVITY)
-        self.assertIn('Intent(this, MainActivity::class.java)', WASM_URL_ACTIVITY)
+        self.assertIn('Intent(this, WasmActivity::class.java)', WASM_URL_ACTIVITY)
         self.assertIn('result.getOrNull()?.delete()', WASM_URL_ACTIVITY)
         self.assertIn('file.delete()', WASM_URL_ACTIVITY)
-        self.assertIn('WasmModuleFile.read(this, it)', ANDROID_MAIN_ACTIVITY)
-        self.assertIn('readWasmAsset(BuildConfig.LYNX_ELEMENT_BRIDGE_WASM_INITIAL_ASSET)', ANDROID_MAIN_ACTIVITY)
+        self.assertIn('WasmModuleFile.read(this, fileName)', ANDROID_WASM_ACTIVITY)
+        self.assertNotIn('assets.open(', ANDROID_WASM_ACTIVITY)
 
     def test_wasm_url_history_records_confirmed_urls(self):
         self.assertLess(WASM_URL_ACTIVITY.index('recordHistory(value)'), WASM_URL_ACTIVITY.index('validateUrl(URL(value))'))
@@ -102,8 +111,8 @@ class BuildAndroidStaticTest(unittest.TestCase):
 
     def test_ndk_tools_use_dynamic_host_prebuilt_directory(self):
         gradle_files = (
-            ROOT / "examples" / "android" / "app" / "build.gradle.kts",
-            ROOT / "adapters" / "android" / "gradle-integration.gradle.kts",
+            ROOT / "examples" / "android" / "bridge-native" / "build.gradle.kts",
+            ROOT / "examples" / "android" / "bridge-wamr" / "build.gradle.kts",
         )
 
         self.assertIn("resolve_android_ndk_prebuilt_dir", BUILD_SCRIPT)
@@ -163,30 +172,32 @@ class BuildAndroidStaticTest(unittest.TestCase):
         )
         self.assertIn("Android manages the main thread stack guard", WAMR_BUILD_RS)
 
-    def test_wamr_mode_is_static_pinned_and_packages_generated_guest(self):
+    def test_wamr_runtime_is_static_pinned_and_guest_is_external(self):
         self.assertIn(f'WAMR_SHA="{WAMR_SHA}"', BUILD_SCRIPT)
         self.assertIn(f'WAMR_SHA="{WAMR_SHA}"', VERIFY_SCRIPT)
-        self.assertIn("wasm-dioxus", BUILD_SCRIPT)
-        self.assertIn("wasm-yew", BUILD_SCRIPT)
-        self.assertIn("dioxus_counter.wasm", BUILD_SCRIPT)
-        self.assertIn("dioxus_counter_replacement.wasm", BUILD_SCRIPT)
-        self.assertIn("yew_counter.wasm", BUILD_SCRIPT)
-        self.assertIn("yew_counter_replacement.wasm", BUILD_SCRIPT)
+        self.assertIn("liblynx_element_bridge_wamr.so", BUILD_SCRIPT)
+        self.assertIn("wasm_guest_sha256=external-url-only", BUILD_SCRIPT)
+        self.assertNotIn("dioxus_counter.wasm", BUILD_SCRIPT)
+        self.assertNotIn("yew_counter.wasm", BUILD_SCRIPT)
         self.assertIn("libwasm\\.so", BUILD_SCRIPT)
 
-    def test_wasm_fixtures_share_each_framework_crate_and_use_a_feature(self):
-        gradle = (ROOT / "examples" / "android" / "app" / "build.gradle.kts").read_text()
-
-        self.assertIn('"--features", "replacement-fixture"', gradle)
-        self.assertIn('target/wasm-guests/$elementBridgeBackend', gradle)
-        self.assertIn('resolve("initial")', gradle)
-        self.assertIn('resolve("replacement")', gradle)
-        self.assertNotIn("replacement-counter", gradle)
+    def test_android_modules_split_native_and_wamr_runtimes(self):
+        self.assertIn('include(":bridge-native")', ANDROID_SETTINGS)
+        self.assertIn('include(":bridge-wamr")', ANDROID_SETTINGS)
+        self.assertIn('implementation(project(":bridge-native"))', ANDROID_APP_GRADLE)
+        self.assertIn('implementation(project(":bridge-wamr"))', ANDROID_APP_GRADLE)
+        self.assertIn('create("yew")', ANDROID_NATIVE_GRADLE)
+        self.assertIn('create("dioxus")', ANDROID_NATIVE_GRADLE)
+        self.assertIn("lynx_element_bridge_native", ANDROID_NATIVE_GRADLE)
+        self.assertIn("lynx_element_bridge_wamr", ANDROID_WAMR_GRADLE)
+        self.assertNotIn("wasm32-wasip1", ANDROID_APP_GRADLE + ANDROID_WAMR_GRADLE)
+        self.assertIn("MainActivity::class.java", ANDROID_LAUNCHER_ACTIVITY)
+        self.assertIn("WasmUrlActivity::class.java", ANDROID_LAUNCHER_ACTIVITY)
 
     def test_android_ci_covers_native_and_wasm_backends(self):
         workflow = (ROOT / ".github" / "workflows" / "android-integration.yml").read_text()
 
-        self.assertIn("backend: [yew, dioxus, wasm-dioxus, wasm-yew]", workflow)
+        self.assertIn("backend: [yew, dioxus]", workflow)
         self.assertIn('./scripts/build-android.sh --backend "${{ matrix.backend }}" --clean', workflow)
 
     def test_tools_shared_pin_is_publicly_reachable_revision(self):
@@ -201,9 +212,9 @@ class BuildAndroidStaticTest(unittest.TestCase):
         self.assertIn(f'+        "commit": "{PUBLIC_TOOLS_SHARED_SHA}",', pin_patch_text)
 
     def test_wasm_jni_separates_short_backend_name_from_full_marker(self):
-        self.assertIn('LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME="${wamr_backend_name}"', ANDROID_CMAKE)
+        self.assertIn('LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_NAME="wasm"', ANDROID_CMAKE)
         self.assertIn(
-            'LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_MARKER="lynx-element-bridge-backend:${LYNX_ELEMENT_BRIDGE_BACKEND}"',
+            'LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_MARKER="lynx-element-bridge-backend:wasm"',
             ANDROID_CMAKE,
         )
         self.assertIn("LYNX_ELEMENT_BRIDGE_WAMR_BACKEND_MARKER", ANDROID_JNI)
@@ -222,7 +233,8 @@ class BuildAndroidStaticTest(unittest.TestCase):
 
     def test_all_native_apk_libraries_are_required_and_all_elfs_are_inspected(self):
         for library in (
-            "liblynx_element_bridge.so",
+            "liblynx_element_bridge_native.so",
+            "liblynx_element_bridge_wamr.so",
             "liblynx_native_renderer.so",
             "liblynx_service_api.so",
             "liblynxbase.so",

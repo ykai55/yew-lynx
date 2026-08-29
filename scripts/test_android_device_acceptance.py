@@ -41,7 +41,7 @@ class AndroidDeviceAcceptanceTest(unittest.TestCase):
     def write_apk(self, name="test.apk", *, extra_entries=(), compression=None):
         path = self.directory / name
         with zipfile.ZipFile(path, "w") as archive:
-            for library in acceptance.REQUIRED_NATIVE_LIBRARIES:
+            for library in acceptance.REQUIRED_APK_LIBRARIES:
                 data = (b"\x7fELF" + library.encode("ascii")).ljust(0x3000, b"x")
                 self.add_entry(
                     archive,
@@ -68,7 +68,7 @@ class AndroidDeviceAcceptanceTest(unittest.TestCase):
         ranges = acceptance.inspect_apk(self.write_apk())
 
         self.assertEqual(
-            list(ranges), list(acceptance.REQUIRED_NATIVE_LIBRARIES)
+            list(ranges), list(acceptance.REQUIRED_APK_LIBRARIES)
         )
         for start, end in ranges.values():
             self.assertEqual(start % 4096, 0)
@@ -96,7 +96,7 @@ class AndroidDeviceAcceptanceTest(unittest.TestCase):
         ranges = acceptance.inspect_apk(self.write_apk())
         paths = [
             "/data/app/liblynx_native_renderer.so",
-            "/data/app/liblynx_element_bridge.so (deleted)",
+            "/data/app/liblynx_element_bridge_native.so (deleted)",
             "/data/app/liblynxbase.so",
             "/data/app/liblynxgfx.so",
             "/data/app/liblynxtrace.so",
@@ -130,17 +130,17 @@ class AndroidDeviceAcceptanceTest(unittest.TestCase):
     def test_apk_rejects_missing_compressed_unaligned_and_forbidden_entries(self):
         missing = self.directory / "missing.apk"
         with zipfile.ZipFile(missing, "w") as archive:
-            for library in acceptance.REQUIRED_NATIVE_LIBRARIES[:-1]:
+            for library in acceptance.REQUIRED_APK_LIBRARIES[:-1]:
                 self.add_entry(archive, f"lib/arm64-v8a/{library}")
 
-        compressed_library = acceptance.REQUIRED_NATIVE_LIBRARIES[0]
+        compressed_library = acceptance.REQUIRED_APK_LIBRARIES[0]
         compressed = self.write_apk(
             "compressed.apk", compression={compressed_library: zipfile.ZIP_DEFLATED}
         )
 
         unaligned = self.directory / "unaligned.apk"
         with zipfile.ZipFile(unaligned, "w") as archive:
-            for library in acceptance.REQUIRED_NATIVE_LIBRARIES:
+            for library in acceptance.REQUIRED_APK_LIBRARIES:
                 self.add_entry(
                     archive, f"lib/arm64-v8a/{library}", aligned=False
                 )

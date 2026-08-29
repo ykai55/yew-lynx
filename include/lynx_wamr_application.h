@@ -24,6 +24,10 @@ LynxNativeRendererStatus lynx_element_bridge_wamr_replace(
 LynxElementBridgeNativeDestroyResult lynx_element_bridge_wamr_destroy(
     LynxElementBridgeSession session);
 
+/* Emergency teardown only; no application teardown mutations are applied. */
+LynxElementBridgeNativeDestroyResult lynx_element_bridge_wamr_abandon(
+    LynxElementBridgeSession session);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

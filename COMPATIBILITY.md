@@ -48,11 +48,10 @@ version:
 The native product and app dependency graphs exclude stock `lynx`, Quick and
 PrimJS, NAPI, V8, LynxJSSDK, and standalone Wasm runtime artifacts. The APK
 excludes `liblynx.so`, runtime engine shared libraries, and `assets/lynx_core.js`.
-The `wasm-dioxus` and `wasm-yew` modes may statically embed pinned WAMR and
-package initial and `replacement-fixture` builds of their generated
-`wasm32-wasip1` guest; native modes may not. Both builds reuse the framework's
-single business crate and DSL source, with no state migration. Neither guest
-enables a browser DOM renderer or adds timer dispatch. ELF inspection rejects forbidden runtime
+The app packages separate Native and WAMR bridge libraries. The Native Android
+build variant selects Yew or Dioxus; the WAMR host accepts an externally built
+compatible `wasm32-wasip1` guest from a URL. No guest `.wasm` is packaged.
+ELF inspection rejects forbidden runtime
 `DT_NEEDED` entries and undefined runtime symbols, and requires the public
 `lynx_native_renderer_get_api` export. PrimJS preparation is
 retained solely to reproducibly build and test the stock artifact; it is not a
