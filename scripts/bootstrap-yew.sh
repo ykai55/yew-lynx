@@ -44,7 +44,10 @@ while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
   patch_file="$PATCH_DIR/$patch_name"
   [[ -f "$patch_file" ]] || fail "patch listed in series does not exist: $patch_name"
 
-  mapfile -t patch_id_lines < <(git patch-id --stable < "$patch_file")
+  patch_id_lines=()
+  while IFS= read -r patch_id_line; do
+    patch_id_lines+=("$patch_id_line")
+  done < <(git patch-id --stable < "$patch_file")
   ((${#patch_id_lines[@]} == 1)) || fail "expected one commit in patch: $patch_name"
   read -r patch_id _ <<< "${patch_id_lines[0]}"
   [[ "$patch_id" =~ ^[0-9a-f]{40}$ ]] || fail "could not identify patch: $patch_name"
@@ -99,7 +102,9 @@ prepare_checkout() {
   git -C "$checkout_dir" merge-base --is-ancestor "$YEW_BASE_REVISION" HEAD ||
     fail "Yew HEAD is not based on $YEW_BASE_REVISION"
 
-  mapfile -t commits < <(git -C "$checkout_dir" rev-list --reverse "$YEW_BASE_REVISION..HEAD")
+  while IFS= read -r commit; do
+    commits+=("$commit")
+  done < <(git -C "$checkout_dir" rev-list --reverse "$YEW_BASE_REVISION..HEAD")
   ((${#commits[@]} <= ${#patch_files[@]})) ||
     fail "Yew checkout contains commits beyond the declared patch series"
 
@@ -110,7 +115,10 @@ prepare_checkout() {
     [[ "${commit_info[1]}" == "$expected_parent" ]] ||
       fail "Yew patch history contains an unexpected commit at $commit"
 
-    mapfile -t commit_patch_ids < <(
+    commit_patch_ids=()
+    while IFS= read -r patch_id_line; do
+      commit_patch_ids+=("$patch_id_line")
+    done < <(
       git -C "$checkout_dir" format-patch --stdout -1 "$commit" | git patch-id --stable
     )
     ((${#commit_patch_ids[@]} == 1)) || fail "could not identify Yew commit: $commit"

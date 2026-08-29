@@ -9,6 +9,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = (ROOT / "scripts" / "build-android.sh").read_text()
 VERIFY_SCRIPT = (ROOT / "scripts" / "verify.sh").read_text()
+BUILD_UTILS = (ROOT / "scripts" / "android-build-utils.sh").read_text()
+BOOTSTRAP_YEW = (ROOT / "scripts" / "bootstrap-yew.sh").read_text()
 ANDROID_CMAKE = (ROOT / "adapters" / "android" / "CMakeLists.txt").read_text()
 ANDROID_JNI = (
     ROOT / "adapters" / "android" / "src" / "main" / "cpp" / "lynx_element_bridge_jni.cc"
@@ -21,6 +23,52 @@ WAMR_SHA = "25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 
 
 class BuildAndroidStaticTest(unittest.TestCase):
+    def test_ndk_tools_use_dynamic_host_prebuilt_directory(self):
+        gradle_files = (
+            ROOT / "examples" / "android" / "app" / "build.gradle.kts",
+            ROOT / "adapters" / "android" / "gradle-integration.gradle.kts",
+        )
+
+        self.assertIn("resolve_android_ndk_prebuilt_dir", BUILD_SCRIPT)
+        self.assertIn("resolve_android_ndk_prebuilt_dir", VERIFY_SCRIPT)
+        self.assertIn("ANDROID_NDK_HOST_TAG", BUILD_UTILS)
+        self.assertIn("darwin-arm64 darwin-x86_64", BUILD_UTILS)
+        self.assertNotIn("prebuilt/linux-x86_64", BUILD_SCRIPT)
+        self.assertNotIn("prebuilt/linux-x86_64", VERIFY_SCRIPT)
+        for gradle_file in gradle_files:
+            gradle = gradle_file.read_text()
+            self.assertIn('System.getenv("ANDROID_NDK_HOST_TAG")', gradle)
+            self.assertIn('listOf("darwin-arm64", "darwin-x86_64")', gradle)
+            self.assertIn('listOf("linux-x86_64")', gradle)
+            self.assertNotIn("prebuilt/linux-x86_64", gradle)
+
+    def test_ndk_host_selection_behavior(self):
+        result = subprocess.run(
+            [ROOT / "scripts" / "test-android-build-utils.sh"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Android build utility tests passed", result.stdout)
+
+    def test_first_party_android_scripts_use_portable_sha256(self):
+        for script in (
+            BUILD_SCRIPT,
+            (ROOT / "scripts" / "prepare-hab.sh").read_text(),
+            (ROOT / "scripts" / "prepare-primjs.sh").read_text(),
+        ):
+            self.assertIn("sha256_checksum", script)
+            self.assertNotIn("sha256sum ", script)
+        self.assertIn("shasum -a 256", BUILD_UTILS)
+
+    def test_macos_compatible_tools_are_used_throughout_the_build(self):
+        self.assertIn("scripts/android-build-utils.sh", BUILD_SCRIPT)
+        self.assertIn('"$ndk21_llvm_bin/llvm-strings"', BUILD_SCRIPT)
+        self.assertNotIn("| strings)", BUILD_SCRIPT)
+        self.assertNotIn("mapfile", BOOTSTRAP_YEW)
+
     def test_wamr_bound_checks_are_target_specific(self):
         self.assertIn(
             "(disable_hw_bound_check, disable_stack_hw_bound_check)", WAMR_BUILD_RS

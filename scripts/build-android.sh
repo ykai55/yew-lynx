@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
+# shellcheck source=android-build-utils.sh
+source "$ROOT_DIR/scripts/android-build-utils.sh"
 readonly YEW_SOURCE_DIR="$ROOT_DIR/.deps/yew"
 readonly LYNX_SOURCE_DIR="$ROOT_DIR/third_party/lynx"
 readonly LYNX_PATCH_DIR="$ROOT_DIR/patches/lynx"
@@ -166,15 +168,16 @@ calculate_cache_key() {
       crates examples/android examples/counter examples/dioxus-counter \
       third_party/wasm-micro-runtime \
       patches/lynx patches/lynx-tools-shared patches/yew \
-      scripts/bootstrap-yew.sh scripts/build-android.sh scripts/prepare-hab.sh \
+      scripts/android-build-utils.sh scripts/bootstrap-yew.sh \
+      scripts/build-android.sh scripts/prepare-hab.sh \
       scripts/prepare-primjs.sh scripts/publish-lynx-maven.sh \
       | sort -u \
       | while IFS= read -r input; do
           [[ -f "$ROOT_DIR/$input" ]] || continue
           printf '%s=' "$input"
-          sha256sum "$ROOT_DIR/$input" | cut -d ' ' -f 1
+          sha256_checksum "$ROOT_DIR/$input" | cut -d ' ' -f 1
         done
-  } | sha256sum | cut -d ' ' -f 1
+  } | sha256_checksum | cut -d ' ' -f 1
 }
 
 while (($#)); do
@@ -344,7 +347,7 @@ require_command() {
   fi
 }
 
-for command in awk cargo curl cut git grep head java python3 rustc sha256sum sort strings unzip; do
+for command in awk cargo curl cut git grep head java python3 rustc sort unzip; do
   require_command "$command"
 done
 
@@ -428,24 +431,32 @@ fi
 export ANDROID_HOME
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
+ndk21_prebuilt="$(resolve_android_ndk_prebuilt_dir "$ANDROID_HOME/ndk/21.1.6352462")"
+ndk25_prebuilt="$(resolve_android_ndk_prebuilt_dir "$ANDROID_HOME/ndk/25.2.9519653")"
+ndk21_llvm_bin="$ndk21_prebuilt/bin"
+ndk25_llvm_bin="$ndk25_prebuilt/bin"
+
 for component in \
   "platforms/android-33/android.jar" \
   "build-tools/33.0.1/aapt2" \
   "ndk/21.1.6352462/build/cmake/android.toolchain.cmake" \
-  "ndk/21.1.6352462/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
-  "ndk/21.1.6352462/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
   "ndk/25.2.9519653/build/cmake/android.toolchain.cmake" \
-  "ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
-  "ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
   "cmake/3.22.1/bin/cmake"; do
   if [[ ! -e "$ANDROID_HOME/$component" ]]; then
     printf 'Missing Android SDK component: %s\n' "$ANDROID_HOME/$component" >&2
     exit 1
   fi
 done
-android_llvm_bin="$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin"
-export CC_aarch64_linux_android="$android_llvm_bin/aarch64-linux-android24-clang"
-export AR_aarch64_linux_android="$android_llvm_bin/llvm-ar"
+for tool in "$ndk21_llvm_bin/llvm-nm" "$ndk21_llvm_bin/llvm-readelf" \
+    "$ndk21_llvm_bin/llvm-strings" \
+    "$ndk25_llvm_bin/aarch64-linux-android24-clang" "$ndk25_llvm_bin/llvm-ar"; do
+  [[ -e "$tool" ]] || {
+    printf 'Missing Android NDK tool: %s\n' "$tool" >&2
+    exit 1
+  }
+done
+export CC_aarch64_linux_android="$ndk25_llvm_bin/aarch64-linux-android24-clang"
+export AR_aarch64_linux_android="$ndk25_llvm_bin/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
 
 if ((clean)); then
@@ -663,7 +674,7 @@ else
 fi
 
 elf_inspect_dir="$(mktemp -d "$ROOT_DIR/.deps/android/.elf-check.XXXXXX")"
-llvm_bin="$ANDROID_HOME/ndk/21.1.6352462/toolchains/llvm/prebuilt/linux-x86_64/bin"
+llvm_bin="$ndk21_llvm_bin"
 native_apk_elf_entries=()
 while IFS= read -r elf_entry; do
   native_apk_elf_entries+=("$elf_entry")
@@ -696,7 +707,10 @@ for elf_entry in "${native_apk_elf_entries[@]}"; do
     fi
   fi
 done
-backend_strings="$(unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge.so | strings)"
+backend_strings="$(
+  unzip -p "$APK" lib/arm64-v8a/liblynx_element_bridge.so |
+    "$llvm_bin/llvm-strings"
+)"
 if ! grep -Fq "$EXPECTED_BACKEND_MARKER" <<<"$backend_strings"; then
   printf 'APK native library does not contain marker %s\n' \
     "$EXPECTED_BACKEND_MARKER" >&2
@@ -719,11 +733,11 @@ rust_package=$RUST_PACKAGE
 lynx_sha=$LYNX_SHA
 lynx_version=$LYNX_VERSION
 wamr_sha=$WAMR_SHA
-lynx_patches_sha256=$(sha256sum "${LYNX_PATCH_FILES[@]}" | cut -d ' ' -f 1 | sha256sum | cut -d ' ' -f 1)
-hab_lock_sha256=$(sha256sum "$ROOT_DIR/android/hab.lock" | cut -d ' ' -f 1)
-primjs_lock_sha256=$(sha256sum "$ROOT_DIR/android/primjs.lock" | cut -d ' ' -f 1)
+lynx_patches_sha256=$(sha256_checksum "${LYNX_PATCH_FILES[@]}" | cut -d ' ' -f 1 | sha256_checksum | cut -d ' ' -f 1)
+hab_lock_sha256=$(sha256_checksum "$ROOT_DIR/android/hab.lock" | cut -d ' ' -f 1)
+primjs_lock_sha256=$(sha256_checksum "$ROOT_DIR/android/primjs.lock" | cut -d ' ' -f 1)
 yew_head=$(git -C "$YEW_SOURCE_DIR" rev-parse HEAD)
-yew_patch_series_sha256=$(sha256sum "$ROOT_DIR/patches/yew/series" | cut -d ' ' -f 1)
+yew_patch_series_sha256=$(sha256_checksum "$ROOT_DIR/patches/yew/series" | cut -d ' ' -f 1)
 rustc=$(rustc --version)
 java=$(java -version 2>&1 | head -n 1)
 lynx_gradle=6.7.1
@@ -731,10 +745,10 @@ app_gradle=7.6.4
 lynx_android_ndk=21.1.6352462
 app_android_ndk=25.2.9519653
 android_platform=33
-rust_archive_sha256=$(sha256sum "$STAGED_RUST_ARCHIVE" | cut -d ' ' -f 1)
-wasm_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_ASSET" | sha256sum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
-wasm_replacement_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_REPLACEMENT_ASSET" | sha256sum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
-apk_sha256=$(sha256sum "$APK" | cut -d ' ' -f 1)
+rust_archive_sha256=$(sha256_checksum "$STAGED_RUST_ARCHIVE" | cut -d ' ' -f 1)
+wasm_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_ASSET" | sha256_checksum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
+wasm_replacement_guest_sha256=$(if [[ "$backend" == wasm-* ]]; then unzip -p "$APK" "assets/$WASM_REPLACEMENT_ASSET" | sha256_checksum | cut -d ' ' -f 1; else printf 'not-applicable'; fi)
+apk_sha256=$(sha256_checksum "$APK" | cut -d ' ' -f 1)
 apk=$APK
 android_input_cache_key=$cache_key
 EOF
