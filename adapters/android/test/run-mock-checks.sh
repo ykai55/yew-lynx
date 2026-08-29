@@ -44,7 +44,7 @@ grep -Fq 'repeat(MAX_REDIRECTS + 1)' "$WASM_URL_ACTIVITY"
 grep -Fq 'getSharedPreferences(HISTORY_PREFERENCES, MODE_PRIVATE)' "$WASM_URL_ACTIVITY"
 grep -Fq 'putExtra(MainActivity.EXTRA_WASM_CACHE_FILE, file.name)' "$WASM_URL_ACTIVITY"
 grep -Fq '<uses-permission android:name="android.permission.INTERNET" />' "$APP_MANIFEST"
-grep -Fq 'android:enabled="${wasmUrlLauncherEnabled}"' "$APP_MANIFEST"
+grep -Fq "android:enabled=\"\${wasmUrlLauncherEnabled}\"" "$APP_MANIFEST"
 if grep -Eq 'renderTemplate|setEnableMTSModule|registerModule|\.lynx\.bundle' \
     "$APP_ACTIVITY"; then
   printf 'MainActivity still references the dormant MTS/template path\n' >&2
