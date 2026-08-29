@@ -16,10 +16,6 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.TextView
-import java.io.BufferedInputStream
-import java.io.FileOutputStream
-import java.io.IOException
-import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -34,7 +30,7 @@ class WasmUrlActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private var download: Future<*>? = null
-    @Volatile private var activeConnection: HttpURLConnection? = null
+    @Volatile private var activeDownloader: WasmModuleDownloader? = null
     @Volatile private var stopped = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,7 +42,7 @@ class WasmUrlActivity : Activity() {
 
     override fun onDestroy() {
         stopped = true
-        activeConnection?.disconnect()
+        activeDownloader?.cancel()
         download?.cancel(true)
         executor.shutdownNow()
         super.onDestroy()
@@ -157,30 +153,36 @@ class WasmUrlActivity : Activity() {
         recordHistory(value)
 
         val initialUrl = try {
-            validateUrl(URL(value))
+            WasmModuleDownloader.validateUrl(URL(value))
         } catch (error: Exception) {
             status.text = error.message ?: "Invalid URL"
             return
         }
         setDownloading(true, "Downloading…")
+        val downloader = WasmModuleDownloader(this)
+        activeDownloader = downloader
         download = executor.submit {
-            val result = runCatching { download(initialUrl) }
+            val result = runCatching { downloader.download(initialUrl) }
+            if (activeDownloader === downloader) activeDownloader = null
             runOnUiThread {
                 if (isDestroyed || isFinishing) {
-                    result.getOrNull()?.delete()
+                    result.getOrNull()?.file?.delete()
                     return@runOnUiThread
                 }
                 result.fold(
-                    onSuccess = { file ->
+                    onSuccess = { module ->
                         try {
                             startActivity(
                                 Intent(this, WasmActivity::class.java)
-                                    .putExtra(WasmActivity.EXTRA_WASM_CACHE_FILE, file.name)
-                                    .putExtra(WasmActivity.EXTRA_WASM_SOURCE_URL, value),
+                                    .putExtra(WasmActivity.EXTRA_WASM_CACHE_FILE, module.file.name)
+                                    .putExtra(
+                                        WasmActivity.EXTRA_WASM_SOURCE_URL,
+                                        module.sourceUrl.toString(),
+                                    ),
                             )
                             setDownloading(false, "")
                         } catch (error: Throwable) {
-                            file.delete()
+                            module.file.delete()
                             setDownloading(false, error.message ?: "Unable to open WASM page")
                         }
                     },
@@ -190,98 +192,6 @@ class WasmUrlActivity : Activity() {
                 )
             }
         }
-    }
-
-    private fun download(initialUrl: URL): java.io.File {
-        var currentUrl = initialUrl
-        repeat(MAX_REDIRECTS + 1) { redirectCount ->
-            if (stopped || Thread.currentThread().isInterrupted) {
-                throw IOException("WASM download cancelled")
-            }
-            val connection = currentUrl.openConnection() as HttpURLConnection
-            activeConnection = connection
-            try {
-                if (stopped) throw IOException("WASM download cancelled")
-                connection.instanceFollowRedirects = false
-                connection.connectTimeout = CONNECT_TIMEOUT_MS
-                connection.readTimeout = READ_TIMEOUT_MS
-                connection.setRequestProperty("Accept", "application/wasm, application/octet-stream")
-                when (val statusCode = connection.responseCode) {
-                    in 200..299 -> {
-                        val contentLength = connection.contentLengthLong
-                        if (contentLength > WasmModuleFile.MAX_BYTES) {
-                            throw IOException("WASM module exceeds the 16 MiB limit")
-                        }
-                        val temporary = java.io.File.createTempFile(
-                            "wasm-download-",
-                            ".tmp",
-                            cacheDir,
-                        )
-                        try {
-                            BufferedInputStream(connection.inputStream).use { input ->
-                                FileOutputStream(temporary).use { sink ->
-                                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                                    var total = 0
-                                    while (true) {
-                                        if (stopped || Thread.currentThread().isInterrupted) {
-                                            throw IOException("WASM download cancelled")
-                                        }
-                                        val count = input.read(buffer)
-                                        if (count == -1) break
-                                        total += count
-                                        if (total > WasmModuleFile.MAX_BYTES) {
-                                            throw IOException("WASM module exceeds the 16 MiB limit")
-                                        }
-                                        sink.write(buffer, 0, count)
-                                    }
-                                    if (total == 0) throw IOException("Downloaded WASM module is empty")
-                                }
-                            }
-                            val output = WasmModuleFile.create(this)
-                            if (!temporary.renameTo(output)) {
-                                try {
-                                    temporary.copyTo(output)
-                                    temporary.delete()
-                                } catch (error: Throwable) {
-                                    output.delete()
-                                    throw error
-                                }
-                            }
-                            return output
-                        } catch (error: Throwable) {
-                            temporary.delete()
-                            throw error
-                        }
-                    }
-                    HttpURLConnection.HTTP_MOVED_PERM,
-                    HttpURLConnection.HTTP_MOVED_TEMP,
-                    HttpURLConnection.HTTP_SEE_OTHER,
-                    307,
-                    308,
-                    -> {
-                        if (redirectCount == MAX_REDIRECTS) {
-                            throw IOException("WASM download exceeded $MAX_REDIRECTS redirects")
-                        }
-                        val location = connection.getHeaderField("Location")
-                            ?: throw IOException("WASM redirect is missing Location")
-                        currentUrl = validateUrl(URL(currentUrl, location))
-                    }
-                    else -> throw IOException("WASM download failed with HTTP $statusCode")
-                }
-            } finally {
-                connection.disconnect()
-                if (activeConnection === connection) activeConnection = null
-            }
-        }
-        throw IOException("WASM download exceeded $MAX_REDIRECTS redirects")
-    }
-
-    private fun validateUrl(url: URL): URL {
-        require(url.protocol == "http" || url.protocol == "https") {
-            "Only HTTP and HTTPS URLs are supported"
-        }
-        require(url.host.isNotBlank()) { "URL must include a host" }
-        return url
     }
 
     private fun setDownloading(downloading: Boolean, message: String) {
@@ -343,9 +253,6 @@ class WasmUrlActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
-        const val CONNECT_TIMEOUT_MS = 15_000
-        const val READ_TIMEOUT_MS = 30_000
-        const val MAX_REDIRECTS = 5
         const val HISTORY_LIMIT = 20
         const val HISTORY_PREFERENCES = "wasm_url_history"
         const val HISTORY_KEY = "urls"

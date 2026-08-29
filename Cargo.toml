@@ -7,6 +7,7 @@ members = [
   "adapters/yew",
   "adapters/dioxus",
   "crates/adapter-conformance",
+  "tools/dev-wasm",
   "examples/counter",
   "examples/dioxus-counter",
 ]

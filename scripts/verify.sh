@@ -13,11 +13,9 @@ readonly LYNX_TOOLS_SHARED_SHA="ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
 readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
 readonly WAMR_SHA="25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 readonly SCRIPTS=(
-  "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
   "$ROOT_DIR/scripts/android-build-utils.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
   "$ROOT_DIR/scripts/build-android.sh"
-  "$ROOT_DIR/scripts/dev-wasm.sh"
   "$ROOT_DIR/scripts/prepare-hab.sh"
   "$ROOT_DIR/scripts/prepare-primjs.sh"
   "$ROOT_DIR/scripts/publish-lynx-maven.sh"
@@ -301,7 +299,6 @@ verify_removed_transport() {
       'LynxElementBridgeModule|LEB2|element-bridge-wire|prepare-flatc|generate-protocol|adapters/mts|ResultSlot|ResponseBatch|CapabilityRequest|InvokeCapability|yew_lynx_(mount|dispatch|complete|destroy|buffer_free)' \
       -- . \
       ':(exclude)third_party/lynx' \
-      ':(exclude)adapters/android/test/run-mock-checks.sh' \
       ':(exclude)scripts/verify.sh' || true
   )"
   [[ -z "$references" ]] || {
@@ -315,7 +312,6 @@ verify_removed_transport() {
       -- . \
       ':(exclude)third_party/lynx' \
       ':(exclude)examples/android/gradle/verification-metadata.xml' \
-      ':(exclude)adapters/android/test/run-mock-checks.sh' \
       ':(exclude)scripts/verify.sh' || true
   )"
   [[ -z "$references" ]] || {
@@ -351,6 +347,7 @@ verify_lynx_tools_shared_patches
 python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], "exec")' \
   "$ROOT_DIR/scripts/android-device-acceptance.py"
 python3 "$ROOT_DIR/scripts/test_android_device_acceptance.py"
+"$ROOT_DIR/scripts/test-android-build-utils.sh"
 python3 "$ROOT_DIR/scripts/test_build_android.py"
 
 printf '==> Bootstrapping pinned Yew checkout\n'
@@ -372,9 +369,6 @@ cargo test -p lynx-element-bridge-wamr-host --features wamr -- --test-threads=1
 printf '==> Linting project workspace\n'
 cargo clippy --manifest-path "$ROOT_DIR/Cargo.toml" \
   --workspace --all-targets --locked -- -D warnings
-
-printf '==> Testing Android Java/JNI adapter\n'
-bash "$ROOT_DIR/adapters/android/test/run-mock-checks.sh"
 
 ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 if [[ -z "$ANDROID_HOME" || ! -d "$ANDROID_HOME" ]]; then

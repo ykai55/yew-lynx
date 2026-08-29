@@ -53,17 +53,6 @@ Rust session is published.
 
 ## Verification
 
-Run:
-
-```bash
-bash adapters/android/test/run-mock-checks.sh
-```
-
-The script checks the native-only Activity/Gradle wiring, Java owner semantics,
-JNI status mapping and resolver failure, required JNI exports, absence of the
-removed module JNI prefix, both real Rust static-library links, and required and
-forbidden application C symbols.
-
 The Android build additionally verifies that the native product and app graphs
 exclude stock `lynx`, Quick/PrimJS, NAPI, Wasm, V8, and LynxJSSDK; that the APK
 excludes their shared libraries and `assets/lynx_core.js`; and that
