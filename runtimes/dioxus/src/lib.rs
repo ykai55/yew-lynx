@@ -262,3 +262,88 @@ pub mod __private {
     };
     pub use lynx_element_bridge_wasm_guest::export_guest;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use dioxus_core::{schedule_update, use_hook};
+    use lynx_element_bridge_core::{Command, HostFake};
+    use lynx_element_bridge_dioxus::prelude::*;
+
+    use super::*;
+
+    struct TestRoot;
+
+    impl RootComponent for TestRoot {
+        fn render() -> Element {
+            let count = use_hook(|| Rc::new(Cell::new(0)));
+            let listener_count = Rc::clone(&count);
+            let displayed_count = count.get();
+            rsx! {
+                view {
+                    text { "Count: {displayed_count}" }
+                    view {
+                        ontap: move |_| {
+                            listener_count.set(listener_count.get() + 1);
+                            schedule_update()();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_mount_event_and_destroy_apply_real_dioxus_updates() {
+        let root = NodeId::new(1).unwrap();
+        let (runtime, mounted) = Runtime::<TestRoot>::mount(root).unwrap();
+        let mut backend = DioxusBackend(Some(runtime));
+        let (listener, callback) = mounted
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                Command::AddEventListener {
+                    listener,
+                    callback,
+                    name,
+                    ..
+                } if name == "tap" => Some((*listener, *callback)),
+                _ => None,
+            })
+            .expect("Dioxus runtime should register the tap listener");
+        let mut host = HostFake::new(root);
+        host.apply(&mounted).unwrap();
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 0")
+        );
+        assert_eq!(host.listener_count(), 1);
+
+        let updated = BridgeBackend::dispatch_event(
+            &mut backend,
+            EventMessage {
+                listener,
+                callback,
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: vec![0, 255],
+            },
+        )
+        .unwrap();
+        host.apply(&updated).unwrap();
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 1")
+        );
+
+        host.apply(&BridgeBackend::destroy(Box::new(backend), false).unwrap())
+            .unwrap();
+        assert!(host.snapshot().children.is_empty());
+        assert_eq!(host.listener_count(), 0);
+    }
+}

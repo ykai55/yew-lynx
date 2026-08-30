@@ -783,3 +783,7 @@ pub fn native_abandon_session(
         consumed: u32::from(consumed),
     }
 }
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests;

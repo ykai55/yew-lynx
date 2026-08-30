@@ -293,3 +293,77 @@ pub mod __private {
     };
     pub use lynx_element_bridge_wasm_guest::export_guest;
 }
+
+#[cfg(test)]
+mod tests {
+    use lynx_element_bridge_core::{Command, HostFake};
+
+    use super::*;
+    use crate::prelude::*;
+
+    #[function_component(TestApp)]
+    fn test_app() -> Html {
+        let count = use_state(|| 0);
+        let increment = {
+            let count = count.clone();
+            Callback::from(move |_: NativeEvent| count.set(*count + 1))
+        };
+        html! {
+            <view>
+                <text>{format!("Count: {}", *count)}</text>
+                <view ontap={increment} />
+            </view>
+        }
+    }
+
+    #[test]
+    fn runtime_mount_event_and_destroy_apply_real_yew_updates() {
+        let root = NodeId::new(1).unwrap();
+        let (mut runtime, mounted) = Runtime::<TestApp>::mount(root).unwrap();
+        let (listener, callback) = mounted
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                Command::AddEventListener {
+                    listener,
+                    callback,
+                    name,
+                    ..
+                } if name == "tap" => Some((*listener, *callback)),
+                _ => None,
+            })
+            .expect("Yew runtime should register the tap listener");
+        let mut host = HostFake::new(root);
+        host.apply(&mounted).unwrap();
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 0")
+        );
+        assert_eq!(host.listener_count(), 1);
+
+        let updated = BridgeBackend::dispatch_event(
+            &mut runtime,
+            EventMessage {
+                listener,
+                callback,
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: vec![0, 255],
+            },
+        )
+        .unwrap();
+        host.apply(&updated).unwrap();
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 1")
+        );
+
+        host.apply(&BridgeBackend::destroy(Box::new(runtime), false).unwrap())
+            .unwrap();
+        assert!(host.snapshot().children.is_empty());
+        assert_eq!(host.listener_count(), 0);
+    }
+}
