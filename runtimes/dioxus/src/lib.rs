@@ -262,3 +262,209 @@ pub mod __private {
     };
     pub use lynx_element_bridge_wasm_guest::export_guest;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use dioxus_core::{schedule_update, use_hook};
+    use lynx_element_bridge_core::{CallbackId, Command, HostFake, ListenerId};
+    use lynx_element_bridge_dioxus::prelude::*;
+
+    use super::*;
+
+    struct TestRoot;
+
+    impl RootComponent for TestRoot {
+        fn render() -> Element {
+            let count = use_hook(|| Rc::new(Cell::new(0)));
+            let listener_count = Rc::clone(&count);
+            let displayed_count = count.get();
+            rsx! {
+                view {
+                    text { "Count: {displayed_count}" }
+                    view {
+                        ontap: move |_| {
+                            listener_count.set(listener_count.get() + 1);
+                            schedule_update()();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_mount_event_and_destroy_apply_real_dioxus_updates() {
+        let root = NodeId::new(1).unwrap();
+        let (runtime, mounted) = Runtime::<TestRoot>::mount(root).unwrap();
+        let mut backend = DioxusBackend(Some(runtime));
+        let (listener, callback) = mounted
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                Command::AddEventListener {
+                    listener,
+                    callback,
+                    name,
+                    ..
+                } if name == "tap" => Some((*listener, *callback)),
+                _ => None,
+            })
+            .expect("Dioxus runtime should register the tap listener");
+        let mut host = HostFake::new(root);
+        host.apply(&mounted).unwrap();
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 0")
+        );
+        assert_eq!(host.listener_count(), 1);
+
+        let updated = BridgeBackend::dispatch_event(
+            &mut backend,
+            EventMessage {
+                listener,
+                callback,
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: vec![0, 255],
+            },
+        )
+        .unwrap();
+        host.apply(&updated).unwrap();
+        assert_eq!(
+            host.snapshot().children[0].children[0].children[0]
+                .text
+                .as_deref(),
+            Some("Count: 1")
+        );
+
+        host.apply(&BridgeBackend::destroy(Box::new(backend), false).unwrap())
+            .unwrap();
+        assert!(host.snapshot().children.is_empty());
+        assert_eq!(host.listener_count(), 0);
+    }
+
+    #[test]
+    fn guest_runtime_maps_stale_events_and_destroys_cleanly() {
+        let root = NodeId::new(1).unwrap();
+        let (mut runtime, mounted) = <Runtime<TestRoot> as GuestApplication>::mount(MountRequest {
+            protocol_version: lynx_element_bridge_wasm_guest::PROTOCOL_VERSION,
+            root,
+        })
+        .unwrap();
+        let mut host = HostFake::new(root);
+        host.apply(&mounted).unwrap();
+
+        let error = GuestApplication::dispatch_event(
+            &mut runtime,
+            EventMessage {
+                listener: ListenerId::new(999).unwrap(),
+                callback: CallbackId::new(999).unwrap(),
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: Vec::new(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Status::InvalidListener);
+
+        host.apply(&GuestApplication::destroy(runtime).unwrap())
+            .unwrap();
+        assert!(host.snapshot().children.is_empty());
+    }
+
+    #[test]
+    fn native_backend_rejects_empty_state_and_discards_when_live() {
+        let mut empty = DioxusBackend::<TestRoot>(None);
+        let event = EventMessage {
+            listener: ListenerId::new(1).unwrap(),
+            callback: CallbackId::new(1).unwrap(),
+            content_type: "application/vnd.lynx.tap".into(),
+            payload: Vec::new(),
+        };
+        assert_eq!(
+            BridgeBackend::dispatch_event(&mut empty, event)
+                .unwrap_err()
+                .status,
+            Status::InternalError
+        );
+        BridgeBackend::discard_pending(&mut empty);
+        assert_eq!(
+            BridgeBackend::destroy(Box::new(empty), false)
+                .unwrap_err()
+                .status,
+            Status::InternalError
+        );
+
+        let (runtime, _) = Runtime::<TestRoot>::mount(NodeId::new(1).unwrap()).unwrap();
+        let mut live = DioxusBackend(Some(runtime));
+        BridgeBackend::discard_pending(&mut live);
+        BridgeBackend::destroy(Box::new(live), true).unwrap();
+    }
+
+    #[test]
+    fn error_mappings_preserve_public_status_semantics() {
+        let bridge = BridgeError::new(Status::InvalidArgument, "bridge");
+        assert_eq!(
+            guest_error(DioxusAdapterError::Bridge(bridge.clone())).status,
+            Status::InvalidArgument
+        );
+        assert_eq!(
+            guest_error(DioxusAdapterError::InvalidListener(1)).status,
+            Status::InvalidListener
+        );
+        assert_eq!(
+            guest_error(DioxusAdapterError::CallbackExhausted).status,
+            Status::ResourceExhausted
+        );
+        assert_eq!(
+            guest_error(DioxusAdapterError::UnsupportedAttribute).status,
+            Status::HostError
+        );
+
+        assert_eq!(
+            adapter_error(DioxusAdapterError::Bridge(BridgeError::new(
+                Status::InvalidListener,
+                "listener",
+            )))
+            .status,
+            Status::InvalidListener
+        );
+        assert_eq!(
+            adapter_error(DioxusAdapterError::Bridge(bridge)).status,
+            Status::InvalidArgument
+        );
+        assert_eq!(
+            adapter_error(DioxusAdapterError::EventMismatch {
+                listener: ListenerId::new(1).unwrap(),
+                expected: CallbackId::new(1).unwrap(),
+                actual: CallbackId::new(2).unwrap(),
+            })
+            .status,
+            Status::InvalidListener
+        );
+        assert_eq!(
+            adapter_error(DioxusAdapterError::CallbackExhausted).status,
+            Status::ResourceExhausted
+        );
+        assert_eq!(
+            adapter_error(DioxusAdapterError::InvalidStack(1)).status,
+            Status::HostError
+        );
+    }
+
+    #[test]
+    fn native_wrappers_reject_missing_api_and_stale_sessions() {
+        // SAFETY: A missing API resolver is rejected before native renderer access.
+        let mounted = unsafe { native_mount::<TestRoot>(None, 1) };
+        assert_eq!(
+            mounted.status,
+            lynx_element_bridge_ffi::native_host::NATIVE_STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(mounted.session, 0);
+        assert_eq!(native_destroy_session(0).consumed, 0);
+        assert_eq!(native_abandon_session(0).consumed, 0);
+    }
+}
