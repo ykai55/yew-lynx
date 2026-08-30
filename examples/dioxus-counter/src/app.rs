@@ -18,7 +18,7 @@ impl CounterModel {
 
 #[allow(non_snake_case)]
 pub(crate) fn App() -> Element {
-    let model = use_hook(|| Rc::new(CounterModel::new(crate::INITIAL_COUNT)));
+    let model = use_hook(|| Rc::new(CounterModel::new(0)));
     let listener_model = Rc::clone(&model);
     let count = model.count.get();
     rsx! {
