@@ -47,6 +47,11 @@ implements `WriteMutations` in `adapters/dioxus/src/lib.rs`; Dioxus `Template`,
 template paths, placeholder replacement, and stack behavior remain local to
 that adapter.
 
+Framework application lifecycle belongs in `runtimes/yew` and
+`runtimes/dioxus`, not in an example or adapter. The `lynx` facade exposes the
+runtime seam as `lynx::yew::launch!` and `lynx::dioxus::launch!`; these macros
+emit Native or WASM entrypoints in the final application crate.
+
 ## Events
 
 Register callbacks under core `CallbackId` and `ListenerId` values. The native

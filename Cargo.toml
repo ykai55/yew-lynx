@@ -5,8 +5,11 @@ members = [
   "crates/element-bridge-protocol",
   "crates/element-bridge-wasm-guest",
   "crates/element-bridge-wamr-host",
+  "crates/lynx",
   "adapters/yew",
   "adapters/dioxus",
+  "runtimes/yew",
+  "runtimes/dioxus",
   "crates/adapter-conformance",
   "tools/dev-wasm",
   "examples/counter",
@@ -32,6 +35,9 @@ lynx-element-bridge-ffi = { path = "crates/element-bridge-ffi" }
 lynx-element-bridge-protocol = { path = "crates/element-bridge-protocol" }
 lynx-element-bridge-wasm-guest = { path = "crates/element-bridge-wasm-guest" }
 lynx-element-bridge-wamr-host = { path = "crates/element-bridge-wamr-host" }
+lynx = { path = "crates/lynx" }
+lynx-yew-runtime = { path = "runtimes/yew" }
+lynx-dioxus-runtime = { path = "runtimes/dioxus" }
 serde = { version = "1.0.219", features = ["derive"] }
 yew = { path = ".deps/yew/packages/yew", features = ["native_renderer"] }
 lynx-element-bridge-yew = { path = "adapters/yew" }

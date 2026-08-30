@@ -119,6 +119,9 @@ cleanup.
 | `crates/element-bridge-core/` | Framework-neutral IDs, commands, events, session invariants, and `HostFake` |
 | `adapters/yew/` | Patched Yew `NativeRendererBackend` to core `Session` |
 | `adapters/dioxus/` | Dioxus `WriteMutations` and Lynx-native `view`/`text` RSX vocabulary |
+| `runtimes/yew/` | Generic Yew mount, event, destroy, and Native/WASM entrypoint lifecycle |
+| `runtimes/dioxus/` | Generic Dioxus mount, event, destroy, and Native/WASM entrypoint lifecycle |
+| `crates/lynx/` | Feature-gated `lynx::yew` and `lynx::dioxus` application facade |
 | `crates/adapter-conformance/` | Cross-framework mount, update, event, and destroy conformance |
 | `crates/element-bridge-ffi/` | Native session registry, C ABI lifecycle, and `NativeHost` |
 | `crates/element-bridge-protocol/` | Shared FlatBuffers v3 schema, checked-in bindings, owned types, and codecs |
@@ -136,6 +139,38 @@ cleanup.
 The effective Lynx and Yew integrations are the pinned upstream revisions plus
 these patch series; they are not upstream APIs that can be assumed on arbitrary
 versions.
+
+Applications select one facade feature and launch a root component from their
+final crate. The macro emits the target-specific ABI entrypoints; application
+code does not implement bridge lifecycle traits:
+
+```rust
+use lynx::yew::prelude::*;
+
+#[function_component(App)]
+fn app() -> Html {
+    html! { <text>{"Hello Lynx"}</text> }
+}
+
+lynx::yew::launch!(App);
+```
+
+```rust
+use lynx::dioxus::prelude::*;
+
+#[allow(non_snake_case)]
+fn App() -> Element {
+    rsx! { text { "Hello Lynx" } }
+}
+
+lynx::dioxus::launch!(App);
+```
+
+Yew applications also depend directly on `yew`, and Dioxus applications on
+`dioxus-core`, because their procedural macros resolve those framework crate
+names in the application crate. Native `launch!` expands the exported C ABI in
+the final crate, so applications may use `deny(unsafe_code)` but not
+`forbid(unsafe_code)`; the macro locally allows its generated ABI boundary.
 
 ## Getting Started
 

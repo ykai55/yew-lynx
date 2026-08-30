@@ -106,12 +106,14 @@ impl BuildPlan {
             root.join("Cargo.lock"),
             root.join("crates/element-bridge-core"),
             root.join("crates/element-bridge-wasm-guest"),
+            root.join("crates/lynx"),
         ];
         let (packages, artifacts) = match backend {
             Backend::Yew => {
                 watch_paths.extend([
                     root.join("examples/counter"),
                     root.join("adapters/yew"),
+                    root.join("runtimes/yew"),
                     root.join(".deps/yew/packages/yew"),
                 ]);
                 (
@@ -123,6 +125,7 @@ impl BuildPlan {
                 watch_paths.extend([
                     root.join("examples/dioxus-counter"),
                     root.join("adapters/dioxus"),
+                    root.join("runtimes/dioxus"),
                 ]);
                 (
                     vec!["lynx-element-bridge-dioxus-counter"],
@@ -138,6 +141,8 @@ impl BuildPlan {
                     root.join("examples/dioxus-counter"),
                     root.join("adapters/yew"),
                     root.join("adapters/dioxus"),
+                    root.join("runtimes/yew"),
+                    root.join("runtimes/dioxus"),
                     root.join(".deps/yew/packages/yew"),
                 ]);
                 (
@@ -534,6 +539,10 @@ mod tests {
                 .contains(&PathBuf::from("/repo/examples/counter"))
         );
         assert!(
+            plan.watch_paths
+                .contains(&PathBuf::from("/repo/runtimes/yew"))
+        );
+        assert!(
             !plan
                 .watch_paths
                 .contains(&PathBuf::from("/repo/examples/dioxus-counter"))
@@ -551,6 +560,10 @@ mod tests {
         assert!(
             plan.watch_paths
                 .contains(&PathBuf::from("/repo/examples/dioxus-counter"))
+        );
+        assert!(
+            plan.watch_paths
+                .contains(&PathBuf::from("/repo/runtimes/dioxus"))
         );
         assert!(
             !plan
