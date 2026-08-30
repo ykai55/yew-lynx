@@ -1,6 +1,6 @@
 use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage, NodeId, Status};
 use lynx_element_bridge_wasm_guest::{
-    AbiRuntime, EventRequest, GuestApplication, GuestResult, MountRequest, PROTOCOL_VERSION_V2,
+    AbiRuntime, EventRequest, GuestApplication, GuestResult, MountRequest, PROTOCOL_VERSION,
     decode_guest_response, encode_event_request, encode_mount_request,
 };
 
@@ -47,10 +47,9 @@ fn put_input(runtime: &mut AbiRuntime<TestApplication>, input: &[u8]) -> usize {
 fn abi_buffers_remain_owned_until_the_matching_deallocator_runs() {
     let mut runtime = AbiRuntime::<TestApplication>::new();
     let mount = encode_mount_request(&MountRequest {
-        protocol_version: PROTOCOL_VERSION_V2,
+        protocol_version: PROTOCOL_VERSION,
         root: NodeId::new(1).unwrap(),
-    })
-    .unwrap();
+    });
     let input = put_input(&mut runtime, &mount);
     let output = runtime.mount(input, mount.len() as u32);
 
@@ -85,10 +84,9 @@ fn lifecycle_supports_repeated_calls_and_deterministic_errors() {
     assert!(runtime.output_dealloc(invalid.pointer, invalid.length));
 
     let mount = encode_mount_request(&MountRequest {
-        protocol_version: PROTOCOL_VERSION_V2,
+        protocol_version: PROTOCOL_VERSION,
         root: NodeId::new(1).unwrap(),
-    })
-    .unwrap();
+    });
     let input = put_input(&mut runtime, &mount);
     let mounted = runtime.mount(input, mount.len() as u32);
     assert!(matches!(
@@ -99,15 +97,14 @@ fn lifecycle_supports_repeated_calls_and_deterministic_errors() {
     ));
 
     let event = encode_event_request(&EventRequest {
-        protocol_version: PROTOCOL_VERSION_V2,
+        protocol_version: PROTOCOL_VERSION,
         event: EventMessage {
             listener: lynx_element_bridge_core::ListenerId::new(2).unwrap(),
             callback: lynx_element_bridge_core::CallbackId::new(3).unwrap(),
             content_type: "application/octet-stream".into(),
             payload: Vec::new(),
         },
-    })
-    .unwrap();
+    });
     let event_input = put_input(&mut runtime, &event);
     let dispatched = runtime.dispatch_event(event_input, event.len() as u32);
     assert!(matches!(

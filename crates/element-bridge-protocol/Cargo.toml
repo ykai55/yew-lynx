@@ -1,5 +1,5 @@
 [package]
-name = "lynx-element-bridge-wasm-guest"
+name = "lynx-element-bridge-protocol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,5 +8,5 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+flatbuffers = "=25.2.10"
 lynx-element-bridge-core.workspace = true
-lynx-element-bridge-protocol.workspace = true

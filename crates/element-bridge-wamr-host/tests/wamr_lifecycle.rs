@@ -11,10 +11,10 @@ use std::sync::{LazyLock, Mutex};
 
 use lynx_element_bridge_core::{NodeId, Status};
 use lynx_element_bridge_ffi::native_host::*;
-use lynx_element_bridge_wamr_host::{WamrBackend, mount_module, replace_module};
-use lynx_element_bridge_wasm_guest::{
-    GuestResponse, GuestResult, PROTOCOL_VERSION_V2, encode_guest_response,
+use lynx_element_bridge_protocol::{
+    GuestResponse, GuestResult, PROTOCOL_VERSION, encode_guest_response,
 };
+use lynx_element_bridge_wamr_host::{WamrBackend, mount_module, replace_module};
 
 const HOST: NativeHostHandle = 7;
 const RENDERER: NativeRendererHandle = 8;
@@ -472,7 +472,7 @@ fn preflight_rejects_bad_version_and_missing_exports_and_contains_traps() {
         Status::Unsupported
     );
 
-    let trapped = wat::parse_str(module_wat("(i32.const 2)", "unreachable")).unwrap();
+    let trapped = wat::parse_str(module_wat("(i32.const 3)", "unreachable")).unwrap();
     let error = match WamrBackend::preflight(&trapped)
         .unwrap()
         .mount(NodeId::new(1).unwrap())
@@ -513,14 +513,13 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
     let _serial = TEST_LOCK.lock().unwrap();
     let truncated = {
         let mut response = encode_guest_response(&GuestResponse {
-            protocol_version: PROTOCOL_VERSION_V2,
+            protocol_version: PROTOCOL_VERSION,
             result: GuestResult::Err {
                 status: Status::HostError,
                 message: "guest failure".into(),
             },
-        })
-        .unwrap();
-        response.pop();
+        });
+        response.truncate(response.len() / 2);
         response
     };
     let v1_response = encode_guest_response(&GuestResponse {
@@ -529,8 +528,7 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
             status: Status::HostError,
             message: "v1 response".into(),
         },
-    })
-    .unwrap();
+    });
     let cases = [
         (
             "zero descriptor",
@@ -557,16 +555,16 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
             "unsupported protocol version 1",
         ),
         (
-            "malformed postcard",
+            "malformed FlatBuffers",
             output_module(&[1, 2], (1024_u64 << 32) | 2, 1),
             Status::InvalidArgument,
-            "invalid postcard message: Serde Deserialization Error",
+            "invalid FlatBuffers file identifier; expected LEB3",
         ),
         (
-            "truncated postcard",
+            "truncated FlatBuffers",
             output_module(&truncated, (1024_u64 << 32) | truncated.len() as u64, 1),
             Status::InvalidArgument,
-            "invalid postcard message: Hit the end of buffer, expected more data",
+            "invalid FlatBuffers message:",
         ),
         (
             "rejected output deallocation",
@@ -585,7 +583,11 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
             Err(error) => error,
         };
         assert_eq!(error.status, expected_status, "{name}");
-        assert_eq!(error.message, expected_message, "{name}");
+        assert!(
+            error.message.starts_with(expected_message),
+            "{name}: expected {expected_message:?}, found {:?}",
+            error.message
+        );
     }
 }
 
@@ -662,13 +664,12 @@ fn fixture_module() -> Vec<u8> {
 
 fn error_with_ok_status_module() -> Vec<u8> {
     let response = encode_guest_response(&GuestResponse {
-        protocol_version: PROTOCOL_VERSION_V2,
+        protocol_version: PROTOCOL_VERSION,
         result: GuestResult::Err {
             status: Status::Ok,
             message: "invalid guest error".into(),
         },
-    })
-    .unwrap();
+    });
     output_module(&response, (1024_u64 << 32) | response.len() as u64, 1)
 }
 
@@ -681,7 +682,7 @@ fn output_module(bytes: &[u8], descriptor: u64, output_dealloc_result: u32) -> V
         r#"(module
             (memory 1)
             (data (i32.const 1024) "{data}")
-            (func (export "version") (result i32) i32.const 2)
+            (func (export "version") (result i32) i32.const 3)
             (func (export "alloc") (param i32) (result i32) i32.const 8)
             (func (export "dealloc") (param i32 i32) (result i32) i32.const 1)
             (func (export "mount") (param i32 i32) (result i64)

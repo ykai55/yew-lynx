@@ -5,8 +5,6 @@ use std::fmt;
 use std::thread::{self, ThreadId};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -34,8 +32,6 @@ impl From<NodeId> for u32 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct ListenerId(u32);
 
 impl ListenerId {
@@ -63,8 +59,6 @@ impl From<ListenerId> for u32 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))]
 pub struct CallbackId(u32);
 
 impl CallbackId {
@@ -103,7 +97,6 @@ fn nonzero_id(value: u32, kind: &'static str) -> Result<u32, BridgeError> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum Status {
     Ok,
     InvalidArgument,
@@ -119,7 +112,6 @@ pub enum Status {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct BridgeError {
     pub status: Status,
     pub message: String,
@@ -143,7 +135,6 @@ impl fmt::Display for BridgeError {
 impl std::error::Error for BridgeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum Command {
     CreateElement {
         node: NodeId,
@@ -190,7 +181,6 @@ pub enum Command {
 
 /// An ordered set of in-memory renderer mutations scoped by its owning runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CommandBatch {
     pub sequence: u32,
     pub commands: Vec<Command>,
@@ -198,7 +188,6 @@ pub struct CommandBatch {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct EventMessage {
     pub listener: ListenerId,
     pub callback: CallbackId,

@@ -2,93 +2,12 @@
 
 use std::collections::HashMap;
 
-use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage, NodeId, Status};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-
-pub const PROTOCOL_VERSION_V2: u32 = 2;
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct MountRequest {
-    pub protocol_version: u32,
-    pub root: NodeId,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct EventRequest {
-    pub protocol_version: u32,
-    pub event: EventMessage,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct GuestResponse {
-    pub protocol_version: u32,
-    pub result: GuestResult,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum GuestResult {
-    Ok(CommandBatch),
-    Err { status: Status, message: String },
-}
-
-impl GuestResponse {
-    pub fn from_result(result: Result<CommandBatch, BridgeError>) -> Self {
-        Self {
-            protocol_version: PROTOCOL_VERSION_V2,
-            result: match result {
-                Ok(batch) => GuestResult::Ok(batch),
-                Err(error) => GuestResult::Err {
-                    status: error.status,
-                    message: error.message,
-                },
-            },
-        }
-    }
-}
-
-pub fn encode_mount_request(request: &MountRequest) -> Result<Vec<u8>, postcard::Error> {
-    postcard::to_allocvec(request)
-}
-
-pub fn decode_mount_request(bytes: &[u8]) -> Result<MountRequest, BridgeError> {
-    decode_versioned(bytes, |request: &MountRequest| request.protocol_version)
-}
-
-pub fn encode_event_request(request: &EventRequest) -> Result<Vec<u8>, postcard::Error> {
-    postcard::to_allocvec(request)
-}
-
-pub fn decode_event_request(bytes: &[u8]) -> Result<EventRequest, BridgeError> {
-    decode_versioned(bytes, |request: &EventRequest| request.protocol_version)
-}
-
-pub fn encode_guest_response(response: &GuestResponse) -> Result<Vec<u8>, postcard::Error> {
-    postcard::to_allocvec(response)
-}
-
-pub fn decode_guest_response(bytes: &[u8]) -> Result<GuestResponse, BridgeError> {
-    decode_versioned(bytes, |response: &GuestResponse| response.protocol_version)
-}
-
-fn decode_versioned<T: DeserializeOwned>(
-    bytes: &[u8],
-    version: impl FnOnce(&T) -> u32,
-) -> Result<T, BridgeError> {
-    let value = postcard::from_bytes(bytes).map_err(|error| {
-        BridgeError::new(
-            Status::InvalidArgument,
-            format!("invalid postcard message: {error}"),
-        )
-    })?;
-    let actual = version(&value);
-    if actual != PROTOCOL_VERSION_V2 {
-        return Err(BridgeError::new(
-            Status::Unsupported,
-            format!("unsupported protocol version {actual}"),
-        ));
-    }
-    Ok(value)
-}
+use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage, Status};
+pub use lynx_element_bridge_protocol::{
+    EventRequest, GuestResponse, GuestResult, MountRequest, PROTOCOL_VERSION, decode_event_request,
+    decode_guest_response, decode_mount_request, encode_event_request, encode_guest_response,
+    encode_mount_request,
+};
 
 pub trait GuestApplication: Sized + 'static {
     fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError>;
@@ -234,9 +153,7 @@ impl<A: GuestApplication> AbiRuntime<A> {
     }
 
     fn store_output(&mut self, response: GuestResponse) -> BufferDescriptor {
-        let mut bytes = postcard::to_allocvec(&response)
-            .expect("serializing a guest response into a Vec must succeed")
-            .into_boxed_slice();
+        let mut bytes = encode_guest_response(&response).into_boxed_slice();
         let descriptor = BufferDescriptor {
             pointer: bytes.as_mut_ptr() as usize,
             length: bytes.len() as u32,
@@ -280,7 +197,7 @@ macro_rules! export_guest {
 
             #[unsafe(no_mangle)]
             pub extern "C" fn version() -> u32 {
-                $crate::PROTOCOL_VERSION_V2
+                $crate::PROTOCOL_VERSION
             }
 
             #[unsafe(no_mangle)]

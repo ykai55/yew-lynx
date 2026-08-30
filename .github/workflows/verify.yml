@@ -36,5 +36,22 @@ jobs:
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;25.2.9519653"
 
+      - name: Verify checked-in FlatBuffers bindings
+        env:
+          FLATC_SHA256: 6f01258d7475806f375d6da66a61df47add8016edd73f1774673f37b80b9a711
+          FLATC_URL: https://github.com/google/flatbuffers/releases/download/v25.2.10/Linux.flatc.binary.g%2B%2B-13.zip
+        run: |
+          archive="$RUNNER_TEMP/flatc-25.2.10.zip"
+          directory="$RUNNER_TEMP/flatc-25.2.10"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$FLATC_URL" --output "$archive"
+          printf '%s  %s\n' "$FLATC_SHA256" "$archive" | sha256sum --check --strict
+          mkdir -p "$directory"
+          unzip -q "$archive" -d "$directory"
+          chmod +x "$directory/flatc"
+          PATH="$directory:$PATH" ./crates/element-bridge-protocol/regenerate.sh
+          git diff --exit-code -- \
+            crates/element-bridge-protocol/src/guest_protocol_generated.rs
+
       - name: Run repository verification
         run: ./scripts/verify.sh

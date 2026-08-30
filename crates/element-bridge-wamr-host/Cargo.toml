@@ -16,16 +16,17 @@ default = []
 wamr = [
   "dep:lynx-element-bridge-core",
   "dep:lynx-element-bridge-ffi",
-  "dep:lynx-element-bridge-wasm-guest",
+  "dep:lynx-element-bridge-protocol",
 ]
 
 [dependencies]
 lynx-element-bridge-core = { workspace = true, optional = true }
 lynx-element-bridge-ffi = { workspace = true, optional = true }
-lynx-element-bridge-wasm-guest = { workspace = true, optional = true }
+lynx-element-bridge-protocol = { workspace = true, optional = true }
 
 [build-dependencies]
 cc = "1.2.16"
 
 [dev-dependencies]
+lynx-element-bridge-protocol.workspace = true
 wat = "1.225.0"
