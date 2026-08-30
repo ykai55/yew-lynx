@@ -1,6 +1,6 @@
 [package]
 name = "yew-lynx-counter"
-description = "Focused recording fixture for Yew native render, tap, and cleanup checks"
+description = "Yew counter application for Lynx Native and WASM rendering"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,15 +8,8 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-[package.metadata.yew-lynx]
-fixture = "host-independent-recording-backend"
-verified-behavior = ["initial-render", "tap-update", "listener-cleanup", "flush"]
-
 [lib]
 crate-type = ["staticlib", "cdylib", "rlib"]
-
-[features]
-replacement-fixture = []
 
 [dependencies]
 lynx = { workspace = true, features = ["yew"] }

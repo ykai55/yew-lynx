@@ -1,14 +1,7 @@
 #![deny(unsafe_code)]
 
-#[cfg(not(test))]
 mod app;
-#[cfg(test)]
-#[path = "app_test_fixture.rs"]
-mod app;
-#[cfg(not(feature = "replacement-fixture"))]
 const INITIAL_COUNT: u32 = 0;
-#[cfg(feature = "replacement-fixture")]
-const INITIAL_COUNT: u32 = 100;
 
 lynx::dioxus::launch!(app::App);
 

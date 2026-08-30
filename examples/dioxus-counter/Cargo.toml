@@ -11,9 +11,6 @@ publish.workspace = true
 [lib]
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-[features]
-replacement-fixture = []
-
 [dependencies]
 dioxus-core.workspace = true
 lynx = { workspace = true, features = ["dioxus"] }

@@ -15,7 +15,7 @@ fn batch(response: GuestResponse) -> lynx_element_bridge_core::CommandBatch {
 }
 
 #[test]
-fn yew_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() {
+fn yew_counter_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() {
     let root = NodeId::new(1).unwrap();
     let mut runtime = GuestRuntime::<lynx_yew_runtime::Runtime<App>>::new();
     let mut host = HostFake::new(root);
@@ -36,7 +36,7 @@ fn yew_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() 
         .expect("the real Yew counter should register its tap listener");
     host.apply(&mounted).unwrap();
     assert_eq!(
-        host.snapshot().children[0].children[0].children[0]
+        host.snapshot().children[0].children[1].children[0]
             .text
             .as_deref(),
         Some(format!("Count: {INITIAL_COUNT}").as_str())
@@ -54,7 +54,7 @@ fn yew_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() 
     })));
     host.apply(&updated).unwrap();
     assert_eq!(
-        host.snapshot().children[0].children[0].children[0]
+        host.snapshot().children[0].children[1].children[0]
             .text
             .as_deref(),
         Some(format!("Count: {}", INITIAL_COUNT + 1).as_str())

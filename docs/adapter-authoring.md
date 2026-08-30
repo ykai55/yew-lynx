@@ -84,8 +84,8 @@ prove the same observable behavior for:
 3. One framework update.
 4. Explicit destroy and listener cleanup.
 
-Also add a real framework runtime fixture and include the shared native
-lifecycle tests. Those tests must exercise native mount, event callback, update,
+Also add a real framework application and include the shared native lifecycle
+tests. Those tests must exercise native mount, event callback, update,
 normal destroy, abandon, wrong-thread, reentry/busy, poisoning, panic
 containment, and stale-session behavior.
 
