@@ -12,8 +12,8 @@ use lynx_element_bridge_ffi::{
     LynxElementBridgeNativeMountResult, LynxElementBridgeSession, native_abandon_session,
     native_destroy_session, native_mount, native_replace_backend,
 };
-use lynx_element_bridge_wasm_guest::{
-    EventRequest, GuestResponse, GuestResult, MountRequest, PROTOCOL_VERSION_V2,
+use lynx_element_bridge_protocol::{
+    EventRequest, GuestResponse, GuestResult, MountRequest, PROTOCOL_VERSION,
     decode_guest_response, encode_event_request, encode_mount_request,
 };
 
@@ -227,7 +227,7 @@ impl WamrGuest {
             guest.call(initialize, 0, &mut cells)?;
         }
         let actual = guest.call_i32(version, &[])?;
-        if actual != PROTOCOL_VERSION_V2 {
+        if actual != PROTOCOL_VERSION {
             return Err(BackendError::recoverable(
                 Status::Unsupported,
                 format!("unsupported guest protocol version {actual}"),
@@ -422,10 +422,9 @@ impl WamrBackend {
 
     fn mount_application(&mut self, root: NodeId) -> Result<CommandBatch, BackendError> {
         let request = encode_mount_request(&MountRequest {
-            protocol_version: PROTOCOL_VERSION_V2,
+            protocol_version: PROTOCOL_VERSION,
             root,
-        })
-        .map_err(|error| BackendError::fatal(Status::InternalError, error.to_string()))?;
+        });
         let mount = self.guest.exports.mount;
         self.guest.request(mount, &request)
     }
@@ -444,10 +443,9 @@ impl BridgeBackendCandidate for WamrBackend {
 impl BridgeBackend for WamrBackend {
     fn dispatch_event(&mut self, event: EventMessage) -> Result<CommandBatch, BackendError> {
         let request = encode_event_request(&EventRequest {
-            protocol_version: PROTOCOL_VERSION_V2,
+            protocol_version: PROTOCOL_VERSION,
             event,
-        })
-        .map_err(|error| BackendError::fatal(Status::InternalError, error.to_string()))?;
+        });
         let dispatch = self.guest.exports.dispatch_event;
         self.guest.request(dispatch, &request)
     }

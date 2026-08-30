@@ -1,6 +1,6 @@
 use lynx_element_bridge_core::{Command, EventMessage, HostFake, NodeId};
 use lynx_element_bridge_wasm_guest::{
-    EventRequest, GuestResponse, GuestResult, GuestRuntime, MountRequest, PROTOCOL_VERSION_V2,
+    EventRequest, GuestResponse, GuestResult, GuestRuntime, MountRequest, PROTOCOL_VERSION,
     encode_event_request, encode_mount_request,
 };
 
@@ -20,15 +20,10 @@ fn yew_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() 
     let mut runtime = GuestRuntime::<YewCounter>::new();
     let mut host = HostFake::new(root);
 
-    let mounted = batch(
-        runtime.mount(
-            &encode_mount_request(&MountRequest {
-                protocol_version: PROTOCOL_VERSION_V2,
-                root,
-            })
-            .unwrap(),
-        ),
-    );
+    let mounted = batch(runtime.mount(&encode_mount_request(&MountRequest {
+        protocol_version: PROTOCOL_VERSION,
+        root,
+    })));
     let (listener, callback) = mounted
         .commands
         .iter()
@@ -48,20 +43,15 @@ fn yew_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() 
     );
     assert_eq!(host.listener_count(), 1);
 
-    let updated = batch(
-        runtime.dispatch_event(
-            &encode_event_request(&EventRequest {
-                protocol_version: PROTOCOL_VERSION_V2,
-                event: EventMessage {
-                    listener,
-                    callback,
-                    content_type: "application/vnd.lynx.tap".into(),
-                    payload: vec![0, 255],
-                },
-            })
-            .unwrap(),
-        ),
-    );
+    let updated = batch(runtime.dispatch_event(&encode_event_request(&EventRequest {
+        protocol_version: PROTOCOL_VERSION,
+        event: EventMessage {
+            listener,
+            callback,
+            content_type: "application/vnd.lynx.tap".into(),
+            payload: vec![0, 255],
+        },
+    })));
     host.apply(&updated).unwrap();
     assert_eq!(
         host.snapshot().children[0].children[0].children[0]

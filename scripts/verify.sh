@@ -13,6 +13,7 @@ readonly LYNX_TOOLS_SHARED_SHA="ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea"
 readonly LYNX_TOOLS_SHARED_PATCH_DIR="$ROOT_DIR/patches/lynx-tools-shared"
 readonly WAMR_SHA="25bd7eb63e828e4bd242cc9b38d260b4b31c6605"
 readonly SCRIPTS=(
+  "$ROOT_DIR/crates/element-bridge-protocol/regenerate.sh"
   "$ROOT_DIR/scripts/android-build-utils.sh"
   "$ROOT_DIR/scripts/bootstrap-yew.sh"
   "$ROOT_DIR/scripts/build-android.sh"
@@ -309,10 +310,10 @@ verify_removed_transport() {
 
   references="$(
     git -C "$ROOT_DIR" grep --untracked -ni -E \
-      'flatbuffers|flatc|protocol[- ]v2|wire buffer|wire transport' \
+      'postcard|protocol[- ]v2|wire buffer|wire transport' \
       -- . \
       ':(exclude)third_party/lynx' \
-      ':(exclude)examples/android/gradle/verification-metadata.xml' \
+      ':(exclude)docs/flatbuffers-v3-spec.md' \
       ':(exclude)scripts/verify.sh' || true
   )"
   [[ -z "$references" ]] || {

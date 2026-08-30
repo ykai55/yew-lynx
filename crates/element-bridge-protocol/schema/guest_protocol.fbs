@@ -1,0 +1,94 @@
+namespace lynx.element_bridge.protocol;
+
+enum Status : ubyte {
+  Ok = 0,
+  InvalidArgument = 1,
+  InvalidSession = 2,
+  WrongThread = 3,
+  Unsupported = 4,
+  InvalidOwnership = 5,
+  InvalidListener = 6,
+  ResourceExhausted = 7,
+  HostError = 8,
+  Panic = 9,
+  InternalError = 10
+}
+
+table MountRequest {
+  root:uint;
+}
+
+table EventRequest {
+  listener:uint;
+  callback:uint;
+  content_type:string (required);
+  payload:[ubyte] (required);
+}
+
+table CreateElement { node:uint; tag:string (required); }
+table CreateRawText { node:uint; text:string (required); }
+table AppendElement { parent:uint; child:uint; }
+table InsertElementBefore { parent:uint; child:uint; reference:uint; }
+table RemoveElement { parent:uint; child:uint; }
+table DestroyNode { node:uint; }
+table SetAttribute { node:uint; name:string (required); value:string; }
+table AddEventListener {
+  node:uint;
+  listener:uint;
+  callback:uint;
+  name:string (required);
+}
+table RemoveEventListener {
+  node:uint;
+  listener:uint;
+  callback:uint;
+  name:string (required);
+}
+
+union CommandPayload {
+  CreateElement = 1,
+  CreateRawText = 2,
+  AppendElement = 3,
+  InsertElementBefore = 4,
+  RemoveElement = 5,
+  DestroyNode = 6,
+  SetAttribute = 7,
+  AddEventListener = 8,
+  RemoveEventListener = 9
+}
+
+table Command {
+  payload:CommandPayload;
+}
+
+table CommandBatch {
+  sequence:uint;
+  commands:[Command] (required);
+  final_commit:bool;
+}
+
+table Success { batch:CommandBatch (required); }
+table Failure { status:Status; message:string (required); }
+
+union GuestResult {
+  Success = 1,
+  Failure = 2
+}
+
+table GuestResponse {
+  result:GuestResult;
+}
+
+union Message {
+  MountRequest = 1,
+  EventRequest = 2,
+  GuestResponse = 3
+}
+
+table Envelope {
+  protocol_version:uint;
+  message:Message;
+}
+
+root_type Envelope;
+file_identifier "LEB3";

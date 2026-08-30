@@ -77,7 +77,7 @@ Native
 
 WASM
   Yew/Dioxus wasm32-wasip1 guest
-      -> Postcard guest ABI
+      -> FlatBuffers v3 guest ABI
       -> WAMR host
       -> element-bridge-ffi / NativeHost
       -> Lynx C API
@@ -121,7 +121,8 @@ cleanup.
 | `adapters/dioxus/` | Dioxus `WriteMutations` and Lynx-native `view`/`text` RSX vocabulary |
 | `crates/adapter-conformance/` | Cross-framework mount, update, event, and destroy conformance |
 | `crates/element-bridge-ffi/` | Native session registry, C ABI lifecycle, and `NativeHost` |
-| `crates/element-bridge-wasm-guest/` | Versioned WASM guest ABI and Postcard protocol |
+| `crates/element-bridge-protocol/` | Shared FlatBuffers v3 schema, checked-in bindings, owned types, and codecs |
+| `crates/element-bridge-wasm-guest/` | Versioned WASM guest ABI and application lifecycle |
 | `crates/element-bridge-wamr-host/` | WAMR embedding and guest-to-native backend integration |
 | `adapters/android/` | JNI/CMake bridge that resolves the Lynx function table with `dlsym` |
 | `examples/counter/` | Yew Native and WASM counter application |
