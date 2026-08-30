@@ -1,20 +1,17 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use lynx::dioxus::prelude::dioxus_core::schedule_update;
 use lynx::dioxus::prelude::*;
 
 pub(crate) struct CounterModel {
     count: Cell<u32>,
-    schedule: RefCell<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl CounterModel {
     pub(crate) fn new(count: u32) -> Self {
         Self {
             count: Cell::new(count),
-            schedule: RefCell::new(None),
         }
     }
 }
