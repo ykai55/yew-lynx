@@ -296,7 +296,7 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests {
-    use lynx_element_bridge_core::{Command, HostFake};
+    use lynx_element_bridge_core::{CallbackId, Command, HostFake, ListenerId};
 
     use super::*;
     use crate::prelude::*;
@@ -365,5 +365,101 @@ mod tests {
             .unwrap();
         assert!(host.snapshot().children.is_empty());
         assert_eq!(host.listener_count(), 0);
+    }
+
+    #[test]
+    fn guest_runtime_maps_stale_events_and_destroys_cleanly() {
+        let root = NodeId::new(1).unwrap();
+        let (mut runtime, mounted) = <Runtime<TestApp> as GuestApplication>::mount(MountRequest {
+            protocol_version: lynx_element_bridge_wasm_guest::PROTOCOL_VERSION,
+            root,
+        })
+        .unwrap();
+        let mut host = HostFake::new(root);
+        host.apply(&mounted).unwrap();
+
+        let error = GuestApplication::dispatch_event(
+            &mut runtime,
+            EventMessage {
+                listener: ListenerId::new(999).unwrap(),
+                callback: CallbackId::new(999).unwrap(),
+                content_type: "application/vnd.lynx.tap".into(),
+                payload: Vec::new(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Status::InvalidListener);
+
+        host.apply(&GuestApplication::destroy(runtime).unwrap())
+            .unwrap();
+        assert!(host.snapshot().children.is_empty());
+    }
+
+    #[test]
+    fn native_backend_handles_poison_discard_and_abandon() {
+        let root = NodeId::new(1).unwrap();
+        let (mut poisoned, _) = Runtime::<TestApp>::mount(root).unwrap();
+        BridgeBackend::discard_pending(&mut poisoned);
+        let error = BridgeBackend::destroy(Box::new(poisoned), true).unwrap_err();
+        assert_eq!(error.status, Status::HostError);
+
+        let (mut abandoned, _) = Runtime::<TestApp>::mount(root).unwrap();
+        BridgeBackend::abandon(&mut abandoned);
+        BridgeBackend::abandon(&mut abandoned);
+    }
+
+    #[test]
+    fn error_mappings_preserve_public_status_semantics() {
+        let bridge = BridgeError::new(Status::InvalidArgument, "bridge");
+        assert_eq!(
+            guest_error(YewAdapterError::Bridge(bridge.clone())).status,
+            Status::InvalidArgument
+        );
+        assert_eq!(
+            guest_error(YewAdapterError::InvalidListener(1)).status,
+            Status::InvalidListener
+        );
+        assert_eq!(
+            guest_error(YewAdapterError::CallbackExhausted).status,
+            Status::ResourceExhausted
+        );
+        assert_eq!(
+            guest_error(YewAdapterError::Borrowed("listeners")).status,
+            Status::HostError
+        );
+
+        assert_eq!(
+            adapter_error(YewAdapterError::EventMismatch {
+                expected: "tap".into(),
+                actual: "click".into(),
+            })
+            .status,
+            Status::InvalidListener
+        );
+        assert_eq!(
+            adapter_error(YewAdapterError::Bridge(bridge)).status,
+            Status::InvalidArgument
+        );
+        assert_eq!(
+            adapter_error(YewAdapterError::CallbackExhausted).status,
+            Status::ResourceExhausted
+        );
+        assert_eq!(
+            adapter_error(YewAdapterError::InvalidNode(1)).status,
+            Status::HostError
+        );
+    }
+
+    #[test]
+    fn native_wrappers_reject_missing_api_and_stale_sessions() {
+        // SAFETY: A missing API resolver is rejected before native renderer access.
+        let mounted = unsafe { native_mount::<TestApp>(None, 1) };
+        assert_eq!(
+            mounted.status,
+            lynx_element_bridge_ffi::native_host::NATIVE_STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(mounted.session, 0);
+        assert_eq!(native_destroy_session(0).consumed, 0);
+        assert_eq!(native_abandon_session(0).consumed, 0);
     }
 }
