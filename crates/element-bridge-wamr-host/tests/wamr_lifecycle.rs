@@ -423,7 +423,7 @@ fn real_wamr_runs_yew_guest_mount_event_and_destroy_through_native_renderer() {
     let mounted = unsafe { mount_module(Some(get_api), HOST, &module) };
     assert_eq!(mounted.status, NATIVE_STATUS_OK);
     assert_ne!(mounted.session, 0);
-    assert_eq!(STATE.lock().unwrap().listeners, HashSet::from([1]));
+    assert_eq!(STATE.lock().unwrap().listeners, HashSet::from([1, 2]));
     assert!(STATE.lock().unwrap().nodes.len() > 2);
 
     let callbacks = STATE.lock().unwrap().callbacks.unwrap();
