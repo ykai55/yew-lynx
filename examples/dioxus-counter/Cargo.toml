@@ -16,14 +16,12 @@ replacement-fixture = []
 
 [dependencies]
 dioxus-core.workspace = true
+lynx = { workspace = true, features = ["dioxus"] }
 lynx-element-bridge-core.workspace = true
-lynx-element-bridge-dioxus = { path = "../../adapters/dioxus" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lynx-element-bridge-ffi.workspace = true
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-lynx-element-bridge-wasm-guest.workspace = true
-
 [dev-dependencies]
 lynx-element-bridge-wasm-guest.workspace = true
+lynx-dioxus-runtime.workspace = true

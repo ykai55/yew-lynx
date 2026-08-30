@@ -4,7 +4,7 @@ use lynx_element_bridge_wasm_guest::{
     encode_event_request, encode_mount_request,
 };
 
-use super::{DioxusCounter, INITIAL_COUNT};
+use super::{__LynxDioxusRoot, INITIAL_COUNT};
 
 fn batch(response: GuestResponse) -> lynx_element_bridge_core::CommandBatch {
     match response.result {
@@ -16,7 +16,7 @@ fn batch(response: GuestResponse) -> lynx_element_bridge_core::CommandBatch {
 #[test]
 fn dioxus_fixture_mount_event_and_destroy_conforms_to_the_host_command_lifecycle() {
     let root = NodeId::new(1).unwrap();
-    let mut runtime = GuestRuntime::<DioxusCounter>::new();
+    let mut runtime = GuestRuntime::<lynx_dioxus_runtime::Runtime<__LynxDioxusRoot>>::new();
     let mut host = HostFake::new(root);
 
     let mounted = batch(runtime.mount(&encode_mount_request(&MountRequest {

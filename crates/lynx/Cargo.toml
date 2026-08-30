@@ -1,0 +1,18 @@
+[package]
+name = "lynx"
+description = "Application facade for Yew and Dioxus on Lynx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+yew = ["dep:lynx-yew-runtime"]
+dioxus = ["dep:lynx-dioxus-runtime"]
+
+[dependencies]
+lynx-yew-runtime = { workspace = true, optional = true }
+lynx-dioxus-runtime = { workspace = true, optional = true }

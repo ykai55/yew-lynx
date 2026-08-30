@@ -110,6 +110,9 @@ Lynx 接受 batch 中的部分命令后不会进行回滚。Host 部分失败会
 | `crates/element-bridge-core/` | 与框架无关的 ID、命令、事件、session 不变量和 `HostFake` |
 | `adapters/yew/` | 将打过补丁的 Yew `NativeRendererBackend` 接入核心 `Session` |
 | `adapters/dioxus/` | Dioxus `WriteMutations` 以及 Lynx 原生 `view`/`text` RSX 词汇 |
+| `runtimes/yew/` | 通用的 Yew 挂载、事件、销毁以及 Native/WASM 入口生命周期 |
+| `runtimes/dioxus/` | 通用的 Dioxus 挂载、事件、销毁以及 Native/WASM 入口生命周期 |
+| `crates/lynx/` | 按 feature 启用的 `lynx::yew` 与 `lynx::dioxus` 应用 facade |
 | `crates/adapter-conformance/` | 跨框架的挂载、更新、事件和销毁一致性测试 |
 | `crates/element-bridge-ffi/` | Native session registry、C ABI 生命周期和 `NativeHost` |
 | `crates/element-bridge-protocol/` | Host/Guest 共享的 FlatBuffers v3 schema、已签入 bindings、owned 类型和 codecs |
@@ -126,6 +129,36 @@ Lynx 接受 batch 中的部分命令后不会进行回滚。Host 部分失败会
 
 实际生效的 Lynx 和 Yew 集成由固定的上游版本和这些补丁系列共同组成；不能假设
 这些 API 在其他任意版本的上游项目中存在。
+
+应用在最终 crate 中选择一个 facade feature，并传入根组件。宏负责生成目标相关的
+ABI 入口，业务代码无需实现 bridge 生命周期 trait：
+
+```rust
+use lynx::yew::prelude::*;
+
+#[function_component(App)]
+fn app() -> Html {
+    html! { <text>{"Hello Lynx"}</text> }
+}
+
+lynx::yew::launch!(App);
+```
+
+```rust
+use lynx::dioxus::prelude::*;
+
+#[allow(non_snake_case)]
+fn App() -> Element {
+    rsx! { text { "Hello Lynx" } }
+}
+
+lynx::dioxus::launch!(App);
+```
+
+由于过程宏会在应用 crate 中解析框架 crate 名称，Yew 应用还需直接依赖 `yew`，
+Dioxus 应用还需直接依赖 `dioxus-core`。Native `launch!` 会在最终 crate 中展开导出的
+C ABI，因此应用可以使用 `deny(unsafe_code)`，但不能使用宏无法局部覆盖的
+`forbid(unsafe_code)`；宏只会为其生成的 ABI seam 放宽该 lint。
 
 ## 快速开始
 
