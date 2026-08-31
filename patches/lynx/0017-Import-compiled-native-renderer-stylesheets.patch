@@ -1,0 +1,475 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Mon, 31 Aug 2026 12:00:00 +0800
+Subject: [PATCH 17/17] Import compiled native renderer stylesheets
+
+Add compiled CSS fragment import using one fixed native CSS profile. Decode
+through RuntimeCSSReader, preserve independently adopted stylesheet ownership,
+and clear session-owned stylesheets between application epochs.
+---
+diff --git a/core/public/lynx_native_renderer.h b/core/public/lynx_native_renderer.h
+index bcad99983..de974c489 100644
+--- a/core/public/lynx_native_renderer.h
++++ b/core/public/lynx_native_renderer.h
+@@ -126,6 +126,18 @@ typedef struct LynxNativeRendererApiV1 {
+       LynxNativeTimerHandle* timer);
+   LynxNativeRendererStatus (*cancel_timer)(LynxNativeRendererHandle renderer,
+                                            LynxNativeTimerHandle timer);
++  /*
++   * Imports one raw CSS fragment produced by this pinned Lynx encoder with
++   * target SDK = current engine version, CSS rule/parser/selector/invalidation
++   * enabled, and inline CSS variables disabled. No other compile profile is
++   * supported.
++   */
++  LynxNativeRendererStatus (*import_style_sheet)(
++      LynxNativeRendererHandle renderer,
++      LynxNativeBytes fragment);
++  /* Removes only stylesheets imported through this renderer handle. */
++  LynxNativeRendererStatus (*clear_style_sheets)(
++      LynxNativeRendererHandle renderer);
+ } LynxNativeRendererApiV1;
+ 
+ /*
+diff --git a/core/renderer/css/css_fragment_decorator.cc b/core/renderer/css/css_fragment_decorator.cc
+index 76d94de2a..174497482 100644
+--- a/core/renderer/css/css_fragment_decorator.cc
++++ b/core/renderer/css/css_fragment_decorator.cc
+@@ -231,24 +231,34 @@ GET_PARSER_TOKEN_STYLE(Universal)
+ #undef GET_PARSER_TOKEN_STYLE
+ 
+ bool CSSFragmentDecorator::enable_css_selector() {
+-  return intrinsic_style_sheets_ &&
+-         intrinsic_style_sheets_->enable_css_selector();
++  return (intrinsic_style_sheets_ &&
++          intrinsic_style_sheets_->enable_css_selector()) ||
++         HasInAdopted([](CSSFragment& fragment) {
++           return fragment.enable_css_selector();
++         });
+ }
+ 
+ bool CSSFragmentDecorator::enable_css_invalidation() {
+-  return intrinsic_style_sheets_ &&
+-         intrinsic_style_sheets_->enable_css_invalidation();
++  return (intrinsic_style_sheets_ &&
++          intrinsic_style_sheets_->enable_css_invalidation()) ||
++         HasInAdopted(
++             [](CSSFragment& fragment) {
++               return fragment.enable_css_invalidation();
++             });
+ }
+ 
+ bool CSSFragmentDecorator::enable_css_rule() {
+-  return intrinsic_style_sheets_ && intrinsic_style_sheets_->enable_css_rule();
++  return (intrinsic_style_sheets_ &&
++          intrinsic_style_sheets_->enable_css_rule()) ||
++         HasInAdopted(
++             [](CSSFragment& fragment) { return fragment.enable_css_rule(); });
+ }
+ 
+ template <typename Predicate>
+ bool CSSFragmentDecorator::HasInAdopted(Predicate pred) {
+   bool found = false;
+   ForEachAdoptedFragment([&found, &pred](CSSFragment& fragment) {
+-    if (fragment.enable_css_selector() && pred(fragment)) {
++    if (pred(fragment)) {
+       found = true;
+       return false;
+     }
+diff --git a/core/renderer/dom/BUILD.gn b/core/renderer/dom/BUILD.gn
+index d20a874ed..dc9267000 100644
+--- a/core/renderer/dom/BUILD.gn
++++ b/core/renderer/dom/BUILD.gn
+@@ -118,6 +118,7 @@ unittest_set("dom_testset") {
+   ]
+   deps = [
+     "../../runtime/lepus/tasks:tasks_testset",
++    "../../template_bundle/template_codec/binary_encoder:binary_encoder",
+     "../../shell/testing:mock_tasm_delegate_testset",
+     "../../template_bundle/template_codec/binary_encoder/css_encoder:css_encoder",
+   ]
+diff --git a/core/renderer/dom/element_manager.h b/core/renderer/dom/element_manager.h
+index b5128f8d5..bf1b89289 100644
+--- a/core/renderer/dom/element_manager.h
++++ b/core/renderer/dom/element_manager.h
+@@ -481,6 +481,28 @@ class ElementManager : public LayoutScheduler::LayoutSchedulerImpl {
+     cascade_layer_map_cache_.clear();
+   }
+ 
++  bool RemoveAdoptedStyleSheet(
++      const fml::RefPtr<tasm::SharedCSSFragmentWrapper> &wrapper) {
++    std::unique_lock<std::shared_mutex> lock(adopted_style_sheets_mutex_);
++    for (auto it = adopted_stylesheets_.begin();
++         it != adopted_stylesheets_.end(); ++it) {
++      if (it->get() != wrapper.get()) {
++        continue;
++      }
++      adopted_stylesheets_.erase(it);
++      uint8_t feature_flags = css::RuleSet::kNoFeatures;
++      for (const auto &remaining : adopted_stylesheets_) {
++        if (remaining && remaining->fragment_) {
++          feature_flags |= remaining->fragment_->GetFeatureFlags();
++        }
++      }
++      adopted_feature_flags_.store(feature_flags, std::memory_order_release);
++      cascade_layer_map_cache_.clear();
++      return true;
++    }
++    return false;
++  }
++
+   // Iterates adopted stylesheets under a shared lock without copying.
+   // Visitor returns true to continue, false to stop early.
+   template <typename Visitor>
+diff --git a/core/renderer/dom/element_manager_unittest.cc b/core/renderer/dom/element_manager_unittest.cc
+index d019a3580..7cea74a9d 100644
+--- a/core/renderer/dom/element_manager_unittest.cc
++++ b/core/renderer/dom/element_manager_unittest.cc
+@@ -559,6 +559,17 @@ class MockSharedCSSFragmentWrapper : public tasm::SharedCSSFragmentWrapper {
+   std::unique_ptr<tasm::SharedCSSFragment> fragment_;
+ };
+ 
++class FeatureCSSFragment : public tasm::SharedCSSFragment {
++ public:
++  explicit FeatureCSSFragment(uint8_t feature_flags)
++      : feature_flags_(feature_flags) {}
++
++  uint8_t GetFeatureFlags() override { return feature_flags_; }
++
++ private:
++  uint8_t feature_flags_;
++};
++
+ TEST_F(ElementManagerTest, AdoptStyleSheet_Basic) {
+   // Create a mock wrapper
+   auto wrapper = fml::AdoptRef<MockSharedCSSFragmentWrapper>(
+@@ -618,6 +629,28 @@ TEST_F(ElementManagerTest, ClearAdoptedStyleSheets) {
+   EXPECT_EQ(manager->GetAdoptedStyleSheets().size(), 1);
+ }
+ 
++TEST_F(ElementManagerTest, RemoveAdoptedStyleSheetUsesIdentityAndRecomputesFlags) {
++  auto first = fml::MakeRefCounted<SharedCSSFragmentWrapper>(
++      std::make_unique<FeatureCSSFragment>(css::RuleSet::kHasMediaQuery));
++  auto second = fml::MakeRefCounted<SharedCSSFragmentWrapper>(
++      std::make_unique<FeatureCSSFragment>(css::RuleSet::kHasCascadeLayers));
++  auto absent = fml::MakeRefCounted<SharedCSSFragmentWrapper>(
++      std::make_unique<FeatureCSSFragment>(css::RuleSet::kHasSupports));
++  manager->AdoptStyleSheet(first);
++  manager->AdoptStyleSheet(second);
++
++  EXPECT_EQ(manager->GetAdoptedFeatureFlags(),
++            css::RuleSet::kHasMediaQuery |
++                css::RuleSet::kHasCascadeLayers);
++  EXPECT_TRUE(manager->RemoveAdoptedStyleSheet(first));
++  EXPECT_FALSE(manager->RemoveAdoptedStyleSheet(absent));
++  EXPECT_EQ(manager->GetAdoptedFeatureFlags(),
++            css::RuleSet::kHasCascadeLayers);
++  const auto remaining = manager->GetAdoptedStyleSheets();
++  ASSERT_EQ(remaining.size(), 1u);
++  EXPECT_EQ(remaining[0].get(), second.get());
++}
++
+ TEST_F(ElementManagerTest, AdoptStyleSheet_NullWrapper) {
+   // Test adopting null wrapper (should not crash)
+   manager->AdoptStyleSheet(fml::RefPtr<MockSharedCSSFragmentWrapper>());
+diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
+index 903756a6d..95fe9e628 100644
+--- a/core/renderer/native_renderer.cc
++++ b/core/renderer/native_renderer.cc
+@@ -35,8 +35,13 @@
+ #include "core/renderer/page_proxy.h"
+ #include "core/renderer/pipeline/pipeline_scope.h"
+ #include "core/renderer/template_assembler.h"
++#include "core/renderer/tasm/config.h"
++#include "core/runtime/lepus/binary_input_stream.h"
++#include "core/runtime/lepus/bindings/style/runtime_css_reader.h"
++#include "core/runtime/lepus/bindings/style/shared_css_fragment_wrapper.h"
+ #include "core/runtime/lepus/json_parser.h"
+ #include "core/template_bundle/template_codec/binary_decoder/page_config.h"
++#include "core/template_bundle/template_codec/compile_options.h"
+ 
+ namespace lynx {
+ namespace tasm {
+@@ -463,8 +468,13 @@ class Session final : public std::enable_shared_from_this<Session> {
+     release_options_->pipeline_origin = "native_renderer_release";
+     previous_page_config_ = tasm_->GetPageConfig();
+     auto config = std::make_shared<PageConfig>();
++    config->SetTargetSDKVersion(Config::GetCurrentLynxVersion());
+     config->SetEnableFiberArch(true);
+     config->SetEnableEventHandleRefactor(true);
++    config->SetEnableCSSParser(true);
++    config->SetEnableStandardCSSSelector(true);
++    config->SetEnableCSSInvalidation(true);
++    config->SetEnableCSSRule(true);
+     page_config_replaced_ = true;
+     tasm_->SetPageConfig(config);
+     tasm_->SetPageConfigClient();
+@@ -895,6 +905,54 @@ class Session final : public std::enable_shared_from_this<Session> {
+     return kOk;
+   }
+ 
++  Status ImportStyleSheet(LynxNativeBytes bytes) {
++    Status status = CheckCall();
++    if (status != kOk) {
++      return status;
++    }
++    if (bytes.data == nullptr || bytes.len == 0) {
++      return kInvalidArgument;
++    }
++
++    CompileOptions options;
++    options.target_sdk_version_ = Config::GetCurrentLynxVersion();
++    options.enable_css_parser_ = true;
++    options.enable_css_selector_ = true;
++    options.enable_css_invalidation_ = true;
++    options.enable_css_rule_ = true;
++
++    std::vector<uint8_t> data(bytes.data, bytes.data + bytes.len);
++    auto input = std::make_unique<lepus::ByteArrayInputStream>(std::move(data));
++    RuntimeCSSReader reader(std::move(input), options, false);
++    auto fragment = std::make_unique<SharedCSSFragment>();
++    if (!reader.DecodeCSSFragment(fragment.get(), bytes.len)) {
++      return kInvalidArgument;
++    }
++
++    auto wrapper = fml::MakeRefCounted<SharedCSSFragmentWrapper>(
++        std::move(fragment));
++    imported_style_sheets_.push_back(wrapper);
++    manager_->AdoptStyleSheet(wrapper);
++    if (root_ != nullptr) {
++      root_->ApplyFunctionRecursive(
++          [](auto element) { element->MarkStyleDirty(false); });
++    }
++    return kOk;
++  }
++
++  Status ClearStyleSheets() {
++    Status status = CheckCall();
++    if (status != kOk) {
++      return status;
++    }
++    RemoveImportedStyleSheets();
++    if (root_ != nullptr) {
++      root_->ApplyFunctionRecursive(
++          [](auto element) { element->MarkStyleDirty(false); });
++    }
++    return kOk;
++  }
++
+   Status PrepareRelease() const noexcept {
+     Status status = CheckThread();
+     if (status != kOk) {
+@@ -1142,6 +1200,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+       }
+     }
+     nodes_.Clear();
++    RemoveImportedStyleSheets();
+     root_ = nullptr;
+     deferred_nodes_.clear();
+     page = nullptr;
+@@ -1187,6 +1246,24 @@ class Session final : public std::enable_shared_from_this<Session> {
+     previous_page_config_.reset();
+   }
+ 
++  void RemoveImportedStyleSheets() noexcept {
++    if (manager_ == nullptr) {
++      imported_style_sheets_.clear();
++      return;
++    }
++    for (const auto &wrapper : imported_style_sheets_) {
++#if defined(__cpp_exceptions)
++      try {
++#endif
++        manager_->RemoveAdoptedStyleSheet(wrapper);
++#if defined(__cpp_exceptions)
++      } catch (...) {
++      }
++#endif
++    }
++    imported_style_sheets_.clear();
++  }
++
+   void FinalizeRelease() noexcept {
+     if (finalized_) {
+       return;
+@@ -1231,6 +1308,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+   std::unordered_map<LynxNativeListenerHandle, ListenerEntry> listeners_;
+   ScopedTable<TimerEntry> timers_;
+   std::unique_ptr<base::TimedTaskManager> timer_manager_;
++  std::vector<fml::RefPtr<SharedCSSFragmentWrapper>> imported_style_sheets_;
+   std::vector<fml::RefPtr<Element>> deferred_nodes_;
+   size_t dispatch_depth_{0};
+   bool active_{true};
+@@ -1438,6 +1516,18 @@ Status CancelTimer(LynxNativeRendererHandle renderer,
+       renderer, [&](Session& session) { return session.CancelTimer(timer); });
+ }
+ 
++Status ImportStyleSheet(LynxNativeRendererHandle renderer,
++                        LynxNativeBytes fragment) {
++  return WithSession(renderer, [&](Session& session) {
++    return session.ImportStyleSheet(fragment);
++  });
++}
++
++Status ClearStyleSheets(LynxNativeRendererHandle renderer) {
++  return WithSession(
++      renderer, [&](Session& session) { return session.ClearStyleSheets(); });
++}
++
+ const LynxNativeRendererApiV1 kApiV1 = {
+     LYNX_NATIVE_RENDERER_ABI_VERSION,
+     sizeof(LynxNativeRendererApiV1),
+@@ -1456,6 +1546,8 @@ const LynxNativeRendererApiV1 kApiV1 = {
+     &Flush,
+     &CreateTimer,
+     &CancelTimer,
++    &ImportStyleSheet,
++    &ClearStyleSheets,
+ };
+ 
+ }  // namespace
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index 6a05334ba..27670baf7 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -13,8 +13,14 @@
+ #include "base/include/fml/message_loop.h"
+ #include "core/event/event.h"
+ #include "core/event/event_dispatcher.h"
++#include "core/renderer/css/css_decoder.h"
++#include "core/renderer/css/css_property.h"
+ #include "core/renderer/dom/fiber/raw_text_element.h"
+ #include "core/renderer/tasm/react/testing/mock_painting_context.h"
++#include "core/renderer/tasm/config.h"
++#include "core/template_bundle/template_codec/binary_encoder/css_encoder/css_parser.h"
++#include "core/template_bundle/template_codec/binary_encoder/template_binary_writer.h"
++#include "third_party/rapidjson/document.h"
+ #undef private
+ #include "core/shell/testing/mock_tasm_delegate.h"
+ #include "third_party/googletest/googletest/include/gtest/gtest.h"
+@@ -29,6 +35,45 @@ LynxNativeUtf8 Utf8(const char* value) {
+           std::char_traits<char>::length(value)};
+ }
+ 
++class CSSFragmentEncoder : public TemplateBinaryWriter {
++ public:
++  CSSFragmentEncoder(CSSParser* parser, const CompileOptions& options)
++      : TemplateBinaryWriter(nullptr, runtime::VMContextType, false, nullptr,
++                             parser, nullptr, nullptr, nullptr, nullptr, "", "",
++                             "", "", "", "", {}, options, lepus::Value(),
++                             lepus::Value(), {}, nullptr) {}
++
++  std::vector<uint8_t> Encode(encoder::SharedCSSFragment* fragment) {
++    return EncodeCSSFragmentToVector(fragment);
++  }
++};
++
++std::vector<uint8_t> EncodeClassStyleSheet() {
++  CompileOptions options;
++  options.enable_css_parser_ = true;
++  options.enable_css_selector_ = true;
++  options.enable_css_invalidation_ = true;
++  options.enable_css_rule_ = true;
++  options.target_sdk_version_ = Config::GetCurrentLynxVersion();
++  CSSParser parser(options);
++  rapidjson::Document rules;
++  rules.Parse(R"([{
++    "type": "StyleRule",
++    "selectorText": {"value": ".compiled", "loc": {"line": 1, "column": 1}},
++    "style": [{"name": "width", "value": "123px", "keyLoc": {"line": 1, "column": 13}}],
++    "variables": {}
++  }])");
++  if (rules.HasParseError()) {
++    return {};
++  }
++  auto fragment = parser.ParseExternalFragment(rules, "/native.css");
++  if (fragment == nullptr) {
++    return {};
++  }
++  CSSFragmentEncoder encoder(&parser, options);
++  return encoder.Encode(fragment.get());
++}
++
+ struct CallbackState {
+   const LynxNativeRendererApiV1* api{nullptr};
+   int event_count{0};
+@@ -141,6 +186,80 @@ TEST(NativeRendererApiTest, NegotiatesOnlyV1) {
+   EXPECT_EQ(api->struct_size, sizeof(LynxNativeRendererApiV1));
+ }
+ 
++TEST(NativeRendererApiTest, ImportsCompiledStyleSheetThroughFunctionTable) {
++  NativeRendererHarness harness;
++  auto external_before = fml::MakeRefCounted<SharedCSSFragmentWrapper>(
++      std::make_unique<SharedCSSFragment>());
++  harness.manager_->AdoptStyleSheet(external_before);
++  const auto* api = lynx_native_renderer_get_api(1);
++  ASSERT_NE(api, nullptr);
++  ASSERT_NE(api->import_style_sheet, nullptr);
++  ASSERT_NE(api->clear_style_sheets, nullptr);
++  CallbackState state{api};
++  LynxNativeRendererCallbacksV1 callbacks{&state, &OnEvent, &OnTimer};
++  LynxNativeHostHandle host = RegisterNativeRendererHost(harness.tasm_.get());
++  ASSERT_NE(host, 0u);
++  LynxNativeRendererHandle renderer = 0;
++  ASSERT_EQ(api->acquire(host, &callbacks, &renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  auto external_after = fml::MakeRefCounted<SharedCSSFragmentWrapper>(
++      std::make_unique<SharedCSSFragment>());
++  harness.manager_->AdoptStyleSheet(external_after);
++
++  EXPECT_EQ(api->import_style_sheet(renderer, {nullptr, 0}),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++
++  std::vector<uint8_t> fragment = EncodeClassStyleSheet();
++  ASSERT_FALSE(fragment.empty());
++  EXPECT_EQ(api->import_style_sheet(renderer,
++                                    {fragment.data(), fragment.size() / 2}),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(harness.manager_->GetAdoptedStyleSheets().size(), 2u);
++  ASSERT_EQ(api->import_style_sheet(renderer,
++                                    {fragment.data(), fragment.size()}),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  LynxNativeNodeHandle root = 0;
++  LynxNativeNodeHandle node = 0;
++  ASSERT_EQ(api->get_root(renderer, &root), LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->create_element(renderer, Utf8("view"), &node),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->set_attribute(renderer, node, Utf8("class"),
++                               Utf8("compiled")),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->insert_before(renderer, root, node, 0),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  ASSERT_EQ(api->flush(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++
++  Element* element = harness.manager_->root()->GetChildAt(0);
++  auto width = element->GetElementStyle(CSSPropertyID::kPropertyIDWidth);
++  ASSERT_TRUE(width.has_value());
++  EXPECT_EQ(CSSDecoder::CSSValueToString(CSSPropertyID::kPropertyIDWidth,
++                                         *width),
++            "123px");
++
++  ASSERT_EQ(api->clear_style_sheets(renderer),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  auto after_clear = harness.manager_->GetAdoptedStyleSheets();
++  ASSERT_EQ(after_clear.size(), 2u);
++  EXPECT_EQ(after_clear[0].get(), external_before.get());
++  EXPECT_EQ(after_clear[1].get(), external_after.get());
++  ASSERT_EQ(api->flush(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_FALSE(
++      element->GetElementStyle(CSSPropertyID::kPropertyIDWidth).has_value());
++
++  ASSERT_EQ(api->import_style_sheet(renderer,
++                                    {fragment.data(), fragment.size()}),
++            LYNX_NATIVE_RENDERER_STATUS_OK);
++  EXPECT_EQ(harness.manager_->GetAdoptedStyleSheets().size(), 3u);
++
++  EXPECT_EQ(api->release(renderer), LYNX_NATIVE_RENDERER_STATUS_OK);
++  const auto remaining = harness.manager_->GetAdoptedStyleSheets();
++  ASSERT_EQ(remaining.size(), 2u);
++  EXPECT_EQ(remaining[0].get(), external_before.get());
++  EXPECT_EQ(remaining[1].get(), external_after.get());
++  EXPECT_TRUE(UnregisterNativeRendererHost(host));
++}
++
+ TEST(NativeRendererApiTest, RejectsNullCallbacksAndOutputsWithoutMutation) {
+   NativeRendererHarness harness;
+   const auto* api = lynx_native_renderer_get_api(1);

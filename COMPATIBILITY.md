@@ -7,14 +7,14 @@ the exact source revisions, native ABI, Android target, and evidence below.
 
 | Component | Revision or target | Evidence |
 | --- | --- | --- |
-| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 15-patch `0002-0016` series, public-header byte comparison, 21/21 native renderer tests |
+| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 16-patch `0002-0017` series, public-header byte comparison, 22/22 native renderer tests |
 | Lynx tools_shared | `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` | Publicly reachable pinned nested checkout and clean-apply JNI-filter patch |
 | Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Patch identity, renderer/macro tests, adapter, native lifecycle staticlib |
 | Dioxus | `0.7.10` | Lynx-native RSX vocabulary, real `VirtualDom`, `WriteMutations` adapter, native lifecycle staticlib |
 | Rust | `1.85.0` | Locked workspace format/check/test/Clippy and arm64 staticlibs |
 | Android app | API 24+, tested arm64-v8a | Native Java/JNI lifecycle, both real staticlib links, dependency/APK/ELF and process-map checks |
-| Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, release |
-| WASM guest protocol | FlatBuffers guest ABI, version 3 (`LEB3`) | Schema and checked-in Rust bindings, golden fixtures, strict validation, and runtime-scoped mount, event, command, error, and teardown round trips |
+| Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, compiled stylesheet import, release |
+| WASM guest protocol | FlatBuffers guest ABI, version 4 (`LEB4`) | Schema and checked-in Rust bindings, golden fixtures, strict validation, and runtime-scoped mount, event, command, error, and teardown round trips |
 
 ## Runtime Contract
 

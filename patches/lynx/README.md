@@ -1,7 +1,7 @@
 # Lynx native renderer patch series
 
 This directory contains the native renderer changes applied to the pinned
-public Lynx source. The maintained series is the 15 patches `0002-0016`.
+public Lynx source. The maintained series is the 16 patches `0002-0017`.
 
 ## Base Revision
 
@@ -38,6 +38,17 @@ The patches add, in order:
 - A publicly reachable tools_shared pin in Habitat's primary `dependencies/DEPS`
   file for reproducible clean-checkout builds; the unavailable child revision
   differed only in an iOS packaging helper.
+- Compiled CSS fragment import through the versioned native renderer function
+  table, including adopted-only selector capability and application-epoch
+  cleanup that preserves independently adopted stylesheets.
+
+The import payload is the raw output of this pinned Lynx revision's CSS fragment
+encoder using the native CSS profile: current engine target SDK, CSS rule,
+parser, selector, and invalidation enabled, and inline CSS variables disabled.
+Fragments compiled with other Lynx revisions or compile profiles are not
+supported. The current decoder validates reads needed by the fragment but does
+not expose a consumed-byte offset, so callers must pass exactly one encoder
+output without concatenated or trailing bytes.
 
 Apply patches strictly in `series` order. Other Lynx revisions require a rebase
 and complete reverification. Native-only Android builds also apply the separate
@@ -67,7 +78,7 @@ submodule, byte-compares
 `include/lynx_native_renderer.h`, and reverses the applied patches in reverse
 order even on failure.
 
-All 21 `NativeRendererApiTest` cases pass (21/21). There is no private test peer
+All 22 `NativeRendererApiTest` cases pass (22/22). There is no private test peer
 or helper; release behavior is tested through the production function table.
 The cases cover function-table version/size validation, null and malformed
 spans, UTF-8, wrong-thread, stale and foreign handles, acquire/release rollback,

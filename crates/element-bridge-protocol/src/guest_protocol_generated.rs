@@ -158,10 +158,10 @@ impl flatbuffers::SimpleToVerifyInSlice for Status {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_COMMAND_PAYLOAD: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_COMMAND_PAYLOAD: u8 = 9;
+pub const ENUM_MAX_COMMAND_PAYLOAD: u8 = 10;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_COMMAND_PAYLOAD: [CommandPayload; 10] = [
+pub const ENUM_VALUES_COMMAND_PAYLOAD: [CommandPayload; 11] = [
   CommandPayload::NONE,
   CommandPayload::CreateElement,
   CommandPayload::CreateRawText,
@@ -172,6 +172,7 @@ pub const ENUM_VALUES_COMMAND_PAYLOAD: [CommandPayload; 10] = [
   CommandPayload::SetAttribute,
   CommandPayload::AddEventListener,
   CommandPayload::RemoveEventListener,
+  CommandPayload::ImportStyleSheet,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -189,9 +190,10 @@ impl CommandPayload {
   pub const SetAttribute: Self = Self(7);
   pub const AddEventListener: Self = Self(8);
   pub const RemoveEventListener: Self = Self(9);
+  pub const ImportStyleSheet: Self = Self(10);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 9;
+  pub const ENUM_MAX: u8 = 10;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::NONE,
     Self::CreateElement,
@@ -203,6 +205,7 @@ impl CommandPayload {
     Self::SetAttribute,
     Self::AddEventListener,
     Self::RemoveEventListener,
+    Self::ImportStyleSheet,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -217,6 +220,7 @@ impl CommandPayload {
       Self::SetAttribute => Some("SetAttribute"),
       Self::AddEventListener => Some("AddEventListener"),
       Self::RemoveEventListener => Some("RemoveEventListener"),
+      Self::ImportStyleSheet => Some("ImportStyleSheet"),
       _ => None,
     }
   }
@@ -1823,6 +1827,104 @@ impl core::fmt::Debug for RemoveEventListener<'_> {
       ds.finish()
   }
 }
+pub enum ImportStyleSheetOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ImportStyleSheet<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ImportStyleSheet<'a> {
+  type Inner = ImportStyleSheet<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: flatbuffers::Table::new(buf, loc) }
+  }
+}
+
+impl<'a> ImportStyleSheet<'a> {
+  pub const VT_FRAGMENT: flatbuffers::VOffsetT = 4;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ImportStyleSheet { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ImportStyleSheetArgs<'args>
+  ) -> flatbuffers::WIPOffset<ImportStyleSheet<'bldr>> {
+    let mut builder = ImportStyleSheetBuilder::new(_fbb);
+    if let Some(x) = args.fragment { builder.add_fragment(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn fragment(&self) -> flatbuffers::Vector<'a, u8> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(ImportStyleSheet::VT_FRAGMENT, None).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for ImportStyleSheet<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("fragment", Self::VT_FRAGMENT, true)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ImportStyleSheetArgs<'a> {
+    pub fragment: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+}
+impl<'a> Default for ImportStyleSheetArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ImportStyleSheetArgs {
+      fragment: None, // required field
+    }
+  }
+}
+
+pub struct ImportStyleSheetBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ImportStyleSheetBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_fragment(&mut self, fragment: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ImportStyleSheet::VT_FRAGMENT, fragment);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ImportStyleSheetBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ImportStyleSheetBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ImportStyleSheet<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, ImportStyleSheet::VT_FRAGMENT,"fragment");
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ImportStyleSheet<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ImportStyleSheet");
+      ds.field("fragment", &self.fragment());
+      ds.finish()
+  }
+}
 pub enum CommandOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -2007,6 +2109,21 @@ impl<'a> Command<'a> {
     }
   }
 
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn payload_as_import_style_sheet(&self) -> Option<ImportStyleSheet<'a>> {
+    if self.payload_type() == CommandPayload::ImportStyleSheet {
+      self.payload().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { ImportStyleSheet::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
 }
 
 impl flatbuffers::Verifiable for Command<'_> {
@@ -2027,6 +2144,7 @@ impl flatbuffers::Verifiable for Command<'_> {
           CommandPayload::SetAttribute => v.verify_union_variant::<flatbuffers::ForwardsUOffset<SetAttribute>>("CommandPayload::SetAttribute", pos),
           CommandPayload::AddEventListener => v.verify_union_variant::<flatbuffers::ForwardsUOffset<AddEventListener>>("CommandPayload::AddEventListener", pos),
           CommandPayload::RemoveEventListener => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RemoveEventListener>>("CommandPayload::RemoveEventListener", pos),
+          CommandPayload::ImportStyleSheet => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ImportStyleSheet>>("CommandPayload::ImportStyleSheet", pos),
           _ => Ok(()),
         }
      })?
@@ -2139,6 +2257,13 @@ impl core::fmt::Debug for Command<'_> {
         },
         CommandPayload::RemoveEventListener => {
           if let Some(x) = self.payload_as_remove_event_listener() {
+            ds.field("payload", &x)
+          } else {
+            ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        CommandPayload::ImportStyleSheet => {
+          if let Some(x) = self.payload_as_import_style_sheet() {
             ds.field("payload", &x)
           } else {
             ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")
@@ -2933,7 +3058,7 @@ pub unsafe fn root_as_envelope_unchecked(buf: &[u8]) -> Envelope {
 pub unsafe fn size_prefixed_root_as_envelope_unchecked(buf: &[u8]) -> Envelope {
   flatbuffers::size_prefixed_root_unchecked::<Envelope>(buf)
 }
-pub const ENVELOPE_IDENTIFIER: &str = "LEB3";
+pub const ENVELOPE_IDENTIFIER: &str = "LEB4";
 
 #[inline]
 pub fn envelope_buffer_has_identifier(buf: &[u8]) -> bool {

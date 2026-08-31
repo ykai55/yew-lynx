@@ -44,6 +44,7 @@ table RemoveEventListener {
   callback:uint;
   name:string (required);
 }
+table ImportStyleSheet { fragment:[ubyte] (required); }
 
 union CommandPayload {
   CreateElement = 1,
@@ -54,7 +55,8 @@ union CommandPayload {
   DestroyNode = 6,
   SetAttribute = 7,
   AddEventListener = 8,
-  RemoveEventListener = 9
+  RemoveEventListener = 9,
+  ImportStyleSheet = 10
 }
 
 table Command {
@@ -91,4 +93,4 @@ table Envelope {
 }
 
 root_type Envelope;
-file_identifier "LEB3";
+file_identifier "LEB4";

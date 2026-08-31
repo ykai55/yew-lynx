@@ -30,6 +30,8 @@ struct RendererRecorder {
     releases: usize,
     reenter_on_flush: bool,
     nested_status: Option<NativeStatus>,
+    style_sheet: Vec<u8>,
+    style_sheet_clears: usize,
 }
 
 #[derive(Default)]
@@ -309,6 +311,33 @@ unsafe extern "C" fn cancel_timer(_: NativeRendererHandle, _: NativeTimerHandle)
     NATIVE_STATUS_UNSUPPORTED
 }
 
+unsafe extern "C" fn import_style_sheet(
+    _: NativeRendererHandle,
+    fragment: NativeBytes,
+) -> NativeStatus {
+    let bytes = if fragment.len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: NativeHost provides a valid borrowed span for this call.
+        unsafe { std::slice::from_raw_parts(fragment.data, fragment.len) }.to_vec()
+    };
+    RENDERER_RECORDER.with(|recorder| recorder.borrow_mut().style_sheet = bytes);
+    NATIVE_STATUS_OK
+}
+
+unsafe extern "C" fn clear_style_sheets(_: NativeRendererHandle) -> NativeStatus {
+    RENDERER_RECORDER.with(|recorder| {
+        let mut recorder = recorder.borrow_mut();
+        recorder.style_sheet.clear();
+        recorder.style_sheet_clears += 1;
+        if recorder.failure == Some("clear_style_sheets") {
+            NATIVE_STATUS_HOST_ERROR
+        } else {
+            NATIVE_STATUS_OK
+        }
+    })
+}
+
 static API: NativeRendererApiV1 = NativeRendererApiV1 {
     abi_version: NATIVE_RENDERER_ABI_VERSION,
     struct_size: mem::size_of::<NativeRendererApiV1>(),
@@ -327,6 +356,8 @@ static API: NativeRendererApiV1 = NativeRendererApiV1 {
     flush: Some(flush),
     create_timer: Some(create_timer),
     cancel_timer: Some(cancel_timer),
+    import_style_sheet: Some(import_style_sheet),
+    clear_style_sheets: Some(clear_style_sheets),
 };
 
 fn utf8(value: &[u8]) -> NativeUtf8 {

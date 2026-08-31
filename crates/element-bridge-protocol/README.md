@@ -1,6 +1,6 @@
 # Element bridge guest protocol
 
-`schema/guest_protocol.fbs` is the language-neutral FlatBuffers v3 wire
+`schema/guest_protocol.fbs` is the language-neutral FlatBuffers v4 wire
 contract. `src/guest_protocol_generated.rs` is generated and checked in, so a
 normal Cargo build does not require `flatc`.
 

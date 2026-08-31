@@ -31,6 +31,8 @@ struct RendererState {
     nodes: HashSet<NativeNodeHandle>,
     listeners: HashSet<NativeListenerHandle>,
     attributes: Vec<(NativeNodeHandle, String, Option<String>)>,
+    style_sheets: Vec<Vec<u8>>,
+    style_sheet_clears: u32,
     reentrant_replace: Option<(u32, Vec<u8>)>,
     reentrant_status: Option<NativeStatus>,
     next_node: NativeNodeHandle,
@@ -44,6 +46,8 @@ impl Default for RendererState {
             nodes: HashSet::from([ROOT]),
             listeners: HashSet::new(),
             attributes: Vec::new(),
+            style_sheets: Vec::new(),
+            style_sheet_clears: 0,
             reentrant_replace: None,
             reentrant_status: None,
             next_node: 200,
@@ -240,6 +244,29 @@ unsafe extern "C" fn cancel_timer(_: NativeRendererHandle, _: NativeTimerHandle)
     NATIVE_STATUS_UNSUPPORTED
 }
 
+unsafe extern "C" fn import_style_sheet(
+    renderer: NativeRendererHandle,
+    fragment: NativeBytes,
+) -> NativeStatus {
+    if renderer != RENDERER || fragment.data.is_null() || fragment.len == 0 {
+        return NATIVE_STATUS_INVALID_ARGUMENT;
+    }
+    // SAFETY: The guest host borrows the fragment only for this callback.
+    let fragment = unsafe { std::slice::from_raw_parts(fragment.data, fragment.len) };
+    STATE.lock().unwrap().style_sheets.push(fragment.to_vec());
+    NATIVE_STATUS_OK
+}
+
+unsafe extern "C" fn clear_style_sheets(renderer: NativeRendererHandle) -> NativeStatus {
+    if renderer != RENDERER {
+        return NATIVE_STATUS_INVALID_SESSION;
+    }
+    let mut state = STATE.lock().unwrap();
+    state.style_sheets.clear();
+    state.style_sheet_clears += 1;
+    NATIVE_STATUS_OK
+}
+
 static API: NativeRendererApiV1 = NativeRendererApiV1 {
     abi_version: NATIVE_RENDERER_ABI_VERSION,
     struct_size: mem::size_of::<NativeRendererApiV1>(),
@@ -258,6 +285,8 @@ static API: NativeRendererApiV1 = NativeRendererApiV1 {
     flush: Some(flush),
     create_timer: Some(create_timer),
     cancel_timer: Some(cancel_timer),
+    import_style_sheet: Some(import_style_sheet),
+    clear_style_sheets: Some(clear_style_sheets),
 };
 
 unsafe extern "C" fn get_api(version: u32) -> *const NativeRendererApiV1 {
@@ -278,6 +307,10 @@ fn real_wamr_runs_mount_event_replace_and_destroy_through_native_renderer() {
     let mounted = unsafe { mount_module(Some(get_api), HOST, &module) };
     assert_eq!(mounted.status, NATIVE_STATUS_OK);
     assert_ne!(mounted.session, 0);
+    assert_eq!(
+        STATE.lock().unwrap().style_sheets,
+        vec![vec![0x43, 0x53, 0x53, 0x34]]
+    );
     assert_eq!(STATE.lock().unwrap().listeners, HashSet::from([1]));
     let old_native_listener = *STATE.lock().unwrap().listeners.iter().next().unwrap();
     assert!(
@@ -333,6 +366,8 @@ fn real_wamr_runs_mount_event_replace_and_destroy_through_native_renderer() {
 
     assert_eq!(replace_module(mounted.session, &module), NATIVE_STATUS_OK);
     let state = STATE.lock().unwrap();
+    assert_eq!(state.style_sheets, vec![vec![0x43, 0x53, 0x53, 0x34]]);
+    assert_eq!(state.style_sheet_clears, 1);
     assert_eq!(state.releases, 0, "replace must retain the renderer");
     assert_eq!(state.listeners.len(), 1);
     let new_native_listener = *state.listeners.iter().next().unwrap();
@@ -472,7 +507,11 @@ fn preflight_rejects_bad_version_and_missing_exports_and_contains_traps() {
         Status::Unsupported
     );
 
-    let trapped = wat::parse_str(module_wat("(i32.const 3)", "unreachable")).unwrap();
+    let trapped = wat::parse_str(module_wat(
+        &format!("(i32.const {PROTOCOL_VERSION})"),
+        "unreachable",
+    ))
+    .unwrap();
     let error = match WamrBackend::preflight(&trapped)
         .unwrap()
         .mount(NodeId::new(1).unwrap())
@@ -558,7 +597,7 @@ fn real_wamr_rejects_invalid_guest_outputs_without_reading_out_of_bounds() {
             "malformed FlatBuffers",
             output_module(&[1, 2], (1024_u64 << 32) | 2, 1),
             Status::InvalidArgument,
-            "invalid FlatBuffers file identifier; expected LEB3",
+            "invalid FlatBuffers file identifier; expected LEB4",
         ),
         (
             "truncated FlatBuffers",
@@ -682,7 +721,7 @@ fn output_module(bytes: &[u8], descriptor: u64, output_dealloc_result: u32) -> V
         r#"(module
             (memory 1)
             (data (i32.const 1024) "{data}")
-            (func (export "version") (result i32) i32.const 3)
+            (func (export "version") (result i32) i32.const {PROTOCOL_VERSION})
             (func (export "alloc") (param i32) (result i32) i32.const 8)
             (func (export "dealloc") (param i32 i32) (result i32) i32.const 1)
             (func (export "mount") (param i32 i32) (result i64)

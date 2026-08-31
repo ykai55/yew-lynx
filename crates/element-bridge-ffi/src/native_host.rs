@@ -141,6 +141,10 @@ pub type NativeCreateTimerFn = unsafe extern "C" fn(
 ) -> NativeStatus;
 pub type NativeCancelTimerFn =
     unsafe extern "C" fn(renderer: NativeRendererHandle, timer: NativeTimerHandle) -> NativeStatus;
+pub type NativeImportStyleSheetFn =
+    unsafe extern "C" fn(renderer: NativeRendererHandle, fragment: NativeBytes) -> NativeStatus;
+pub type NativeClearStyleSheetsFn =
+    unsafe extern "C" fn(renderer: NativeRendererHandle) -> NativeStatus;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -162,6 +166,8 @@ pub struct NativeRendererApiV1 {
     pub flush: Option<NativeFlushFn>,
     pub create_timer: Option<NativeCreateTimerFn>,
     pub cancel_timer: Option<NativeCancelTimerFn>,
+    pub import_style_sheet: Option<NativeImportStyleSheetFn>,
+    pub clear_style_sheets: Option<NativeClearStyleSheetsFn>,
 }
 
 pub type NativeRendererGetApiFn = unsafe extern "C" fn(version: u32) -> *const NativeRendererApiV1;
@@ -271,6 +277,8 @@ impl NativeHost {
             || api.flush.is_none()
             || api.create_timer.is_none()
             || api.cancel_timer.is_none()
+            || api.import_style_sheet.is_none()
+            || api.clear_style_sheets.is_none()
         {
             return Err(BridgeError::new(
                 Status::Unsupported,
@@ -365,7 +373,7 @@ impl NativeHost {
     ///
     /// The previous application must have removed everything it owned first.
     pub fn reset_application_epoch(&mut self) -> Result<(), BridgeError> {
-        self.ensure_usable()?;
+        let renderer = self.ensure_usable()?;
         if self.nodes.len() != 1
             || !self.nodes.contains_key(&self.root)
             || !self.listeners.is_empty()
@@ -376,6 +384,9 @@ impl NativeHost {
                 "cannot reset native application epoch while application resources remain",
             ));
         }
+        // SAFETY: The copied table was validated and the renderer is still live.
+        let status = unsafe { self.api.clear_style_sheets.expect("validated function")(renderer) };
+        self.require_host_success(status, "clear_style_sheets")?;
         self.last_sequence = None;
         Ok(())
     }
@@ -524,6 +535,22 @@ impl NativeHost {
         command: &Command,
     ) -> Result<(), BridgeError> {
         match command {
+            Command::ImportStyleSheet { fragment } => {
+                if fragment.is_empty() {
+                    return Err(BridgeError::new(
+                        Status::InvalidArgument,
+                        "compiled stylesheet fragment must not be empty",
+                    ));
+                }
+                // SAFETY: The bytes are borrowed only for the duration of this call.
+                let status = unsafe {
+                    self.api.import_style_sheet.expect("validated function")(
+                        renderer,
+                        NativeBytes::from_slice(fragment),
+                    )
+                };
+                self.require_host_success(status, "import_style_sheet")?;
+            }
             Command::CreateElement { node, tag } => {
                 self.ensure_new_node(*node)?;
                 let mut native_node = 0;
@@ -805,6 +832,15 @@ impl NativeUtf8 {
     }
 }
 
+impl NativeBytes {
+    fn from_slice(value: &[u8]) -> Self {
+        Self {
+            data: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+}
+
 fn native_error(status: NativeStatus, operation: &'static str) -> BridgeError {
     let status_kind = match status {
         NATIVE_STATUS_INVALID_ARGUMENT => Status::InvalidArgument,
@@ -897,6 +933,8 @@ mod tests {
             NativeTimerHandle,
         ),
         CancelTimer(NativeRendererHandle, NativeTimerHandle),
+        ImportStyleSheet(NativeRendererHandle, Vec<u8>),
+        ClearStyleSheets(NativeRendererHandle),
     }
 
     struct Recorder {
@@ -945,6 +983,8 @@ mod tests {
             flush: Some(record_flush),
             create_timer: Some(record_create_timer),
             cancel_timer: Some(record_cancel_timer),
+            import_style_sheet: Some(record_import_style_sheet),
+            clear_style_sheets: Some(record_clear_style_sheets),
         }
     }
 
@@ -1185,6 +1225,26 @@ mod tests {
         record("flush", Call::Flush(renderer))
     }
 
+    unsafe extern "C" fn record_import_style_sheet(
+        renderer: NativeRendererHandle,
+        fragment: NativeBytes,
+    ) -> NativeStatus {
+        let fragment = if fragment.len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: NativeHost provides a valid borrowed span for this call.
+            unsafe { std::slice::from_raw_parts(fragment.data, fragment.len) }.to_vec()
+        };
+        record(
+            "import_style_sheet",
+            Call::ImportStyleSheet(renderer, fragment),
+        )
+    }
+
+    unsafe extern "C" fn record_clear_style_sheets(renderer: NativeRendererHandle) -> NativeStatus {
+        record("clear_style_sheets", Call::ClearStyleSheets(renderer))
+    }
+
     unsafe extern "C" fn record_create_timer(
         renderer: NativeRendererHandle,
         delay_millis: u64,
@@ -1273,6 +1333,11 @@ mod tests {
         assert!(calls().is_empty());
 
         reset();
+        API.with(|api| api.borrow_mut().clear_style_sheets = None);
+        assert_eq!(error_status(acquire_host(1, 1)), Status::Unsupported);
+        assert!(calls().is_empty());
+
+        reset();
         API.with(|api| api.borrow_mut().struct_size += mem::size_of::<usize>());
         let mut host = acquire_host(1, 1).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
@@ -1291,6 +1356,9 @@ mod tests {
         let listener = ListenerId::new(4).unwrap();
         let callback = CallbackId::new(5).unwrap();
         let commands = vec![
+            item(Command::ImportStyleSheet {
+                fragment: vec![0, 127, 255],
+            }),
             item(Command::CreateElement {
                 node: element,
                 tag: "vi\0ew".into(),
@@ -1341,6 +1409,7 @@ mod tests {
         assert_eq!(
             calls(),
             vec![
+                Call::ImportStyleSheet(TEST_RENDERER, vec![0, 127, 255]),
                 Call::CreateElement(TEST_RENDERER, b"vi\0ew".to_vec(), 200),
                 Call::CreateRawText(TEST_RENDERER, b"te\0xt".to_vec(), 201),
                 Call::SetAttribute(
@@ -1379,7 +1448,9 @@ mod tests {
     fn resets_sequence_only_after_application_resources_are_gone() {
         let mut host = recording_host(1, 1);
         host.apply(&batch(1, 5, Vec::new(), false)).unwrap();
+        clear_calls();
         host.reset_application_epoch().unwrap();
+        assert_eq!(calls(), vec![Call::ClearStyleSheets(TEST_RENDERER)]);
         host.apply(&batch(1, 1, Vec::new(), false)).unwrap();
 
         host.apply(&batch(
@@ -1395,6 +1466,31 @@ mod tests {
         assert_eq!(
             error_status(host.reset_application_epoch()),
             Status::InvalidOwnership
+        );
+        assert_eq!(
+            calls()
+                .iter()
+                .filter(|call| matches!(call, Call::ClearStyleSheets(_)))
+                .count(),
+            1
+        );
+        host.release().unwrap();
+    }
+
+    #[test]
+    fn application_epoch_reset_propagates_stylesheet_clear_failure() {
+        let mut host = recording_host(1, 1);
+        host.apply(&batch(1, 5, Vec::new(), false)).unwrap();
+        fail("clear_style_sheets", NATIVE_STATUS_HOST_ERROR);
+
+        assert_eq!(
+            error_status(host.reset_application_epoch()),
+            Status::HostError
+        );
+        assert_eq!(calls().last(), Some(&Call::ClearStyleSheets(TEST_RENDERER)));
+        assert_eq!(
+            error_status(host.apply(&batch(1, 1, Vec::new(), false))),
+            Status::HostError
         );
         host.release().unwrap();
     }

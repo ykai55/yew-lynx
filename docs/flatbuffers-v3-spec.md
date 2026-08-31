@@ -1,5 +1,9 @@
 # FlatBuffers Guest Protocol v3
 
+> Protocol v4 keeps this v3 envelope design and appends the
+> `ImportStyleSheet` command carrying compiled Lynx CSS fragment bytes. Its file
+> identifier is `LEB4`; v3 and v4 intentionally do not negotiate at runtime.
+
 ## Problem Statement
 
 The WASM guest protocol currently uses Postcard and derives its wire layout from

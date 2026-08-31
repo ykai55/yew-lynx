@@ -136,6 +136,9 @@ impl std::error::Error for BridgeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
+    ImportStyleSheet {
+        fragment: Vec<u8>,
+    },
     CreateElement {
         node: NodeId,
         tag: String,
@@ -257,6 +260,20 @@ impl Session {
 
     pub const fn root(&self) -> NodeId {
         self.root
+    }
+
+    pub fn import_style_sheet(&mut self, fragment: &[u8]) -> Result<(), BridgeError> {
+        self.ensure_owner()?;
+        if fragment.is_empty() {
+            return Err(BridgeError::new(
+                Status::InvalidArgument,
+                "compiled stylesheet fragment must not be empty",
+            ));
+        }
+        self.pending.push(Command::ImportStyleSheet {
+            fragment: fragment.to_vec(),
+        });
+        Ok(())
     }
 
     pub fn create_element(&mut self, tag: &str) -> Result<NodeId, BridgeError> {
@@ -674,6 +691,14 @@ impl HostFake {
 
     fn apply_command(&mut self, command: &Command) -> Result<(), BridgeError> {
         match command {
+            Command::ImportStyleSheet { fragment } => {
+                if fragment.is_empty() {
+                    return Err(BridgeError::new(
+                        Status::InvalidArgument,
+                        "compiled stylesheet fragment must not be empty",
+                    ));
+                }
+            }
             Command::CreateElement { node, tag } => {
                 self.insert_node(*node, NodeKind::Element(tag.clone()))?;
             }
@@ -832,6 +857,7 @@ mod tests {
     fn ordered_mutations_mount_and_update_a_tree() {
         let root = NodeId::new(1).unwrap();
         let mut session = Session::create(root).unwrap();
+        session.import_style_sheet(&[0, 127, 255]).unwrap();
         let view = session.create_element("view").unwrap();
         let text = session.create_element("text").unwrap();
         let raw = session.create_text("Count: 0").unwrap();
@@ -841,6 +867,12 @@ mod tests {
         session.insert_before(text, raw, None).unwrap();
 
         let batch = session.take_batch().unwrap();
+        assert_eq!(
+            batch.commands.first(),
+            Some(&Command::ImportStyleSheet {
+                fragment: vec![0, 127, 255],
+            })
+        );
         assert!(batch.commands.iter().all(|command| !matches!(
             command,
             Command::DestroyNode { .. } | Command::RemoveElement { .. }
@@ -859,6 +891,14 @@ mod tests {
                 .as_deref(),
             Some("Count: 0")
         );
+    }
+
+    #[test]
+    fn stylesheet_import_rejects_empty_fragments() {
+        let mut session = Session::create(NodeId::new(1).unwrap()).unwrap();
+        let error = session.import_style_sheet(&[]).unwrap_err();
+        assert_eq!(error.status, Status::InvalidArgument);
+        assert!(session.take_batch().unwrap().commands.is_empty());
     }
 
     #[test]
