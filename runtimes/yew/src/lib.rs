@@ -35,7 +35,17 @@ where
     C: BaseComponent<Properties = ()>,
 {
     pub fn mount(root: NodeId) -> Result<(Self, CommandBatch), YewAdapterError> {
+        Self::mount_with_style_sheets(root, &[])
+    }
+
+    pub fn mount_with_style_sheets(
+        root: NodeId,
+        style_sheets: &[&[u8]],
+    ) -> Result<(Self, CommandBatch), YewAdapterError> {
         let adapter = YewAdapter::new(root)?;
+        for fragment in style_sheets {
+            adapter.import_style_sheet(fragment)?;
+        }
         let rendered = catch_unwind(AssertUnwindSafe({
             let adapter = Rc::clone(&adapter);
             move || NativeRenderer::<C>::new(adapter, NativeNode(root.get().into())).render()
@@ -214,9 +224,27 @@ pub unsafe fn native_mount<C>(
 where
     C: BaseComponent<Properties = ()>,
 {
+    unsafe { native_mount_with_style_sheets::<C>(get_api, host, &[]) }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Mounts a Yew root with precompiled stylesheets through the native renderer function table.
+///
+/// # Safety
+///
+/// `get_api` and `host` must obey the native renderer C ABI for the mounted session lifetime.
+pub unsafe fn native_mount_with_style_sheets<C>(
+    get_api: Option<NativeRendererGetApiFn>,
+    host: NativeHostHandle,
+    style_sheets: &[&[u8]],
+) -> LynxElementBridgeNativeMountResult
+where
+    C: BaseComponent<Properties = ()>,
+{
     unsafe {
         lynx_element_bridge_ffi::native_mount(get_api, host, |root| {
-            let (runtime, batch) = Runtime::<C>::mount(root).map_err(adapter_error)?;
+            let (runtime, batch) =
+                Runtime::<C>::mount_with_style_sheets(root, style_sheets).map_err(adapter_error)?;
             Ok((Box::new(runtime), batch))
         })
     }
@@ -239,8 +267,50 @@ pub fn native_abandon_session(
 #[macro_export]
 macro_rules! launch {
     ($app:ty) => {
+        $crate::launch_with_style_sheets!($app, []);
+    };
+}
+
+#[macro_export]
+macro_rules! launch_with_style_sheets {
+    ($app:ty, [$($style_sheet:expr),* $(,)?]) => {
         #[cfg(target_arch = "wasm32")]
-        $crate::__private::export_guest!($crate::Runtime<$app>);
+        struct __LynxStyleSheetApplication($crate::Runtime<$app>);
+
+        #[cfg(target_arch = "wasm32")]
+        impl $crate::__private::GuestApplication for __LynxStyleSheetApplication {
+            fn mount(
+                request: $crate::__private::MountRequest,
+            ) -> Result<
+                (Self, $crate::__private::CommandBatch),
+                $crate::__private::BridgeError,
+            > {
+                $crate::__private::mount_with_style_sheets::<$app>(
+                    request,
+                    &[$($style_sheet),*],
+                )
+                .map(|(runtime, batch)| (Self(runtime), batch))
+            }
+
+            fn dispatch_event(
+                &mut self,
+                event: $crate::__private::EventMessage,
+            ) -> Result<$crate::__private::CommandBatch, $crate::__private::BridgeError> {
+                <$crate::Runtime<$app> as $crate::__private::GuestApplication>::dispatch_event(
+                    &mut self.0,
+                    event,
+                )
+            }
+
+            fn destroy(
+                self,
+            ) -> Result<$crate::__private::CommandBatch, $crate::__private::BridgeError> {
+                <$crate::Runtime<$app> as $crate::__private::GuestApplication>::destroy(self.0)
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        $crate::__private::export_guest!(__LynxStyleSheetApplication);
 
         #[unsafe(no_mangle)]
         #[cfg(not(target_arch = "wasm32"))]
@@ -249,7 +319,13 @@ macro_rules! launch {
             get_api: Option<$crate::__private::NativeRendererGetApiFn>,
             host: $crate::__private::NativeHostHandle,
         ) -> $crate::__private::LynxElementBridgeNativeMountResult {
-            unsafe { $crate::native_mount::<$app>(get_api, host) }
+            unsafe {
+                $crate::native_mount_with_style_sheets::<$app>(
+                    get_api,
+                    host,
+                    &[$($style_sheet),*],
+                )
+            }
         }
 
         #[unsafe(no_mangle)]
@@ -284,6 +360,7 @@ macro_rules! launch {
 
 #[doc(hidden)]
 pub mod __private {
+    pub use lynx_element_bridge_core::{BridgeError, CommandBatch, EventMessage};
     #[cfg(not(target_arch = "wasm32"))]
     pub use lynx_element_bridge_ffi::native_host::{NativeHostHandle, NativeRendererGetApiFn};
     #[cfg(not(target_arch = "wasm32"))]
@@ -291,7 +368,18 @@ pub mod __private {
         LynxElementBridgeNativeDestroyResult, LynxElementBridgeNativeMountResult,
         LynxElementBridgeSession,
     };
-    pub use lynx_element_bridge_wasm_guest::export_guest;
+    pub use lynx_element_bridge_wasm_guest::{GuestApplication, MountRequest, export_guest};
+
+    pub fn mount_with_style_sheets<C>(
+        request: MountRequest,
+        style_sheets: &[&[u8]],
+    ) -> Result<(super::Runtime<C>, CommandBatch), BridgeError>
+    where
+        C: yew::BaseComponent<Properties = ()>,
+    {
+        super::Runtime::mount_with_style_sheets(request.root, style_sheets)
+            .map_err(super::guest_error)
+    }
 }
 
 #[cfg(test)]
@@ -365,6 +453,47 @@ mod tests {
             .unwrap();
         assert!(host.snapshot().children.is_empty());
         assert_eq!(host.listener_count(), 0);
+    }
+
+    #[test]
+    fn runtime_mount_imports_style_sheets_before_rendering_in_order() {
+        let root = NodeId::new(1).unwrap();
+        let (_, mounted) = Runtime::<TestApp>::mount_with_style_sheets(
+            root,
+            &[&[0x43, 0x53, 0x53, 0x31], &[0x43, 0x53, 0x53, 0x32]],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &mounted.commands[0],
+            Command::ImportStyleSheet { fragment } if fragment == &[0x43, 0x53, 0x53, 0x31]
+        ));
+        assert!(matches!(
+            &mounted.commands[1],
+            Command::ImportStyleSheet { fragment } if fragment == &[0x43, 0x53, 0x53, 0x32]
+        ));
+        assert!(matches!(
+            &mounted.commands[2],
+            Command::CreateElement { .. }
+        ));
+    }
+
+    #[test]
+    fn runtime_mount_rejects_empty_style_sheet_fragments() {
+        let error = Runtime::<TestApp>::mount_with_style_sheets(
+            NodeId::new(1).unwrap(),
+            &[&[0x43, 0x53, 0x53], &[]],
+        )
+        .err()
+        .expect("an empty stylesheet fragment should fail mounting");
+
+        assert!(matches!(
+            error,
+            YewAdapterError::Bridge(BridgeError {
+                status: Status::InvalidArgument,
+                ..
+            })
+        ));
     }
 
     #[test]

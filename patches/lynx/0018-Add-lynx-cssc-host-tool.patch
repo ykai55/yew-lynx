@@ -1,0 +1,249 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ykai55 <ykai55@users.noreply.github.com>
+Date: Mon, 31 Aug 2026 14:00:00 +0800
+Subject: [PATCH 18/18] Add lynx-cssc host tool
+
+Add a small host CLI that compiles ruleList JSON with Lynx's native CSS
+profile and emits exactly one raw fragment payload. Allow the native renderer
+test to consume the CLI output for end-to-end smoke coverage.
+---
+diff --git a/BUILD.gn b/BUILD.gn
+index 9f367d399..224793709 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -14,6 +14,15 @@ group("root") {
+   ]
+ }
+ 
++group("lynx-cssc") {
++  deps = [ "tools/lynx-cssc" ]
++}
++
++group("lynx-cssc-tests") {
++  testonly = true
++  deps = [ "tools/lynx-cssc:lynx_cssc_native_test_exec" ]
++}
++
+ group("default") {
+   testonly = true
+   deps = [ "core:lynx_native" ]
+diff --git a/core/renderer/native_renderer_unittest.cc b/core/renderer/native_renderer_unittest.cc
+index 128725d87..3f7c031d8 100644
+--- a/core/renderer/native_renderer_unittest.cc
++++ b/core/renderer/native_renderer_unittest.cc
+@@ -5,7 +5,10 @@
+ #include "core/renderer/native_renderer.h"
+ 
+ #include <any>
++#include <cstdlib>
++#include <fstream>
++#include <iterator>
+ #include <memory>
+ #include <stdexcept>
+ #include <string>
+ #include <thread>
+@@ -216,5 +219,12 @@ TEST(NativeRendererApiTest, ImportsCompiledStyleSheetThroughFunctionTable) {
+   EXPECT_EQ(api->import_style_sheet(renderer, {nullptr, 0}),
+             LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
+ 
+-  std::vector<uint8_t> fragment = EncodeClassStyleSheet();
++  std::vector<uint8_t> fragment;
++  if (const char* path = std::getenv("LYNX_CSSC_TEST_FRAGMENT")) {
++    std::ifstream input(path, std::ios::binary);
++    fragment.assign(std::istreambuf_iterator<char>(input),
++                    std::istreambuf_iterator<char>());
++  } else {
++    fragment = EncodeClassStyleSheet();
++  }
+   ASSERT_FALSE(fragment.empty());
+diff --git a/tools/lynx-cssc/BUILD.gn b/tools/lynx-cssc/BUILD.gn
+new file mode 100644
+index 000000000..f4ce84cb7
+--- /dev/null
++++ b/tools/lynx-cssc/BUILD.gn
+@@ -0,0 +1,28 @@
++# Copyright 2026 The Lynx Authors. All rights reserved.
++# Licensed under the Apache License Version 2.0 that can be found in the
++# LICENSE file in the root directory of this source tree.
++
++import("../../testing/test.gni")
++
++executable("lynx-cssc") {
++  sources = [ "main.cc" ]
++
++  deps = [
++    "../../base/src:base_group",
++    "../../core/renderer:tasm",
++    "../../core/template_bundle/template_codec/binary_encoder:binary_encoder",
++    "../../third_party/rapidjson:rapidjson",
++  ]
++}
++
++unittest_exec("lynx_cssc_native_test_exec") {
++  sources = [ "../../core/renderer/native_renderer_unittest.cc" ]
++
++  deps = [
++    "../../core/renderer/dom:dom",
++    "../../core/runtime/lepus/tasks:tasks",
++    "../../core/shell/testing:mock_tasm_delegate_testset",
++    "../../core/template_bundle/template_codec/binary_encoder:binary_encoder",
++    "../../core/template_bundle/template_codec/binary_encoder/css_encoder:css_encoder",
++  ]
++}
+diff --git a/tools/lynx-cssc/main.cc b/tools/lynx-cssc/main.cc
+new file mode 100644
+index 000000000..95e7eef85
+--- /dev/null
++++ b/tools/lynx-cssc/main.cc
+@@ -0,0 +1,149 @@
++// Copyright 2026 The Lynx Authors. All rights reserved.
++// Licensed under the Apache License Version 2.0 that can be found in the
++// LICENSE file in the root directory of this source tree.
++
++#include <fstream>
++#include <iostream>
++#include <iterator>
++#include <string>
++#include <vector>
++
++#include "core/template_bundle/template_codec/binary_encoder/css_encoder/css_parser.h"
++#include "core/template_bundle/template_codec/binary_encoder/template_binary_writer.h"
++#include "core/template_bundle/template_codec/compile_options.h"
++#include "third_party/rapidjson/document.h"
++
++namespace lynx {
++namespace tasm {
++namespace {
++
++class CSSFragmentWriter : public TemplateBinaryWriter {
++ public:
++  CSSFragmentWriter(CSSParser* parser, const CompileOptions& options)
++      : TemplateBinaryWriter(nullptr, runtime::VMContextType, false, nullptr,
++                             parser, nullptr, nullptr, nullptr, nullptr, "", "",
++                             "", "", "", "", {}, options, lepus::Value(),
++                             lepus::Value(), {}, nullptr) {}
++
++  std::vector<uint8_t> Encode(encoder::SharedCSSFragment* fragment) {
++    return EncodeCSSFragmentToVector(fragment);
++  }
++};
++
++int Run(int argc, char** argv) {
++  std::string input_path;
++  std::string output_path;
++  if (argc != 5) {
++    std::cerr << "lynx-cssc: usage: lynx-cssc --input rules.json --output style.lynxcss\n";
++    return 2;
++  }
++  for (int i = 1; i < argc; i += 2) {
++    const std::string option = argv[i];
++    if (option == "--input" && input_path.empty()) {
++      input_path = argv[i + 1];
++    } else if (option == "--output" && output_path.empty()) {
++      output_path = argv[i + 1];
++    } else {
++      std::cerr << "lynx-cssc: invalid arguments\n";
++      return 2;
++    }
++  }
++  if (input_path.empty() || output_path.empty()) {
++    std::cerr << "lynx-cssc: invalid arguments\n";
++    return 2;
++  }
++
++  std::ifstream input(input_path, std::ios::binary);
++  if (!input) {
++    std::cerr << "lynx-cssc: cannot read input\n";
++    return 1;
++  }
++  const std::string json((std::istreambuf_iterator<char>(input)),
++                         std::istreambuf_iterator<char>());
++  if (input.bad()) {
++    std::cerr << "lynx-cssc: cannot read input\n";
++    return 1;
++  }
++
++  rapidjson::Document rules;
++  rules.Parse(json.data(), json.size());
++  if (rules.HasParseError()) {
++    std::cerr << "lynx-cssc: invalid JSON\n";
++    return 1;
++  }
++  if (!rules.IsArray()) {
++    std::cerr << "lynx-cssc: input root must be a ruleList array\n";
++    return 1;
++  }
++  if (rules.Empty()) {
++    std::cerr << "lynx-cssc: ruleList must not be empty\n";
++    return 1;
++  }
++  for (const auto& rule : rules.GetArray()) {
++    if (!rule.IsObject() || !rule.HasMember("type") ||
++        !rule["type"].IsString() ||
++        std::string(rule["type"].GetString()) != "StyleRule" ||
++        !rule.HasMember("selectorText") ||
++        !rule["selectorText"].IsObject() ||
++        !rule["selectorText"].HasMember("value") ||
++        !rule["selectorText"]["value"].IsString() ||
++        !rule.HasMember("style") || !rule["style"].IsArray() ||
++        !rule.HasMember("variables") || !rule["variables"].IsObject()) {
++      std::cerr << "lynx-cssc: unsupported or invalid ruleList\n";
++      return 1;
++    }
++    for (const auto& declaration : rule["style"].GetArray()) {
++      if (!declaration.IsObject() || !declaration.HasMember("name") ||
++          !declaration["name"].IsString() ||
++          !declaration.HasMember("value") ||
++          !declaration["value"].IsString() ||
++          (declaration.HasMember("type") &&
++           !declaration["type"].IsString()) ||
++          (declaration.HasMember("defaultValue") &&
++           !declaration["defaultValue"].IsString())) {
++        std::cerr << "lynx-cssc: unsupported or invalid ruleList\n";
++        return 1;
++      }
++    }
++    for (auto variable = rule["variables"].MemberBegin();
++         variable != rule["variables"].MemberEnd(); ++variable) {
++      if (!variable->value.IsString()) {
++        std::cerr << "lynx-cssc: unsupported or invalid ruleList\n";
++        return 1;
++      }
++    }
++  }
++
++  CompileOptions options = CreateNativeCSSCompileOptions();
++  CSSParser parser(options);
++  auto fragment = parser.ParseExternalFragment(rules, input_path);
++  if (fragment == nullptr || !parser.css_diagnostics().empty()) {
++    std::cerr << "lynx-cssc: CSS ruleList parse failed\n";
++    return 1;
++  }
++  CSSFragmentWriter writer(&parser, options);
++  std::vector<uint8_t> payload = writer.Encode(fragment.get());
++  if (payload.empty()) {
++    std::cerr << "lynx-cssc: CSS fragment encode failed\n";
++    return 1;
++  }
++
++  std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
++  if (!output) {
++    std::cerr << "lynx-cssc: cannot write output\n";
++    return 1;
++  }
++  output.write(reinterpret_cast<const char*>(payload.data()), payload.size());
++  output.close();
++  if (!output) {
++    std::cerr << "lynx-cssc: cannot write output\n";
++    return 1;
++  }
++  return 0;
++}
++
++}  // namespace
++}  // namespace tasm
++}  // namespace lynx
++
++int main(int argc, char** argv) { return lynx::tasm::Run(argc, argv); }
+-- 
+2.43.0

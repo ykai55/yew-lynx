@@ -22,6 +22,7 @@ readonly SCRIPTS=(
   "$ROOT_DIR/scripts/prepare-primjs.sh"
   "$ROOT_DIR/scripts/publish-lynx-maven.sh"
   "$ROOT_DIR/scripts/test-android-build-utils.sh"
+  "$ROOT_DIR/scripts/test-lynx-cssc.sh"
   "$ROOT_DIR/scripts/verify.sh"
 )
 
@@ -264,6 +265,32 @@ verify_lynx_patches() {
     printf 'verify: patched Lynx public C header differs from include/lynx_native_renderer.h\n' \
       >&2
     verification_status=1
+  fi
+  if ((apply_status == 0 && verification_status == 0)); then
+    case "${LYNX_VERIFY_CSSC:-0}" in
+      0)
+        printf 'verify: skipping lynx-cssc build/smoke; set LYNX_VERIFY_CSSC=1 to run it\n'
+        ;;
+      1)
+        printf '==> Building and testing patched lynx-cssc\n'
+        if ! (
+          cd -- "$ROOT_DIR/third_party/lynx"
+          tools/env.sh gn gen out/lynx-cssc-verify \
+            --args='enable_unittests=true is_debug=false use_flutter_cxx=false'
+          tools/env.sh ninja -C out/lynx-cssc-verify \
+            lynx-cssc lynx-cssc-tests
+          "$ROOT_DIR/scripts/test-lynx-cssc.sh" \
+            out/lynx-cssc-verify/lynx-cssc \
+            out/lynx-cssc-verify/lynx_cssc_native_test_exec
+        ); then
+          verification_status=1
+        fi
+        ;;
+      *)
+        printf 'verify: LYNX_VERIFY_CSSC must be 0 or 1\n' >&2
+        verification_status=1
+        ;;
+    esac
   fi
   for ((i = ${#applied_patch_files[@]} - 1; i >= 0; --i)); do
     if ! git -C "$ROOT_DIR/third_party/lynx" apply --reverse \

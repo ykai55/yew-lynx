@@ -1,11 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ykai55 <ykai55@users.noreply.github.com>
 Date: Mon, 31 Aug 2026 12:00:00 +0800
-Subject: [PATCH 17/17] Import compiled native renderer stylesheets
+Subject: [PATCH 17/18] Import compiled native renderer stylesheets
 
-Add compiled CSS fragment import using one fixed native CSS profile. Decode
-through RuntimeCSSReader, preserve independently adopted stylesheet ownership,
-and clear session-owned stylesheets between application epochs.
+Add compiled CSS fragment import using one shared, fixed native CSS profile.
+Decode through RuntimeCSSReader, preserve independently adopted stylesheet
+ownership, and clear session-owned stylesheets between application epochs.
 ---
 diff --git a/core/public/lynx_native_renderer.h b/core/public/lynx_native_renderer.h
 index bcad99983..de974c489 100644
@@ -171,6 +171,69 @@ index d019a3580..7cea74a9d 100644
  TEST_F(ElementManagerTest, AdoptStyleSheet_NullWrapper) {
    // Test adopting null wrapper (should not crash)
    manager->AdoptStyleSheet(fml::RefPtr<MockSharedCSSFragmentWrapper>());
+diff --git a/core/template_bundle/template_codec/compile_options.h b/core/template_bundle/template_codec/compile_options.h
+index b60fe0bc0..bebf42a39 100644
+--- a/core/template_bundle/template_codec/compile_options.h
++++ b/core/template_bundle/template_codec/compile_options.h
+@@ -115,6 +115,18 @@ struct CompileOptions {
+   bool enable_css_rule_{false};
+ };
+ 
++inline CompileOptions CreateNativeCSSCompileOptions() {
++  CompileOptions options;
++  options.target_sdk_version_ = Config::GetCurrentLynxVersion();
++  options.enable_css_parser_ = true;
++  options.enable_css_selector_ = true;
++  options.enable_css_invalidation_ = true;
++  options.enable_css_rule_ = true;
++  return options;
++}
++
++constexpr bool kNativeCSSInlineVariablesEnabled = false;
++
+ #define FOREACH_FIXED_LENGTH_FIELD(V)             \
+   V(UINT8, enable_css_parser_, 1);                \
+   V(UINT8, enable_css_external_class_, 2);        \
+diff --git a/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.cc b/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.cc
+index 98c35b30c..56ad23539 100644
+--- a/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.cc
++++ b/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.cc
+@@ -238,11 +238,13 @@ bool LynxBinaryBaseCSSReader::DecodeCSSRules(SharedCSSFragment* fragment) {
+   }
+   fragment->SetEnableCSSSelector();
+   DECODE_COMPACT_U32(rules_size);
++  decoded_css_fragment_end_ = Offset();
+   for (size_t i = 0; i < rules_size; ++i) {
+     DECODE_U8(rule_type);
+     // Read the payload length so we can skip unknown rule types.
+     DECODE_U32(payload_size);
+     size_t next_rule_offset = Offset() + payload_size;
++    decoded_css_fragment_end_ = next_rule_offset;
+ 
+     switch (static_cast<CSSRuleType>(rule_type)) {
+       case CSSRuleType::kStyle:
+diff --git a/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.h b/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.h
+index 509f3aeb4..1136e21e8 100644
+--- a/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.h
++++ b/core/template_bundle/template_codec/binary_decoder/lynx_binary_base_css_reader.h
+@@ -48,6 +48,9 @@ class LynxBinaryBaseCSSReader : public lepus::BaseBinaryReader,
+   static bool EnableCssParser(const CompileOptions& options);
+   static bool EnableCssVariableMultiDefaultValue(const CompileOptions& options);
+ 
++  // Valid after DecodeCSSFragment when CSS rules are enabled.
++  size_t DecodedCSSFragmentEnd() const { return decoded_css_fragment_end_; }
++
+   bool DecodeStyleObject(StyleMap& attr, const CSSRange& range) override;
+ 
+   bool DecodeUtf8Str(base::String& result) override;
+@@ -123,6 +126,7 @@ class LynxBinaryBaseCSSReader : public lepus::BaseBinaryReader,
+   bool enable_pre_process_attributes_{false};
+   bool enable_css_inline_variables_{false};
+   bool decode_string_directly_{false};
++  size_t decoded_css_fragment_end_{0};
+ };
+ 
+ }  // namespace tasm
 diff --git a/core/renderer/native_renderer.cc b/core/renderer/native_renderer.cc
 index 903756a6d..95fe9e628 100644
 --- a/core/renderer/native_renderer.cc
@@ -203,7 +266,7 @@ index 903756a6d..95fe9e628 100644
      page_config_replaced_ = true;
      tasm_->SetPageConfig(config);
      tasm_->SetPageConfigClient();
-@@ -895,6 +905,54 @@ class Session final : public std::enable_shared_from_this<Session> {
+@@ -895,6 +905,51 @@ class Session final : public std::enable_shared_from_this<Session> {
      return kOk;
    }
  
@@ -216,18 +279,15 @@ index 903756a6d..95fe9e628 100644
 +      return kInvalidArgument;
 +    }
 +
-+    CompileOptions options;
-+    options.target_sdk_version_ = Config::GetCurrentLynxVersion();
-+    options.enable_css_parser_ = true;
-+    options.enable_css_selector_ = true;
-+    options.enable_css_invalidation_ = true;
-+    options.enable_css_rule_ = true;
++    CompileOptions options = CreateNativeCSSCompileOptions();
 +
 +    std::vector<uint8_t> data(bytes.data, bytes.data + bytes.len);
 +    auto input = std::make_unique<lepus::ByteArrayInputStream>(std::move(data));
-+    RuntimeCSSReader reader(std::move(input), options, false);
++    RuntimeCSSReader reader(std::move(input), options,
++                            kNativeCSSInlineVariablesEnabled);
 +    auto fragment = std::make_unique<SharedCSSFragment>();
-+    if (!reader.DecodeCSSFragment(fragment.get(), bytes.len)) {
++    if (!reader.DecodeCSSFragment(fragment.get(), bytes.len) ||
++        reader.DecodedCSSFragmentEnd() != bytes.len) {
 +      return kInvalidArgument;
 +    }
 +
@@ -258,7 +318,7 @@ index 903756a6d..95fe9e628 100644
    Status PrepareRelease() const noexcept {
      Status status = CheckThread();
      if (status != kOk) {
-@@ -1142,6 +1200,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+@@ -1142,6 +1197,7 @@ class Session final : public std::enable_shared_from_this<Session> {
        }
      }
      nodes_.Clear();
@@ -266,7 +326,7 @@ index 903756a6d..95fe9e628 100644
      root_ = nullptr;
      deferred_nodes_.clear();
      page = nullptr;
-@@ -1187,6 +1246,24 @@ class Session final : public std::enable_shared_from_this<Session> {
+@@ -1187,6 +1243,24 @@ class Session final : public std::enable_shared_from_this<Session> {
      previous_page_config_.reset();
    }
  
@@ -291,7 +351,7 @@ index 903756a6d..95fe9e628 100644
    void FinalizeRelease() noexcept {
      if (finalized_) {
        return;
-@@ -1231,6 +1308,7 @@ class Session final : public std::enable_shared_from_this<Session> {
+@@ -1231,6 +1305,7 @@ class Session final : public std::enable_shared_from_this<Session> {
    std::unordered_map<LynxNativeListenerHandle, ListenerEntry> listeners_;
    ScopedTable<TimerEntry> timers_;
    std::unique_ptr<base::TimedTaskManager> timer_manager_;
@@ -299,7 +359,7 @@ index 903756a6d..95fe9e628 100644
    std::vector<fml::RefPtr<Element>> deferred_nodes_;
    size_t dispatch_depth_{0};
    bool active_{true};
-@@ -1438,6 +1516,18 @@ Status CancelTimer(LynxNativeRendererHandle renderer,
+@@ -1438,6 +1513,18 @@ Status CancelTimer(LynxNativeRendererHandle renderer,
        renderer, [&](Session& session) { return session.CancelTimer(timer); });
  }
  
@@ -318,7 +378,7 @@ index 903756a6d..95fe9e628 100644
  const LynxNativeRendererApiV1 kApiV1 = {
      LYNX_NATIVE_RENDERER_ABI_VERSION,
      sizeof(LynxNativeRendererApiV1),
-@@ -1456,6 +1546,8 @@ const LynxNativeRendererApiV1 kApiV1 = {
+@@ -1456,6 +1543,8 @@ const LynxNativeRendererApiV1 kApiV1 = {
      &Flush,
      &CreateTimer,
      &CancelTimer,
@@ -346,7 +406,7 @@ index 6a05334ba..27670baf7 100644
  #undef private
  #include "core/shell/testing/mock_tasm_delegate.h"
  #include "third_party/googletest/googletest/include/gtest/gtest.h"
-@@ -29,6 +35,45 @@ LynxNativeUtf8 Utf8(const char* value) {
+@@ -29,6 +35,40 @@ LynxNativeUtf8 Utf8(const char* value) {
            std::char_traits<char>::length(value)};
  }
  
@@ -364,12 +424,7 @@ index 6a05334ba..27670baf7 100644
 +};
 +
 +std::vector<uint8_t> EncodeClassStyleSheet() {
-+  CompileOptions options;
-+  options.enable_css_parser_ = true;
-+  options.enable_css_selector_ = true;
-+  options.enable_css_invalidation_ = true;
-+  options.enable_css_rule_ = true;
-+  options.target_sdk_version_ = Config::GetCurrentLynxVersion();
++  CompileOptions options = CreateNativeCSSCompileOptions();
 +  CSSParser parser(options);
 +  rapidjson::Document rules;
 +  rules.Parse(R"([{
@@ -392,7 +447,7 @@ index 6a05334ba..27670baf7 100644
  struct CallbackState {
    const LynxNativeRendererApiV1* api{nullptr};
    int event_count{0};
-@@ -141,6 +186,80 @@ TEST(NativeRendererApiTest, NegotiatesOnlyV1) {
+@@ -141,6 +181,92 @@ TEST(NativeRendererApiTest, NegotiatesOnlyV1) {
    EXPECT_EQ(api->struct_size, sizeof(LynxNativeRendererApiV1));
  }
  
@@ -423,6 +478,18 @@ index 6a05334ba..27670baf7 100644
 +  ASSERT_FALSE(fragment.empty());
 +  EXPECT_EQ(api->import_style_sheet(renderer,
 +                                    {fragment.data(), fragment.size() / 2}),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(harness.manager_->GetAdoptedStyleSheets().size(), 2u);
++  std::vector<uint8_t> trailing = fragment;
++  trailing.push_back(0);
++  EXPECT_EQ(api->import_style_sheet(renderer,
++                                    {trailing.data(), trailing.size()}),
++            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
++  EXPECT_EQ(harness.manager_->GetAdoptedStyleSheets().size(), 2u);
++  std::vector<uint8_t> concatenated = fragment;
++  concatenated.insert(concatenated.end(), fragment.begin(), fragment.end());
++  EXPECT_EQ(api->import_style_sheet(
++                renderer, {concatenated.data(), concatenated.size()}),
 +            LYNX_NATIVE_RENDERER_STATUS_INVALID_ARGUMENT);
 +  EXPECT_EQ(harness.manager_->GetAdoptedStyleSheets().size(), 2u);
 +  ASSERT_EQ(api->import_style_sheet(renderer,

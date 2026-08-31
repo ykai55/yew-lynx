@@ -5,6 +5,7 @@ members = [
   "crates/element-bridge-protocol",
   "crates/element-bridge-wasm-guest",
   "crates/element-bridge-wamr-host",
+  "crates/lynx-css-build",
   "crates/lynx",
   "adapters/yew",
   "adapters/dioxus",
@@ -12,6 +13,7 @@ members = [
   "runtimes/dioxus",
   "crates/adapter-conformance",
   "tools/dev-wasm",
+  "tools/stylist-lynx-cssc",
   "examples/counter",
   "examples/dioxus-counter",
 ]
@@ -35,6 +37,7 @@ lynx-element-bridge-ffi = { path = "crates/element-bridge-ffi" }
 lynx-element-bridge-protocol = { path = "crates/element-bridge-protocol" }
 lynx-element-bridge-wasm-guest = { path = "crates/element-bridge-wasm-guest" }
 lynx-element-bridge-wamr-host = { path = "crates/element-bridge-wamr-host" }
+lynx-css-build = { path = "crates/lynx-css-build" }
 lynx = { path = "crates/lynx" }
 lynx-yew-runtime = { path = "runtimes/yew" }
 lynx-dioxus-runtime = { path = "runtimes/dioxus" }
