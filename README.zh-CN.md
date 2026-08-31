@@ -17,6 +17,7 @@ Dioxus 会渲染为共享的 Rust 变更模型，再通过带版本的原生 C �
 - 链接到 APK 中的 Android Native 运行时。
 - 可加载外部 `wasm32-wasip1` 应用的 WAMR 运行时。
 - 基于补丁实现、仅包含原生渲染器的 Lynx Android 产品。
+- 用于生成原始编译样式表 fragment 的构建期 `lynx-cssc` host 工具。
 - Host、ABI、集成、产物和物理设备验证。
 
 ## 架构
@@ -125,6 +126,7 @@ Lynx 接受 batch 中的部分命令后不会进行回滚。Host 部分失败会
 | `tools/dev-wasm/` | WASM 构建、监听、HTTP 服务和 reload 通知 |
 | `include/` | Lynx renderer、Native 应用和 WAMR 应用的公开 C ABI |
 | `patches/lynx/` | 实现 Lynx 原生渲染器的有序补丁系列 |
+| `LYNX_CSSC.md` | Host 工具的构建、使用和 smoke test 说明 |
 | `patches/yew/` | 为 Yew 添加原生渲染器接口的有序补丁系列 |
 
 实际生效的 Lynx 和 Yew 集成由固定的上游版本和这些补丁系列共同组成；不能假设
@@ -143,6 +145,29 @@ fn app() -> Html {
 
 lynx::yew::launch!(App);
 ```
+
+可以先用 `lynx-cssc` 预编译 Lynx `ruleList`，再将不透明的输出嵌入应用。运行时会
+按数组顺序导入所有 fragment，然后 Yew 才会创建第一个节点：
+
+```bash
+lynx-cssc --input rules.json --output styles/app.lynxcss
+```
+
+```rust
+lynx::yew::launch_with_style_sheets!(App, [
+    include_bytes!("../styles/app.lynxcss"),
+]);
+```
+
+如需在 `cargo build` 期间自动转换，可在应用的 `build.rs` 中使用
+`lynx-css-build`，并通过 `lynx::include_lynx_style_sheet!` 嵌入其生成到
+`OUT_DIR` 的结果。固定版本的 `lynx-cssc` 可执行文件通过 `LYNX_CSSC` 提供；
+详见 [`LYNX_CSSC.md`](LYNX_CSSC.md)。
+
+Yew 渲染出的 class 名必须与相应的 `ruleList` selector 完全一致。例如，
+`class="counter"` 需要 `.counter` selector；bridge 不会解析 CSS 文本或重写
+selector。可接受的 `ruleList` 格式和 compiler 设置参见
+[`LYNX_CSSC.md`](LYNX_CSSC.md)。
 
 ```rust
 use lynx::dioxus::prelude::*;
