@@ -19,6 +19,7 @@ The repository currently provides:
 - Native Android runtimes linked into the APK.
 - A WAMR runtime that loads external `wasm32-wasip1` applications.
 - A patched, native-renderer-only Lynx Android product.
+- A build-time `lynx-cssc` host tool for raw compiled stylesheet fragments.
 - Host, ABI, integration, artifact, and physical-device verification.
 
 ## Architecture
@@ -77,7 +78,7 @@ Native
 
 WASM
   Yew/Dioxus wasm32-wasip1 guest
-      -> FlatBuffers v3 guest ABI
+      -> FlatBuffers v4 guest ABI
       -> WAMR host
       -> element-bridge-ffi / NativeHost
       -> Lynx C API
@@ -124,7 +125,7 @@ cleanup.
 | `crates/lynx/` | Feature-gated `lynx::yew` and `lynx::dioxus` application facade |
 | `crates/adapter-conformance/` | Cross-framework mount, update, event, and destroy conformance |
 | `crates/element-bridge-ffi/` | Native session registry, C ABI lifecycle, and `NativeHost` |
-| `crates/element-bridge-protocol/` | Shared FlatBuffers v3 schema, checked-in bindings, owned types, and codecs |
+| `crates/element-bridge-protocol/` | Shared FlatBuffers v4 schema, checked-in bindings, owned types, and codecs |
 | `crates/element-bridge-wasm-guest/` | Versioned WASM guest ABI and application lifecycle |
 | `crates/element-bridge-wamr-host/` | WAMR embedding and guest-to-native backend integration |
 | `adapters/android/` | JNI/CMake bridge that resolves the Lynx function table with `dlsym` |
@@ -134,6 +135,7 @@ cleanup.
 | `tools/dev-wasm/` | WASM build, watch, HTTP serving, and reload notifications |
 | `include/` | Public Lynx renderer, Native application, and WAMR application C ABIs |
 | `patches/lynx/` | Ordered patch series implementing the Lynx native renderer |
+| `LYNX_CSSC.md` | Host-tool build, usage, and smoke-test instructions |
 | `patches/yew/` | Ordered patch series adding Yew's native renderer interface |
 
 The effective Lynx and Yew integrations are the pinned upstream revisions plus
@@ -154,6 +156,30 @@ fn app() -> Html {
 
 lynx::yew::launch!(App);
 ```
+
+Precompile a Lynx `ruleList` with `lynx-cssc`, then embed the opaque output in
+the application. The runtime imports every fragment in array order before Yew
+creates its first node:
+
+```bash
+lynx-cssc --input rules.json --output styles/app.lynxcss
+```
+
+```rust
+lynx::yew::launch_with_style_sheets!(App, [
+    include_bytes!("../styles/app.lynxcss"),
+]);
+```
+
+For automatic conversion during `cargo build`, use `lynx-css-build` from the
+application's `build.rs` and embed its `OUT_DIR` result with
+`lynx::include_lynx_style_sheet!`. The pinned `lynx-cssc` executable is supplied
+through `LYNX_CSSC`; see [`LYNX_CSSC.md`](LYNX_CSSC.md).
+
+The class name rendered by Yew must exactly match the corresponding `ruleList`
+selector. For example, `class="counter"` requires a `.counter` selector; the
+bridge does not parse CSS text or rewrite selectors. See [`LYNX_CSSC.md`](LYNX_CSSC.md)
+for the accepted `ruleList` format and compiler setup.
 
 ```rust
 use lynx::dioxus::prelude::*;

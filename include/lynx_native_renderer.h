@@ -126,6 +126,18 @@ typedef struct LynxNativeRendererApiV1 {
       LynxNativeTimerHandle* timer);
   LynxNativeRendererStatus (*cancel_timer)(LynxNativeRendererHandle renderer,
                                            LynxNativeTimerHandle timer);
+  /*
+   * Imports one raw CSS fragment produced by this pinned Lynx encoder with
+   * target SDK = current engine version, CSS rule/parser/selector/invalidation
+   * enabled, and inline CSS variables disabled. No other compile profile is
+   * supported.
+   */
+  LynxNativeRendererStatus (*import_style_sheet)(
+      LynxNativeRendererHandle renderer,
+      LynxNativeBytes fragment);
+  /* Removes only stylesheets imported through this renderer handle. */
+  LynxNativeRendererStatus (*clear_style_sheets)(
+      LynxNativeRendererHandle renderer);
 } LynxNativeRendererApiV1;
 
 /*

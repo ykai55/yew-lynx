@@ -7,14 +7,15 @@ the exact source revisions, native ABI, Android target, and evidence below.
 
 | Component | Revision or target | Evidence |
 | --- | --- | --- |
-| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 15-patch `0002-0016` series, public-header byte comparison, 21/21 native renderer tests |
+| Lynx | `0df14207cebb060f1bed8de12b64a1119dee8f06` | Pinned gitlink, sequential clean-apply 17-patch `0002-0018` series, public-header byte comparison, native renderer tests, and opt-in `LYNX_VERIFY_CSSC=1` compiler/import smoke test |
 | Lynx tools_shared | `ff47fee7d41ee3e8e8561041b1ce2c8b50e923ea` | Publicly reachable pinned nested checkout and clean-apply JNI-filter patch |
 | Yew | `0e4a05472fac4e5fce1befe60fa4a1e43a36b6a3` | Patch identity, renderer/macro tests, adapter, native lifecycle staticlib |
 | Dioxus | `0.7.10` | Lynx-native RSX vocabulary, real `VirtualDom`, `WriteMutations` adapter, native lifecycle staticlib |
 | Rust | `1.85.0` | Locked workspace format/check/test/Clippy and arm64 staticlibs |
 | Android app | API 24+, tested arm64-v8a | Native Java/JNI lifecycle, both real staticlib links, dependency/APK/ELF and process-map checks |
-| Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, release |
-| WASM guest protocol | FlatBuffers guest ABI, version 3 (`LEB3`) | Schema and checked-in Rust bindings, golden fixtures, strict validation, and runtime-scoped mount, event, command, error, and teardown round trips |
+| Native renderer ABI | `LynxNativeRendererApiV1`, version 1 | Size/version/function validation, opaque handles, callbacks, timers, compiled stylesheet import, release |
+| Compiled CSS fragment | Pinned Lynx native CSS profile | `LYNX_VERIFY_CSSC=1 ./scripts/verify.sh` builds `lynx-cssc`, compiles a ruleList, and checks strict single-fragment RuntimeCSSReader import plus selector match |
+| WASM guest protocol | FlatBuffers guest ABI, version 4 (`LEB4`) | Schema and checked-in Rust bindings, golden fixtures, strict validation, and runtime-scoped mount, event, command, error, and teardown round trips |
 
 ## Runtime Contract
 
@@ -95,7 +96,7 @@ than arm64-v8a; Android API levels outside the declared app range; iOS, Harmony,
 desktop, or web; accessibility; performance; asynchronous Dioxus scheduling; or
 production use.
 
-The 21 `NativeRendererApiTest` cases pass (21/21). They use no private test peer
+The 22 `NativeRendererApiTest` cases pass (22/22). They use no private test peer
 or helper, and release behavior is tested through the production function table.
 All 11 public statuses cross the production boundary. `RESOURCE_EXHAUSTED` and
 `INTERNAL_ERROR` are returned by real repeating timer callbacks through the
@@ -104,7 +105,7 @@ Neither status uses allocator exhaustion or root rollback. Issue #4's
 implementation and acceptance requirements are complete, and the issue is
 closable.
 
-A Lynx pin change requires rebasing 0002-0016 and rerunning patch, header,
+A Lynx pin change requires rebasing 0002-0018 and rerunning patch, header,
 native-host, product, ELF, Android, and device verification. A tools_shared pin
 change requires rebasing and reverifying its JNI-filter patch. A Yew pin change
 requires rebasing its patch and focused tests. A Dioxus pin change requires the

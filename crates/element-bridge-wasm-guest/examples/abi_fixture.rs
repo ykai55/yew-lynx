@@ -12,6 +12,7 @@ struct Fixture {
 impl GuestApplication for Fixture {
     fn mount(request: MountRequest) -> Result<(Self, CommandBatch), BridgeError> {
         let mut session = Session::create(request.root)?;
+        session.import_style_sheet(&[0x43, 0x53, 0x53, 0x34])?;
         let view = session.create_element("view")?;
         session.set_attribute(view, "data-state", Some("mounted"))?;
         session.insert_before(request.root, view, None)?;

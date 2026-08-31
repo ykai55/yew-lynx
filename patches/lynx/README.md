@@ -1,7 +1,7 @@
 # Lynx native renderer patch series
 
 This directory contains the native renderer changes applied to the pinned
-public Lynx source. The maintained series is the 15 patches `0002-0016`.
+public Lynx source. The maintained series is the 17 patches `0002-0018`.
 
 ## Base Revision
 
@@ -38,6 +38,23 @@ The patches add, in order:
 - A publicly reachable tools_shared pin in Habitat's primary `dependencies/DEPS`
   file for reproducible clean-checkout builds; the unavailable child revision
   differed only in an iOS packaging helper.
+- Compiled CSS fragment import through the versioned native renderer function
+  table, including adopted-only selector capability and application-epoch
+  cleanup that preserves independently adopted stylesheets.
+- A host `lynx-cssc` executable that compiles a non-empty `StyleRule` ruleList
+  JSON array into one raw CSS fragment using the exact native renderer compile
+  profile.
+
+The import payload is the raw output of this pinned Lynx revision's CSS fragment
+encoder using the native CSS profile: current engine target SDK, CSS rule,
+parser, selector, and invalidation enabled, and inline CSS variables disabled.
+Fragments compiled with other Lynx revisions or compile profiles are not
+supported. Import succeeds only when `RuntimeCSSReader` consumes the complete
+input, so concatenated fragments and trailing bytes are rejected.
+
+Build and smoke-test `lynx-cssc` as documented in the repository root
+`LYNX_CSSC.md`. The tool is a standalone GN target and is not part of Cargo
+builds.
 
 Apply patches strictly in `series` order. Other Lynx revisions require a rebase
 and complete reverification. Native-only Android builds also apply the separate
@@ -65,9 +82,11 @@ separate product does not introduce MTS or template transport.
 submodule, byte-compares
 `third_party/lynx/core/public/lynx_native_renderer.h` with
 `include/lynx_native_renderer.h`, and reverses the applied patches in reverse
-order even on failure.
+order even on failure. It skips the C++ build by default with an explicit
+message; `LYNX_VERIFY_CSSC=1 ./scripts/verify.sh` additionally builds
+`lynx-cssc` and its focused native test, then runs the compiler/import smoke.
 
-All 21 `NativeRendererApiTest` cases pass (21/21). There is no private test peer
+All 22 `NativeRendererApiTest` cases pass (22/22). There is no private test peer
 or helper; release behavior is tested through the production function table.
 The cases cover function-table version/size validation, null and malformed
 spans, UTF-8, wrong-thread, stale and foreign handles, acquire/release rollback,

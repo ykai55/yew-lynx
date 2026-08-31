@@ -86,6 +86,10 @@ impl YewAdapter {
             .map_err(Into::into)
     }
 
+    pub fn import_style_sheet(&self, fragment: &[u8]) -> Result<(), YewAdapterError> {
+        self.with_session(|session| session.import_style_sheet(fragment))
+    }
+
     pub fn dispatch_event(&self, event: &EventMessage) -> Result<(), YewAdapterError> {
         self.check_error()?;
         let (name, handler) = {

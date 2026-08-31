@@ -71,7 +71,7 @@ Native
 
 WASM
   Yew/Dioxus wasm32-wasip1 guest
-      -> FlatBuffers v3 guest ABI
+      -> FlatBuffers v4 guest ABI
       -> WAMR host
       -> element-bridge-ffi / NativeHost
       -> Lynx C API
@@ -115,7 +115,7 @@ Lynx 接受 batch 中的部分命令后不会进行回滚。Host 部分失败会
 | `crates/lynx/` | 按 feature 启用的 `lynx::yew` 与 `lynx::dioxus` 应用 facade |
 | `crates/adapter-conformance/` | 跨框架的挂载、更新、事件和销毁一致性测试 |
 | `crates/element-bridge-ffi/` | Native session registry、C ABI 生命周期和 `NativeHost` |
-| `crates/element-bridge-protocol/` | Host/Guest 共享的 FlatBuffers v3 schema、已签入 bindings、owned 类型和 codecs |
+| `crates/element-bridge-protocol/` | Host/Guest 共享的 FlatBuffers v4 schema、已签入 bindings、owned 类型和 codecs |
 | `crates/element-bridge-wasm-guest/` | 带版本的 WASM guest ABI 和应用生命周期 |
 | `crates/element-bridge-wamr-host/` | WAMR 嵌入以及 guest 到原生后端的集成 |
 | `adapters/android/` | 通过 `dlsym` 解析 Lynx 函数表的 JNI/CMake bridge |

@@ -13,3 +13,5 @@
 0014-Cover-native-renderer-callback-statuses.patch
 0015-Guard-native-only-Java-APIs.patch
 0016-Pin-public-tools-shared-revision.patch
+0017-Import-compiled-native-renderer-stylesheets.patch
+0018-Add-lynx-cssc-host-tool.patch

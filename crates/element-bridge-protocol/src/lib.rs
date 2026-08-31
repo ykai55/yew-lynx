@@ -10,7 +10,7 @@ mod generated {
 
 use generated::lynx::element_bridge::protocol as fb;
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MountRequest {
@@ -210,7 +210,7 @@ fn decode_envelope(bytes: &[u8], expected: fb::Message) -> Result<fb::Envelope<'
         || !fb::envelope_buffer_has_identifier(bytes)
     {
         return Err(invalid(
-            "invalid FlatBuffers file identifier; expected LEB3",
+            "invalid FlatBuffers file identifier; expected LEB4",
         ));
     }
     let envelope = fb::root_as_envelope(bytes)
@@ -269,6 +269,16 @@ fn encode_command<'a>(
     command: &Command,
 ) -> WIPOffset<fb::Command<'a>> {
     let (payload_type, payload) = match command {
+        Command::ImportStyleSheet { fragment } => {
+            let fragment = builder.create_vector(fragment);
+            let value = fb::ImportStyleSheet::create(
+                builder,
+                &fb::ImportStyleSheetArgs {
+                    fragment: Some(fragment),
+                },
+            );
+            (fb::CommandPayload::ImportStyleSheet, value.as_union_value())
+        }
         Command::CreateElement { node, tag } => {
             let tag = builder.create_string(tag);
             let value = fb::CreateElement::create(
@@ -417,6 +427,12 @@ fn decode_command(command: fb::Command<'_>) -> Result<Command, BridgeError> {
         };
     }
     Ok(match command.payload_type() {
+        fb::CommandPayload::ImportStyleSheet => {
+            let value = payload!(payload_as_import_style_sheet, "ImportStyleSheet");
+            Command::ImportStyleSheet {
+                fragment: value.fragment().bytes().to_vec(),
+            }
+        }
         fb::CommandPayload::CreateElement => {
             let value = payload!(payload_as_create_element, "CreateElement");
             Command::CreateElement {
